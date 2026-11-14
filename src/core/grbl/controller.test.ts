@@ -105,6 +105,14 @@ describe("GrblController com o FakeGrbl", () => {
     expect(snap.wpos).toEqual({ x: 809, y: 384 }); // pull-off de 1 mm ($27)
   });
 
+  it("$H digitado no console também marca o Home", async () => {
+    const s = await connected();
+    const p = s.ctrl.send("$H", { manual: true });
+    await s.clock.advance(2500);
+    expect(await p).toEqual({ ok: true });
+    expect(s.ctrl.snapshot.homed).toBe(true);
+  });
+
   it("4. trabalho completo (orientacao): desenha o plano, sem estourar o buffer", async () => {
     const s = await homed();
     const { plan, program } = programFor(orientacaoSvg);

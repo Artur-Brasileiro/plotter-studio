@@ -23,6 +23,7 @@ import { fitToScreen, installZoomPan } from "./ui/viewport";
 import { createConnectControls } from "./ui/machine/connectControls";
 import { createMachinePanel } from "./ui/panels/machinePanel";
 import { createJogPanel } from "./ui/panels/jogPanel";
+import { createConsole } from "./ui/panels/consolePanel";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -112,6 +113,8 @@ const jog = createJogPanel(session, () => side.active === "machine");
 const machineTab = h("div", { class: "panel" }, createMachinePanel(session), jog.el);
 side.addTab("machine", "Máquina", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
+const consolePanel = createConsole(session, layout.console);
+layout.status.prepend(consolePanel.toggleButton);
 // rodapé: as setas do teclado fazem jog (aba Máquina, conectado) ou movem o desenho?
 const updateArrowMode = () => status.setMessage("arrows", jog.keysActive() ? "Setas: jog da máquina" : undefined);
 side.onChange = updateArrowMode;

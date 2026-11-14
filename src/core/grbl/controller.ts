@@ -515,8 +515,13 @@ export class GrblController {
     if (a.id < 0) {
       const w = this.waiters.get(a.id);
       this.waiters.delete(a.id);
-      if (code === undefined) this.log("in", "ok");
-      else this.log("error", `${errorText(code)} em "${w?.text ?? "?"}". ${describeError(code).action}`);
+      if (code === undefined) {
+        this.log("in", "ok");
+        // $H/$X também valem quando digitados no console
+        const cmd = w?.text.trim().toUpperCase();
+        if (cmd === "$H") this.patch({ homed: true, alarm: undefined });
+        else if (cmd === "$X") this.patch({ alarm: undefined });
+      } else this.log("error", `${errorText(code)} em "${w?.text ?? "?"}". ${describeError(code).action}`);
       w?.resolve(code === undefined ? { ok: true } : { ok: false, code });
     } else {
       this.idleReports = 0;

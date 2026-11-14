@@ -624,8 +624,8 @@ export class FakeGrbl implements Transport {
       return "done";
     }
     if (faults?.errorAtLine && this.gcodeLines === faults.errorAtLine.line) return this.reply(`error:${faults.errorAtLine.code}`);
+    if (alarmLike) return this.reply("error:9"); // o GRBL trava o G-code antes de interpretar a linha
     if (!words) return this.reply(`error:${parseErrorCode(code)}`);
-    if (alarmLike) return this.reply("error:9");
     if (gs.some((g) => !SUPPORTED_G.includes(g))) return this.reply("error:20");
     if (ms.some((v) => !SUPPORTED_M.includes(v))) return this.reply("error:20");
 

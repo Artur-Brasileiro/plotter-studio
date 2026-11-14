@@ -1510,7 +1510,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** no simulador, o jog contínuo para ao soltar a tecla; o passo não sai da área.
 - **Você testa:** teste manual v2 2.
 
-**T24 — Console**
+**T24 — Console** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`); falta o teste na máquina
 - **Arquivos:** `ui/panels/consolePanel.ts`.
 - **Detalhes:**
   - log com filtro (relatórios de estado escondidos por padrão);

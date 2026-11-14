@@ -5,6 +5,8 @@ export interface Layout {
   readonly canvasEl: HTMLCanvasElement;
   readonly side: HTMLElement;
   readonly status: HTMLElement;
+  /** v2: console recolhível */
+  readonly console: HTMLElement;
 }
 
 export function getLayout(): Layout {
@@ -19,5 +21,6 @@ export function getLayout(): Layout {
     canvasEl: byId<HTMLCanvasElement>("board"),
     side: byId("side"),
     status: byId("statusbar"),
+    console: byId("console"),
   };
 }

@@ -1299,7 +1299,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** todos os casos de `units`, `transform`, `pathData` e `arc` da seção 4.1 passam.
 - **Você testa:** nada.
 
-**T05 — Importador SVG, parte 2**
+**T05 — Importador SVG, parte 2** — ✅ concluída em 14/11/2026
 - **Objetivo:** formas, percurso da árvore e `importSvgTree`; adaptador DOM.
 - **Arquivos:** `core/svg/{shapes,importSvg}.ts`, `import/svgDom.ts`, `import/golden.test.ts` (só a parte de importação: os 3 samples importam com a página e a contagem de subpaths esperadas, sem avisos indevidos). Testes.
 - **Depende de:** T04.

@@ -158,6 +158,30 @@ export class FakeGrbl implements Transport {
   get plannerLength(): number {
     return this.planner.length;
   }
+  get cableCut(): boolean {
+    return this.cut;
+  }
+  get gcodeLinesReceived(): number {
+    return this.gcodeLines;
+  }
+
+  /** Simula puxar o cabo USB. */
+  unplug(): void {
+    if (this.opened && !this.cut) this.cutCable();
+  }
+
+  /** Simula a placa reiniciar sozinha (queda de energia, DTR): banner de novo, Alarm, posição perdida. */
+  powerGlitch(): void {
+    if (!this.opened || this.cut) return;
+    this.booted = false;
+    this.setPen(() => (this.spindleOn = false));
+    this.powerUp();
+    this.clock.setTimeout(() => {
+      if (!this.opened || this.cut) return;
+      this.booted = true;
+      this.emit("", BANNER, LOCKED);
+    }, this.o.bootDelayMs);
+  }
 
   // --- Transport
   async open(): Promise<void> {

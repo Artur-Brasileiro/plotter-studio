@@ -1463,7 +1463,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os testes de `streamer` passam; o `FakeGrbl` executa um programa enviado à mão pelo streamer (sem controller) sem `rxOverflow` e com `penStrokes` correto.
 - **Você testa:** nada.
 
-**T20 — GrblController**
+**T20 — GrblController** — ✅ concluída em 14/11/2026
 - **Arquivos:** `core/grbl/controller.ts` + `controller.test.ts` (os 14 cenários da seção 4.3).
 - **Depende de:** T19, T13 (usa `GcodeProgram`).
 - **Pronto quando:** os 14 cenários passam, sem `setTimeout` real em teste nenhum.
@@ -1650,3 +1650,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 | 14/11/2026 | T17 | RDP em blocos de 512 pontos. | Numa espiral de 351 mil pontos o RDP levava 730 ms (divisões desequilibradas, custo quase quadrático); em blocos, 117 ms. `planJob` do estresse: 337 ms. |
 | 14/11/2026 | T17 | Cache de bitmap do Fabric ligado só durante gestos (arrastar/girar/escalar) e pan (`CanvasView.setCaching`). | Sem cache, arrastar o estresse dava 4 fps (redesenha 411 mil pontos por quadro); com cache sempre ligado, desenhos grandes ficariam borrados no zoom (limite de tamanho do cache do Fabric). Agora: mediana 16,7 ms/quadro, p90 33 ms (Chrome headless sem GPU). |
 | 14/11/2026 | T08 | `lockSkewingX/Y` além de `lockScalingFlip`, aplicados também à `ActiveSelection` (via `InteractiveFabricObject.ownDefaults`). | Sem isso, a seleção múltipla podia espelhar, e Shift + alça lateral distorcia (skew) o desenho. |
+| 14/11/2026 | T19 | `ManualClock.advance(ms)` devolve `Promise` (e há `advanceUntil`). O `FakeGrbl` ganhou `unplug()`, `powerGlitch()`, `rtLog`, `received` e `forbiddenBytes`, e termina o Home com o pull-off de 1 mm do `$27` (WPos 809/384, não 810/385). | Entre um timer e outro as promessas do controlador precisam resolver, senão o teste fica fora de ordem. O pull-off é o que o GRBL faz de verdade, e pegou um bug: o jog "+X" logo depois do Home recuaria para 809,5 por causa da margem; `stepTarget` agora nunca anda para trás. |
+| 14/11/2026 | T20 | "Parar" sempre manda `!` primeiro, mesmo com a máquina em Idle ou Hold:0, e só depois espera Hold:0 (ou Idle 100 ms depois) e manda o reset. | Um relatório "Idle" pode ter até 200 ms: a máquina pode ter começado a andar depois dele (fim de um `G4`), e um reset andando dá ALARM:3. `!` em Idle vai direto para Hold:0, então não custa nada. |
+| 14/11/2026 | T20 | Erro no meio do trabalho com `pauseLift = "spindleStop"` também levanta a caneta (é a mesma pausa do botão). Com "endOfStroke" é só `!` imediato. | Evita borrão enquanto o Artur lê a mensagem; o `!` continua sendo imediato. |
+| 14/11/2026 | T20 | Fim do trabalho e "pausado no fim do traço" exigem **dois** relatórios Idle seguidos depois do último ok. | O primeiro pode ter sido gerado antes de o GRBL iniciar o último movimento (o `?` e o início do ciclo são tratados na mesma passada do laço do GRBL). |

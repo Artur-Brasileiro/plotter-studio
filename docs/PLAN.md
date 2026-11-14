@@ -1317,7 +1317,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os casos de `coords`, `document`, `history`, `store`, `project` e `machine` passam; o teste de orientação no nível de documento (pontos do "F" na máquina) passa.
 - **Você testa:** nada.
 
-**T07 — Canvas em mm**
+**T07 — Canvas em mm** — ✅ concluída em 14/11/2026
 - **Objetivo:** a nova mesa e a navegação.
 - **Arquivos:**
   - `ui/{dom,layout,board,viewport,statusBar}.ts`;

@@ -8,12 +8,14 @@
   </head>
   <body>
     <header class="topbar">
-      <strong>Plotter Studio</strong>
-      <span class="hint">v0.1 · esqueleto — área de trabalho 810 × 385 mm</span>
+      <strong class="brand">Plotter Studio</strong>
+      <nav id="toolbar" class="toolbar"></nav>
     </header>
-    <main class="workspace">
-      <div id="canvas-wrap"><canvas id="board"></canvas></div>
-    </main>
+    <div class="main">
+      <div id="canvas-wrap" class="canvas-wrap"><canvas id="board"></canvas></div>
+      <aside id="side" class="side"></aside>
+    </div>
+    <footer id="statusbar" class="statusbar"></footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

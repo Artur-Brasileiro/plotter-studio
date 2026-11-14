@@ -1,46 +1,99 @@
-import { Canvas, FabricText, Line, Rect } from "fabric";
+import type { Canvas } from "fabric";
 import type { MachineProfile } from "../core/machine";
 
 /**
- * Converte mm da máquina (origem embaixo à esquerda, Y para cima)
- * para pixels do canvas (origem em cima à esquerda, Y para baixo).
+ * Desenha a mesa (área útil, grade, gabaritos, origem) no canvas de baixo do Fabric,
+ * no evento before:render. Não são objetos do Fabric: a grade fica sempre com 1 px,
+ * em qualquer zoom, e nunca entra na seleção.
+ *
+ * Tudo aqui é em mm da cena (Y para baixo). A grade é alinhada à origem da MÁQUINA
+ * (canto inferior esquerdo), por isso as linhas horizontais ficam em y_cena = H − k·10.
  */
-export function makeMapper(profile: MachineProfile, pxPerMm: number) {
-  const H = profile.workArea.height;
-  return {
-    pxPerMm,
-    toPx: (x: number, y: number) => ({ left: x * pxPerMm, top: (H - y) * pxPerMm }),
-    toMm: (left: number, top: number) => ({ x: left / pxPerMm, y: H - top / pxPerMm }),
+export function installBoard(canvas: Canvas, getProfile: () => MachineProfile): () => void {
+  const handler = ({ ctx }: { ctx: CanvasRenderingContext2D }) => {
+    if (ctx !== canvas.getContext()) return;
+    const p = getProfile();
+    const v = canvas.viewportTransform;
+    const z = v[0];
+    ctx.save();
+    ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
+    drawBoard(ctx, p, z);
+    ctx.restore();
   };
+  canvas.on("before:render", handler);
+  return () => canvas.off("before:render", handler);
 }
 
-/** Desenha a mesa: área útil, grade de 10/50 mm, gabaritos A4/A3 e a origem. */
-export function drawBoard(canvas: Canvas, profile: MachineProfile, pxPerMm: number) {
-  const { width: W, height: H } = profile.workArea;
-  const m = makeMapper(profile, pxPerMm);
-  const fixed = { selectable: false, evented: false, excludeFromExport: true };
-  // Fabric 7 usa origem no CENTRO por padrão; aqui tudo é posicionado pelo canto superior esquerdo.
-  const label = { ...fixed, originX: "left" as const, originY: "top" as const, fontFamily: "system-ui, Segoe UI, sans-serif" };
+function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number) {
+  const { width: W, height: H } = p.workArea;
+  const px = 1 / z; // 1 pixel de tela, em mm
 
-  canvas.add(new Rect({ left: 0, top: 0, width: W * pxPerMm, height: H * pxPerMm, fill: "#fbfaf7", stroke: "#333", strokeWidth: 1, originX: "left", originY: "top", ...fixed }));
+  ctx.fillStyle = "#fbfaf7";
+  ctx.fillRect(0, 0, W, H);
 
-  for (let x = 10; x < W; x += 10) {
-    const major = x % 50 === 0;
-    canvas.add(new Line([x * pxPerMm, 0, x * pxPerMm, H * pxPerMm], { stroke: major ? "#d6d1c4" : "#ece8de", strokeWidth: 1, ...fixed }));
+  const line = (x1: number, y1: number, x2: number, y2: number) => {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  };
+  ctx.lineWidth = px;
+  if (z * 10 >= 4) {
+    ctx.beginPath();
+    for (let x = 10; x < W; x += 10) if (x % 50 !== 0) line(x, 0, x, H);
+    for (let y = 10; y < H; y += 10) if (y % 50 !== 0) line(0, H - y, W, H - y);
+    ctx.strokeStyle = "#ece8de";
+    ctx.stroke();
   }
-  for (let y = 10; y < H; y += 10) {
-    const major = y % 50 === 0;
-    const top = m.toPx(0, y).top;
-    canvas.add(new Line([0, top, W * pxPerMm, top], { stroke: major ? "#d6d1c4" : "#ece8de", strokeWidth: 1, ...fixed }));
-  }
+  ctx.beginPath();
+  for (let x = 50; x < W; x += 50) line(x, 0, x, H);
+  for (let y = 50; y < H; y += 50) line(0, H - y, W, H - y);
+  ctx.strokeStyle = "#d6d1c4";
+  ctx.stroke();
 
-  for (const t of profile.paperTemplates) {
-    const p = m.toPx(t.x, t.y + t.height);
-    canvas.add(new Rect({ left: p.left, top: p.top, width: t.width * pxPerMm, height: t.height * pxPerMm, fill: "transparent", stroke: "#4a7bd0", strokeDashArray: [6, 4], strokeWidth: 1, originX: "left", originY: "top", ...fixed }));
-    canvas.add(new FabricText(t.name, { left: p.left + t.width * pxPerMm - 26, top: p.top + 4, fontSize: 12, fill: "#4a7bd0", ...label }));
+  // gabaritos de papel (em mm da máquina → cena)
+  ctx.setLineDash([6 * px, 4 * px]);
+  ctx.strokeStyle = "#4a7bd0";
+  ctx.fillStyle = "#4a7bd0";
+  ctx.font = `${12 * px}px system-ui, "Segoe UI", sans-serif`;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "right";
+  for (const t of p.paperTemplates) {
+    const top = H - t.y - t.height;
+    ctx.strokeRect(t.x, top, t.width, t.height);
+    ctx.fillText(t.name, t.x + t.width - 4 * px, top + 4 * px);
   }
+  ctx.setLineDash([]);
 
-  const o = m.toPx(0, 0);
-  canvas.add(new FabricText("(0,0)", { left: o.left + 4, top: o.top - 18, fontSize: 12, fill: "#b03a2e", ...label }));
-  canvas.add(new FabricText(`${W} × ${H} mm`, { left: W * pxPerMm - 90, top: H * pxPerMm - 18, fontSize: 12, fill: "#777", ...label }));
+  // borda da área útil
+  ctx.lineWidth = 1.5 * px;
+  ctx.strokeStyle = "#333";
+  ctx.strokeRect(0, 0, W, H);
+
+  // origem da máquina: setas X+ (direita) e Y+ (para cima na tela = para longe do operador)
+  const a = 30 * px;
+  const head = 6 * px;
+  ctx.lineWidth = 2 * px;
+  ctx.strokeStyle = ctx.fillStyle = "#b03a2e";
+  ctx.beginPath();
+  line(0, H, a, H);
+  line(a, H, a - head, H - head / 1.5);
+  line(a, H, a - head, H + head / 1.5);
+  ctx.stroke();
+  ctx.strokeStyle = ctx.fillStyle = "#2e7d32";
+  ctx.beginPath();
+  line(0, H, 0, H - a);
+  line(0, H - a, -head / 1.5, H - a + head);
+  line(0, H - a, head / 1.5, H - a + head);
+  ctx.stroke();
+
+  ctx.textBaseline = "bottom";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#b03a2e";
+  ctx.fillText("(0,0)", 4 * px, H - 4 * px);
+  ctx.fillText("X+", a + 3 * px, H + 5 * px);
+  ctx.fillStyle = "#2e7d32";
+  ctx.fillText("Y+", 4 * px, H - a);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#777";
+  ctx.fillText(`${W} × ${H} mm`, W - 6 * px, H - 4 * px);
 }

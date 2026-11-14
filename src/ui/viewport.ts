@@ -1,4 +1,5 @@
 import { Point, type Canvas, type TPointerEventInfo } from "fabric";
+import { isTyping } from "./dom";
 
 /** Enquadra a área útil inteira no canvas, centralizada, com margem em px. */
 export function fitToScreen(canvas: Canvas, area: { width: number; height: number }, marginPx = 24): void {
@@ -56,10 +57,6 @@ export function installZoomPan(canvas: Canvas, opts: { minZoom: number; maxZoom:
     canvas.selection = saved.selection;
     canvas.skipTargetFind = spaceDown ? true : saved.skipTargetFind;
     canvas.setCursor(spaceDown ? "grab" : "default");
-  };
-  const isTyping = () => {
-    const a = document.activeElement;
-    return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || a instanceof HTMLSelectElement;
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.code !== "Space" || spaceDown || isTyping()) return;

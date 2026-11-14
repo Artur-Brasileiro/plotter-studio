@@ -1,5 +1,6 @@
 import { Canvas } from "fabric";
 import { sceneToMachine } from "./core/coords";
+import { canRedo, canUndo, redoLabel, undoLabel } from "./core/history";
 import { DEFAULT_PROFILE } from "./core/machine";
 import { initialState, Store } from "./core/store";
 import { installBoard } from "./ui/board";
@@ -7,6 +8,9 @@ import { CanvasView } from "./ui/canvasView";
 import { h } from "./ui/dom";
 import { installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
+import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
+import { SidePanel } from "./ui/panels/sidePanel";
+import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
 import "./style.css";
@@ -47,16 +51,32 @@ new ResizeObserver(() => {
   canvas.requestRenderAll();
 }).observe(layout.canvasWrap);
 
+// barra superior
 installImport(store, layout.toolbar, layout.canvasWrap);
-layout.toolbar.append(h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"));
-layout.side.append(h("div", { class: "panel" }, h("p", { class: "hint" }, "Importe um SVG para começar (botão ou arraste o arquivo para a janela).")));
+const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
+const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
+layout.toolbar.append(undoBtn, redoBtn, h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"));
+const updateUndo = () => {
+  const hist = store.state.history;
+  undoBtn.disabled = !canUndo(hist);
+  redoBtn.disabled = !canRedo(hist);
+  undoBtn.title = canUndo(hist) ? `Desfazer: ${undoLabel(hist)} (Ctrl+Z)` : "Nada para desfazer";
+  redoBtn.title = canRedo(hist) ? `Refazer: ${redoLabel(hist)} (Ctrl+Y)` : "Nada para refazer";
+};
+updateUndo();
+
+// painel lateral
+const side = new SidePanel(layout.side);
+side.addTab("props", "Propriedades", createPropertiesPanel(store));
 
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),
 );
+installShortcuts(store);
 
 store.subscribe((s, prev) => {
   if (s.profile !== prev.profile) canvas.requestRenderAll();
+  if (s.history !== prev.history) updateUndo();
 });
 
 // acesso pelo console do navegador, para depurar

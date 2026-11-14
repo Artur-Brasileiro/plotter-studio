@@ -33,6 +33,17 @@ export function clear(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+/** O foco está num campo de texto? (atalhos de teclado não devem agir) */
+export function isTyping(): boolean {
+  const a = document.activeElement;
+  return (
+    a instanceof HTMLInputElement ||
+    a instanceof HTMLTextAreaElement ||
+    a instanceof HTMLSelectElement ||
+    (a as HTMLElement | null)?.isContentEditable === true
+  );
+}
+
 /** Número em mm no formato brasileiro ("12,5"). */
 export function fmtMm(v: number, digits = 1): string {
   return v.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });

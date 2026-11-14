@@ -1354,7 +1354,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
   - com o desenho fora da área, o contorno fica vermelho.
 - **Você testa:** importar os 3 samples e um SVG seu; mexer à vontade; selecionar dois e girar juntos; ver que nada "pula" de lugar ao soltar.
 
-**T09 — Propriedades, atalhos, alinhar, desfazer**
+**T09 — Propriedades, atalhos, alinhar, desfazer** — ✅ concluída em 14/11/2026
 - **Objetivo:** o fluxo completo de edição.
 - **Arquivos:** `ui/panels/propertiesPanel.ts`, `ui/shortcuts.ts`, botões de desfazer/refazer.
 - **Detalhes do painel:**

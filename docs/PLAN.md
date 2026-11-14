@@ -1400,7 +1400,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os testes de `gcode` e os 4 goldens da seção 4.2 passam (com as regras gerais), e o começo exato do golden do quadrado bate.
 - **Você testa:** abrir os `.gcode` de `samples/golden/` no LaserGRBL, conferir a pré-visualização e rodar o do quadrado e o da orientação na máquina. Se aprovar, registrar em `docs/TESTES.md`. A partir daí os goldens valem.
 
-**T14 — Painel do trabalho e exportar**
+**T14 — Painel do trabalho e exportar** — ✅ concluída em 14/11/2026
 - **Arquivos:** `ui/panels/jobPanel.ts`; `planJob` com debounce de 300 ms ligado ao store.
 - **Detalhes:**
   - modo fixo, com atalhos F500/F1000/F1500/F2000, ou dinâmico;

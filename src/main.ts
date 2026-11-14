@@ -9,7 +9,9 @@ import { CanvasView } from "./ui/canvasView";
 import { h, toast } from "./ui/dom";
 import { installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
+import { createJobPanel } from "./ui/panels/jobPanel";
 import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
+import { fmtDuration, Planner } from "./ui/planner";
 import { SidePanel } from "./ui/panels/sidePanel";
 import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
@@ -68,8 +70,11 @@ const updateUndo = () => {
 updateUndo();
 
 // painel lateral
+const planner = new Planner(store);
 const side = new SidePanel(layout.side);
 side.addTab("props", "Propriedades", createPropertiesPanel(store));
+side.addTab("job", "Trabalho", createJobPanel(store, planner));
+planner.subscribe((plan) => status.setMessage("estimate", plan ? `tempo estimado ~${fmtDuration(plan.stats.estimate.totalS)}` : undefined));
 
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),
@@ -108,4 +113,4 @@ restoreSession()
   .finally(() => startAutosave(store, { onError: (e) => console.warn("autosave falhou", e) }));
 
 // acesso pelo console do navegador, para depurar
-Object.assign(window, { plotter: { store, canvas, view } });
+Object.assign(window, { plotter: { store, canvas, view, planner, side } });

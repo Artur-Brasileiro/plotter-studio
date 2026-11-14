@@ -1521,7 +1521,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** `$32=1` é recusado; `$110=...` pede confirmação; `$$` lista as configurações.
 - **Você testa:** teste manual v2 11.
 
-**T25 — Enviar trabalho**
+**T25 — Enviar trabalho** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`); falta o teste na máquina
 - **Arquivos:** `ui/panels/sendPanel.ts`.
 - **Detalhes:**
   - Contorno (`frame`);

@@ -24,6 +24,7 @@ import { createConnectControls } from "./ui/machine/connectControls";
 import { createMachinePanel } from "./ui/panels/machinePanel";
 import { createJogPanel } from "./ui/panels/jogPanel";
 import { createConsole } from "./ui/panels/consolePanel";
+import { createSendPanel } from "./ui/panels/sendPanel";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -100,8 +101,11 @@ updateUndo();
 // painel lateral
 const planner = new Planner(store);
 planner.subscribe((plan) => {
-  if (player.playing) player.stop();
-  overlay.setPlan(plan, store.state.job.speedMode === "fixed");
+  // durante o envio a pré-visualização mostra o plano do trabalho (o painel de envio cuida dela)
+  if (!session.jobActive) {
+    if (player.playing) player.stop();
+    overlay.setPlan(plan, store.state.job.speedMode === "fixed");
+  }
   status.setMessage("estimate", plan ? `tempo estimado ~${fmtDuration(plan.stats.estimate.totalS)}` : undefined);
 });
 overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
@@ -110,7 +114,8 @@ const side = new SidePanel(layout.side);
 side.addTab("props", "Propriedades", createPropertiesPanel(store));
 side.addTab("job", "Trabalho", createJobPanel(store, planner, createPreviewControls(overlay, player)));
 const jog = createJogPanel(session, () => side.active === "machine");
-const machineTab = h("div", { class: "panel" }, createMachinePanel(session), jog.el);
+const send = createSendPanel(session, store, planner, overlay, player);
+const machineTab = h("div", { class: "panel" }, createMachinePanel(session), send.el, jog.el);
 side.addTab("machine", "Máquina", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
 const consolePanel = createConsole(session, layout.console);

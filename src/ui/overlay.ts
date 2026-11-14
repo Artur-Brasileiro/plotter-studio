@@ -115,23 +115,28 @@ export class Overlay {
     this.drawCursor();
   }
 
-  /** v2: progresso real do envio (traço e ponto), no lugar da animação. undefined = volta ao normal. */
-  setProgress(p: { strokeIndex: number; pointIndex: number } | undefined): void {
+  /**
+   * v2: progresso real do envio (traço e ponto), no lugar da animação. undefined = volta ao normal.
+   * Devolve o tempo estimado (s) correspondente, para a barra de progresso.
+   */
+  setProgress(p: { strokeIndex: number; pointIndex: number } | undefined): number | undefined {
     const c = this.cache;
     if (!p || !c) {
       if (this.hidePlayheadPen) {
         this.hidePlayheadPen = false;
         this.setPlayhead(undefined);
       }
-      return;
+      return undefined;
     }
     this.hidePlayheadPen = true;
     const k = Math.min(Math.max(p.strokeIndex, 0), c.times.length - 1);
     const st = c.times[k];
-    if (!st) return;
+    if (!st) return undefined;
     const total = st.cum[st.cum.length - 1] || 1;
     const along = st.cum[Math.min(p.pointIndex, st.cum.length - 1)] ?? 0;
-    this.setPlayhead(st.start + (along / total) * st.dur);
+    const t = st.start + (along / total) * st.dur;
+    if (t !== this.playhead) this.setPlayhead(t);
+    return t;
   }
 
   private drawCursor(): void {

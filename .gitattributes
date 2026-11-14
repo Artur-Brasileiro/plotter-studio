@@ -1,0 +1,6 @@
+# Tudo com fim de linha LF no repositório E na cópia de trabalho, também no Windows.
+# Sem isto, o core.autocrlf do Windows troca LF por CRLF ao fazer checkout, e os
+# G-codes esperados (samples/golden/*.gcode) ficam diferentes entre o PC e o GitHub Actions.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

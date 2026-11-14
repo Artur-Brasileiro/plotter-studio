@@ -11,7 +11,9 @@ npm install
 npm run dev
 ```
 
-Abra http://localhost:5173 no Chrome.
+Abra http://localhost:5173 no Chrome. Versão publicada: https://artur-brasileiro.github.io/plotter-studio/
+
+Testes: `npm test` (no Windows passa por `scripts/vitest.mjs`, que contorna um problema do Vitest com o drive `c:` minúsculo do terminal do VS Code).
 
 ## Documentação
 

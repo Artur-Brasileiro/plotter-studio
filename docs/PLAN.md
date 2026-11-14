@@ -1248,7 +1248,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 
 ### v1 — compor e exportar G-code
 
-**T01 — Fundação**
+**T01 — Fundação** — ✅ concluída em 14/11/2026
 - **Objetivo:** deixar o projeto em pé no Windows e no GitHub.
 - **Arquivos:**
   - `scripts/vitest.mjs` (relança o Vitest com a letra do drive maiúscula; código abaixo);
@@ -1637,3 +1637,8 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 ### Registro de divergências durante a execução
 
 (Quem executar uma tarefa e precisar desviar do plano anota aqui: data, tarefa, o que mudou e por quê.)
+
+| Data | Tarefa | Desvio | Motivo |
+|---|---|---|---|
+| 14/11/2026 | T01 | Acrescentado `.gitattributes` com `* text=auto eol=lf`. | O git do Windows está com `core.autocrlf=true`: no checkout, os `.gcode` esperados (goldens) ganhariam CRLF e o `toMatchFileSnapshot` falharia no PC mas não no GitHub Actions (ou vice-versa). |
+| 14/11/2026 | T01 | Repositório criado como `Artur-Brasileiro/plotter-studio` (público), com o GitHub Pages via Actions em https://artur-brasileiro.github.io/plotter-studio/. | Pedido do Artur. |

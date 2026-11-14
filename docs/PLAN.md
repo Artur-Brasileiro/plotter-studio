@@ -1457,7 +1457,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os casos de `protocol`, `codes` e `commands` da seção 4.1 passam.
 - **Você testa:** nada.
 
-**T19 — Contagem de caracteres e simulador**
+**T19 — Contagem de caracteres e simulador** — ✅ concluída em 14/11/2026
 - **Arquivos:** `core/grbl/{streamer,clock,transport,fakeGrbl}.ts` + testes.
 - **Depende de:** T18.
 - **Pronto quando:** os testes de `streamer` passam; o `FakeGrbl` executa um programa enviado à mão pelo streamer (sem controller) sem `rxOverflow` e com `penStrokes` correto.

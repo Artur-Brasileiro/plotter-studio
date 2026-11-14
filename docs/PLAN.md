@@ -1486,7 +1486,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** conecta no simulador (`?sim=1`) e na máquina; o log mostra o banner; desconectar e reconectar funciona sem recarregar a página.
 - **Você testa:** conectar na máquina (COM6, com o LaserGRBL **fechado**); depois tentar com o LaserGRBL aberto e ver a mensagem de porta em uso.
 
-**T22 — Painel da máquina**
+**T22 — Painel da máquina** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`); falta o teste na máquina
 - **Arquivos:** `ui/panels/machinePanel.ts`; posição da máquina no `Overlay`.
 - **Detalhes:**
   - estado em cores (Idle verde, Run azul, Hold amarelo, Alarm vermelho);

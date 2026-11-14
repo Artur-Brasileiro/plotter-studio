@@ -31,6 +31,8 @@ interface Cache {
 export class Overlay {
   private readonly el: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
+  /** camada só do cursor da máquina (atualiza 5×/s sem redesenhar o caminho) */
+  private readonly cursorEl: HTMLCanvasElement;
   private readonly done: HTMLCanvasElement = document.createElement("canvas");
   private cache: Cache | undefined;
   private visible = false;
@@ -40,11 +42,16 @@ export class Overlay {
   private doneVpt = "";
   private lastVpt = "";
   private machinePos: Vec | undefined;
+  private machinePen = false;
+  /** durante o envio: a animação mostra o progresso real, sem a caneta simulada */
+  private hidePlayheadPen = false;
 
   constructor(host: HTMLElement, private readonly canvas: Canvas, private readonly getHeight: () => number) {
     this.el = document.createElement("canvas");
     this.el.className = "overlay";
-    host.append(this.el);
+    this.cursorEl = document.createElement("canvas");
+    this.cursorEl.className = "overlay";
+    host.append(this.el, this.cursorEl);
     this.ctx = this.el.getContext("2d")!;
     // redesenha quando o zoom/pan muda (o Fabric renderiza o canvas de baixo)
     canvas.on("after:render", ({ ctx }) => {
@@ -59,12 +66,14 @@ export class Overlay {
 
   resize(w: number, h: number): void {
     const dpr = window.devicePixelRatio || 1;
-    for (const c of [this.el, this.done]) {
+    for (const c of [this.el, this.done, this.cursorEl]) {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
     }
-    this.el.style.width = `${w}px`;
-    this.el.style.height = `${h}px`;
+    for (const c of [this.el, this.cursorEl]) {
+      c.style.width = `${w}px`;
+      c.style.height = `${h}px`;
+    }
     this.doneVpt = "";
     this.redraw();
   }
@@ -97,10 +106,68 @@ export class Overlay {
     this.redraw();
   }
 
-  /** v2: posição da caneta (mm da máquina) */
-  setMachinePosition(p: Vec | undefined): void {
+  /** v2: posição da caneta (mm da máquina); `penDown` pinta o centro */
+  setMachinePosition(p: Vec | undefined, penDown = false): void {
+    const same = p && this.machinePos ? p.x === this.machinePos.x && p.y === this.machinePos.y : p === this.machinePos;
+    if (same && penDown === this.machinePen) return;
     this.machinePos = p;
-    this.redraw();
+    this.machinePen = penDown;
+    this.drawCursor();
+  }
+
+  /** v2: progresso real do envio (traço e ponto), no lugar da animação. undefined = volta ao normal. */
+  setProgress(p: { strokeIndex: number; pointIndex: number } | undefined): void {
+    const c = this.cache;
+    if (!p || !c) {
+      if (this.hidePlayheadPen) {
+        this.hidePlayheadPen = false;
+        this.setPlayhead(undefined);
+      }
+      return;
+    }
+    this.hidePlayheadPen = true;
+    const k = Math.min(Math.max(p.strokeIndex, 0), c.times.length - 1);
+    const st = c.times[k];
+    if (!st) return;
+    const total = st.cum[st.cum.length - 1] || 1;
+    const along = st.cum[Math.min(p.pointIndex, st.cum.length - 1)] ?? 0;
+    this.setPlayhead(st.start + (along / total) * st.dur);
+  }
+
+  private drawCursor(): void {
+    const ctx = this.cursorEl.getContext("2d")!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.cursorEl.width, this.cursorEl.height);
+    const p = this.machinePos;
+    if (!p) return;
+    const { m } = this.matrix();
+    const dpr = window.devicePixelRatio || 1;
+    // em pixels: a cruz tem o mesmo tamanho em qualquer zoom
+    const x = m[0] * p.x + m[2] * p.y + m[4];
+    const y = m[1] * p.x + m[3] * p.y + m[5];
+    const r = 7 * dpr;
+    const color = this.machinePen ? "#c62828" : "#0d47a1";
+    ctx.lineWidth = 2 * dpr;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x - 2.2 * r, y);
+    ctx.lineTo(x - r * 0.4, y);
+    ctx.moveTo(x + r * 0.4, y);
+    ctx.lineTo(x + 2.2 * r, y);
+    ctx.moveTo(x, y - 2.2 * r);
+    ctx.lineTo(x, y - r * 0.4);
+    ctx.moveTo(x, y + r * 0.4);
+    ctx.lineTo(x, y + 2.2 * r);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    ctx.stroke();
+    if (this.machinePen) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.45, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   }
 
   get totalTime(): number {
@@ -171,7 +238,7 @@ export class Overlay {
       ctx.globalAlpha = 1;
       if (animating) this.drawProgress(ctx, c, z, m);
     }
-    if (this.machinePos) this.drawPen(ctx, m, z, this.machinePos, true, "#0d47a1");
+    this.drawCursor();
   }
 
   private strokeAll(ctx: CanvasRenderingContext2D, c: Cache, z: number) {
@@ -247,7 +314,7 @@ export class Overlay {
       const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
       pen = { x: from.x + (to.x - from.x) * f, y: from.y + (to.y - from.y) * f };
     }
-    this.drawPen(ctx, m, z, pen, down, down ? "#c62828" : "#555");
+    if (!this.hidePlayheadPen) this.drawPen(ctx, m, z, pen, down, down ? "#c62828" : "#555");
   }
 
   private drawPen(ctx: CanvasRenderingContext2D, m: Mat2D, z: number, p: Vec, filled: boolean, color: string) {

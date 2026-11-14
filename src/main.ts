@@ -21,6 +21,7 @@ import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
 import { createConnectControls } from "./ui/machine/connectControls";
+import { createMachinePanel } from "./ui/panels/machinePanel";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -106,6 +107,9 @@ overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
 const side = new SidePanel(layout.side);
 side.addTab("props", "Propriedades", createPropertiesPanel(store));
 side.addTab("job", "Trabalho", createJobPanel(store, planner, createPreviewControls(overlay, player)));
+const machineTab = h("div", { class: "panel" }, createMachinePanel(session));
+side.addTab("machine", "Máquina", machineTab);
+session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
 
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),

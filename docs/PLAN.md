@@ -1378,7 +1378,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** recarregar a página (F5) mantém os desenhos e as posições; o rodapé mostra "Sessão restaurada (N desenhos)"; um perfil corrompido no `localStorage` volta ao padrão com aviso.
 - **Você testa:** montar uma mesa com 3 desenhos, fechar o Chrome, abrir de novo.
 
-**T11 — Traços, área e ordem**
+**T11 — Traços, área e ordem** — ✅ concluída em 14/11/2026
 - **Objetivo:** do documento à lista ordenada de traços.
 - **Arquivos:** `core/job/{types,strokes,bounds,optimize}.ts` + testes.
 - **Depende de:** T03, T06.

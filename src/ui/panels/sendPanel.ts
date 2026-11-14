@@ -1,4 +1,6 @@
+import { describeError } from "../../core/grbl/codes";
 import { isJobActive, type ControllerSnapshot, type JobState } from "../../core/grbl/controller";
+import { RT } from "../../core/grbl/protocol";
 import { bboxOfPoints } from "../../core/geometry/path";
 import { generateGcode, type GcodeProgram } from "../../core/job/gcode";
 import type { JobPlan } from "../../core/job/types";
@@ -41,10 +43,23 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   let job: ActiveJob | undefined;
   let wake: WakeLockSentinel | undefined;
   let lastState: JobState = "none";
+  let lastErrKey = "";
 
   const frameBtn = h("button", { title: "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." }, "▭ Contorno");
   const sendBtn = h("button", { class: "primary" }, "▶ Enviar desenho");
   const stopBtn = h("button", { title: "Para mantendo a posição: pausa, espera parar e reinicia o GRBL (a caneta sobe)." }, "■ Parar");
+  const pauseBtn = h("button", { class: "primary" }, "⏸ Pausar");
+  const pauseNote = h("p", { class: "hint" });
+  const errorBox = h("div", { class: "notice alarm" });
+  const ovValue = h("span", { class: "ov-value" });
+  const ovRow = h(
+    "div",
+    { class: "row center ov-row" },
+    h("span", { class: "hint" }, "Velocidade ", ovValue),
+    h("button", { title: "−10% (0x92)", onclick: () => feed(RT.FEED_MINUS_10) }, "−10%"),
+    h("button", { title: "Volta para 100% (0x90)", onclick: () => feed(RT.FEED_RESET) }, "100%"),
+    h("button", { title: "+10% (0x91)", onclick: () => feed(RT.FEED_PLUS_10) }, "+10%"),
+  );
   const reasons = h("ul", { class: "reasons" });
   const bar = h("div", { class: "progress-fill" });
   const progress = h("div", { class: "progress" }, bar);
@@ -57,13 +72,32 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     "div",
     { class: "panel-section" },
     h("h3", null, "Enviar"),
-    h("div", { class: "row" }, frameBtn, sendBtn, stopBtn),
+    h("div", { class: "row" }, frameBtn, sendBtn, pauseBtn, stopBtn),
     reasons,
     progress,
     progressText,
+    pauseNote,
+    errorBox,
+    ovRow,
     resultBox,
     runsDetails,
   );
+
+  function feed(cmd: number) {
+    try {
+      session.controller?.feedOverride(cmd);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "error");
+    }
+  }
+
+  pauseBtn.addEventListener("click", () => {
+    const c = session.controller;
+    const st = session.snapshot.job.state;
+    if (!c) return;
+    if (st === "running") c.pause();
+    else if (st === "paused") c.resume();
+  });
 
   // ---------------------------------------------------------------- ações
   frameBtn.addEventListener("click", () => {
@@ -226,6 +260,52 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     frameBtn.title = s.homed ? "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." : "Faça o Home antes do contorno.";
     stopBtn.hidden = !active;
     stopBtn.disabled = j.state === "stopping";
+
+    // pausa / continuar
+    const mode = store.state.profile.pen.pauseLift;
+    pauseBtn.hidden = !active || j.state === "stopping";
+    pauseBtn.disabled = j.state === "pausing" || j.state === "resuming";
+    pauseBtn.textContent =
+      j.state === "paused" ? "▶ Continuar" : j.state === "pausing" ? "Pausando…" : j.state === "resuming" ? "Descendo a caneta…" : "⏸ Pausar";
+    pauseBtn.title =
+      mode === "spindleStop"
+        ? "Para na hora e levanta a caneta (0x9E). Ao continuar, a caneta desce antes de andar."
+        : "Termina o traço atual, levanta a caneta e para.";
+    let note = "";
+    if (j.state === "pausing") note = j.pauseMode === "endOfStroke" ? "Terminando o traço atual antes de parar…" : "Parando…";
+    else if (j.state === "paused") {
+      if (j.pauseMode === "endOfStroke") note = "Pausado no fim do traço, com a caneta em cima. Dá para trocar a caneta ou ajustar o papel.";
+      else if (j.penLifted && (s.status?.spindle ?? 0) > 0)
+        note =
+          "Pausado, mas o GRBL diz que a caneta continua embaixo: este firmware não levanta a caneta com 0x9E. Em ⚙ Configurações → Caneta, mude \"Pausa\" para \"no fim do traço\".";
+      else if (j.penLifted) note = "Pausado com a caneta levantada. Ao continuar, ela desce, espera o servo e só então anda.";
+      else note = "Pausado. Atenção: a caneta ficou no papel.";
+    }
+    pauseNote.textContent = note;
+    pauseNote.hidden = !note;
+
+    // erro no meio do trabalho
+    errorBox.hidden = !(active && j.error);
+    const errKey = j.error && !errorBox.hidden ? `${j.error.line}:${j.error.code}:${j.state === "paused"}` : "";
+    if (j.error && errKey && errKey !== lastErrKey) {
+      const info = describeError(j.error.code);
+      clear(errorBox);
+      errorBox.append(
+        h("strong", null, `Erro na linha ${j.error.line + 1}: error:${j.error.code} — ${info.title}`),
+        h("code", { class: "err-line" }, j.error.text),
+        h("span", null, info.action),
+        h(
+          "div",
+          { class: "row" },
+          h("button", { disabled: j.state !== "paused", onclick: () => session.controller?.resume(), title: "O GRBL já pulou essa linha; continua da próxima." }, "Continuar mesmo assim"),
+          h("button", { onclick: () => session.controller && void machineAction(() => session.controller!.stop()) }, "■ Parar"),
+        ),
+      );
+    }
+    lastErrKey = errKey;
+
+    ovRow.hidden = !active;
+    ovValue.textContent = `${s.status?.overrides?.feed ?? 100}%`;
 
     resultBox.hidden = !(job && (j.state === "stopped" || j.state === "failed") && j.message);
     if (!resultBox.hidden) {

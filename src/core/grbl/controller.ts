@@ -488,8 +488,10 @@ export class GrblController {
   private onStatus(r: StatusReport): void {
     const wco = r.wco ?? this.snap.wco;
     const wpos = workPosition(r, wco);
+    // como o WCO, o Ov só vem de tempos em tempos: guarda o último
+    const prevOv = this.snap.status?.overrides;
     this.patch({
-      status: r,
+      status: r.overrides || !prevOv ? r : { ...r, overrides: prevOv },
       wco,
       wpos,
       lastStatusAt: this.clock.now(),

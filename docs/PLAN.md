@@ -1534,7 +1534,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** no simulador, um trabalho completo de `curvas.svg` termina `finished`, com o destaque acompanhando.
 - **Você testa:** testes manuais v2 4 e 5.
 
-**T26 — Pausa, parada, override e falhas**
+**T26 — Pausa, parada, override e falhas** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`, inclusive `simNoLift`, `simError` e `simDisconnect`); falta o teste na máquina e a decisão do `pen.pauseLift`
 - **Arquivos:** `sendPanel.ts`, `controller.ts` (se faltar algo).
 - **Detalhes:**
   - Pausar (o modo vem do perfil, `pen.pauseLift`), Continuar, Parar e Parada de emergência (botão vermelho, com Esc como atalho);
@@ -1653,4 +1653,9 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 | 14/11/2026 | T19 | `ManualClock.advance(ms)` devolve `Promise` (e há `advanceUntil`). O `FakeGrbl` ganhou `unplug()`, `powerGlitch()`, `rtLog`, `received` e `forbiddenBytes`, e termina o Home com o pull-off de 1 mm do `$27` (WPos 809/384, não 810/385). | Entre um timer e outro as promessas do controlador precisam resolver, senão o teste fica fora de ordem. O pull-off é o que o GRBL faz de verdade, e pegou um bug: o jog "+X" logo depois do Home recuaria para 809,5 por causa da margem; `stepTarget` agora nunca anda para trás. |
 | 14/11/2026 | T20 | "Parar" sempre manda `!` primeiro, mesmo com a máquina em Idle ou Hold:0, e só depois espera Hold:0 (ou Idle 100 ms depois) e manda o reset. | Um relatório "Idle" pode ter até 200 ms: a máquina pode ter começado a andar depois dele (fim de um `G4`), e um reset andando dá ALARM:3. `!` em Idle vai direto para Hold:0, então não custa nada. |
 | 14/11/2026 | T20 | Erro no meio do trabalho com `pauseLift = "spindleStop"` também levanta a caneta (é a mesma pausa do botão). Com "endOfStroke" é só `!` imediato. | Evita borrão enquanto o Artur lê a mensagem; o `!` continua sendo imediato. |
+| 14/11/2026 | T21 | O simulador da interface aceita, além de `?sim=1`: `simSpeed=N` (N× mais rápido), `simNoLift=1` (o 0x9E não levanta a caneta), `simError=L:C` (error:C na L-ésima linha) e `simDisconnect=L` (o cabo "sai" na L-ésima linha). | Para ensaiar na interface as falhas que os testes do controlador cobrem, sem a máquina. |
+| 14/11/2026 | T24 | Um `$H` (ou `$X`) digitado no console também atualiza o "Home feito" (ou limpa o alarme). | Antes só o botão marcava o Home: depois de um `$H` pelo console, o app continuava exigindo Home. |
+| 14/11/2026 | T26 | Esc durante um **jog** só cancela o jog (0x85), sem reset; com trabalho ativo ou a máquina em Run/Home/Hold, é parada de emergência. Esc com um diálogo aberto não faz nada na máquina. | O 0x85 para o jog sem perder a posição; um reset no meio do jog daria ALARM:3 e exigiria Home à toa. |
+| 14/11/2026 | T26 | Na pausa "agora", se o relatório continuar com S > 0 depois do 0x9E, o painel avisa que este firmware não levanta a caneta e sugere mudar `pen.pauseLift` para "no fim do traço". | É exatamente o teste manual 6 da v2: o próprio app mostra o resultado. |
+| 14/11/2026 | T26 | O controlador guarda o último campo `Ov` do relatório (o GRBL só o manda de tempos em tempos). | Sem isso o painel mostrava 100% logo depois de um +10%. |
 | 14/11/2026 | T20 | Fim do trabalho e "pausado no fim do traço" exigem **dois** relatórios Idle seguidos depois do último ok. | O primeiro pode ter sido gerado antes de o GRBL iniciar o último movimento (o `?` e o início do ciclo são tratados na mesma passada do laço do GRBL). |

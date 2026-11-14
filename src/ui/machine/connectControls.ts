@@ -45,6 +45,16 @@ export function createConnectControls(session: MachineSession): HTMLElement {
   }
   const btn = h("button", { class: "connect-btn" });
   const other = h("button", { class: "connect-other", title: "Escolher outra porta serial" }, "▾");
+  const estop = h(
+    "button",
+    {
+      class: "estop",
+      title: "Parada de emergência (Esc): reset imediato. Com a máquina andando, a posição se perde e é preciso refazer o Home.",
+      onclick: () => session.controller?.emergencyStop(),
+    },
+    "⛔ Emergência",
+  );
+  let prevLink = session.snapshot.link;
   const badge = h("span", { class: "state-badge" });
   const sim = session.sim
     ? h("span", { class: "sim-tag", title: "?sim=1 na URL: um GRBL falso no lugar da máquina, para ensaiar sem a plotter." }, "SIMULADOR")
@@ -86,8 +96,38 @@ export function createConnectControls(session: MachineSession): HTMLElement {
     badge.textContent = stateText(s);
     badge.className = `state-badge ${stateClass(s)}`;
     badge.hidden = s.link === "disconnected";
+    estop.hidden = s.link !== "connected";
+    if (s.link === "lost" && prevLink !== "lost") {
+      toast(`${s.linkMessage ?? "A conexão caiu."} Reconectar reinicia a placa (a caneta sobe) e pede Home.`, "error", 15000);
+    }
+    prevLink = s.link;
   };
   session.subscribe(render);
   render(session.snapshot);
-  return h("span", { class: "connect" }, sim, btn, other, badge);
+  return h("span", { class: "connect" }, sim, estop, btn, other, badge);
+}
+
+/**
+ * Esc com a máquina andando (ou trabalho em andamento): parada de emergência. Num jog, só cancela o jog
+ * (0x85), que para sem perder a posição. Escuta na captura, antes dos atalhos de edição.
+ */
+export function installEmergencyKey(session: MachineSession): void {
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape") return;
+      const s = session.snapshot;
+      const c = session.controller;
+      if (!c || s.link !== "connected" || document.querySelector("dialog[open]")) return;
+      const st = s.status?.state;
+      if (session.jobActive || st === "Run" || st === "Home" || st === "Hold") {
+        c.emergencyStop();
+        toast("Parada de emergência (Esc).", "error", 8000);
+      } else if (st === "Jog") c.jogStop();
+      else return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    },
+    { capture: true },
+  );
 }

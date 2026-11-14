@@ -20,7 +20,7 @@ import { SidePanel } from "./ui/panels/sidePanel";
 import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
-import { createConnectControls } from "./ui/machine/connectControls";
+import { createConnectControls, installEmergencyKey } from "./ui/machine/connectControls";
 import { createMachinePanel } from "./ui/panels/machinePanel";
 import { createJogPanel } from "./ui/panels/jogPanel";
 import { createConsole } from "./ui/panels/consolePanel";
@@ -128,6 +128,7 @@ session.subscribe(updateArrowMode);
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),
 );
+installEmergencyKey(session); // antes dos atalhos: Esc com a máquina andando é emergência, não "limpar seleção"
 installShortcuts(store, { arrowsEnabled: () => !jog.keysActive() });
 
 store.subscribe((s, prev) => {

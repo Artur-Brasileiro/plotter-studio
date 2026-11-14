@@ -331,6 +331,8 @@ describe("GrblController com o FakeGrbl", () => {
     const s = await homed();
     s.ctrl.feedOverride(RT.FEED_PLUS_10);
     expect(s.fake.feedOverride).toBe(110);
+    await s.clock.advance(3000); // vários relatórios, a maioria sem o campo Ov
+    expect(s.ctrl.snapshot.status?.overrides?.feed).toBe(110);
     expect(() => s.ctrl.feedOverride(0x9a)).toThrow();
     expect(() => s.ctrl.realtime(0x9b)).toThrow();
     const { program } = programFor(orientacaoSvg);

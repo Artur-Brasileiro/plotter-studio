@@ -100,6 +100,12 @@ dialog.settings::backdrop { background: rgba(0, 0, 0, 0.35); }
 /* v2: conexão e estado da máquina */
 .connect { display: inline-flex; gap: 6px; align-items: center; }
 .connect-other { padding: 5px 7px; }
+.toolbar .estop { background: #c62828; border-color: #ff8a80; color: #fff; font-weight: 700; }
+.toolbar .estop:hover { background: #e53935; }
+.ov-value { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+.side .ov-row button { padding: 4px 8px; }
+.err-line { display: block; margin: 4px 0; padding: 3px 6px; background: #fff; border: 1px solid #f0b8ae; border-radius: 4px; font-size: 12px; word-break: break-all; }
+.notice.alarm .row { margin-top: 6px; }
 .state-badge { padding: 3px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; background: #555; color: #fff; }
 .st-idle { background: var(--ok); }
 .st-run { background: var(--accent); }

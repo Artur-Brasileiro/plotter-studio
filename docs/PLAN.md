@@ -1498,7 +1498,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** tudo funciona no simulador, e os botões ficam desabilitados nos estados em que o GRBL recusaria o comando.
 - **Você testa:** testes manuais v2 1 e 3.
 
-**T23 — Jog**
+**T23 — Jog** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`); falta o teste na máquina
 - **Arquivos:** `ui/panels/jogPanel.ts`, extensão de `ui/shortcuts.ts`.
 - **Detalhes:**
   - setas na tela (8 direções) e no teclado (com o foco no canvas, fora dos campos);

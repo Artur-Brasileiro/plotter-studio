@@ -113,4 +113,16 @@ dialog.settings::backdrop { background: rgba(0, 0, 0, 0.35); }
 .notice ul { margin: 4px 0; padding-left: 18px; }
 .settings-dump { max-height: 180px; overflow: auto; margin: 6px 0 0; padding: 6px 8px; background: #fff; border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
 .side details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.jog-wrap { display: flex; gap: 12px; align-items: flex-start; }
+.jog-pad { display: grid; grid-template-columns: repeat(3, 42px); grid-template-rows: repeat(3, 42px); gap: 4px; flex: none; }
+.side .jog-btn { font-size: 18px; padding: 0; touch-action: none; user-select: none; }
+.side .jog-btn:active:not(:disabled) { background: #dfe8fb; }
+.jog-center { border: 1px dashed #c9c3b5; border-radius: 6px; }
+.jog-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.seg-group { display: grid; grid-template-columns: repeat(4, 1fr); }
+.side .seg { border-radius: 0; margin-left: -1px; padding: 4px 6px; font-size: 12.5px; }
+.side .seg:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.side .seg:nth-child(4) { border-radius: 0 6px 6px 0; }
+.side .seg:nth-child(5) { grid-column: 1 / -1; margin: 4px 0 0; border-radius: 6px; }
+.side .seg.on { background: var(--accent); border-color: var(--accent); color: #fff; position: relative; }
 .notice { padding: 8px 10px; background: #fff8e1; border: 1px solid #f0d58a; border-radius: 6px; font-size: 13px; line-height: 1.4; }

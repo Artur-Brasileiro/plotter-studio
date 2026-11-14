@@ -22,6 +22,7 @@ import { StatusBar } from "./ui/statusBar";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
 import { createConnectControls } from "./ui/machine/connectControls";
 import { createMachinePanel } from "./ui/panels/machinePanel";
+import { createJogPanel } from "./ui/panels/jogPanel";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -107,14 +108,19 @@ overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
 const side = new SidePanel(layout.side);
 side.addTab("props", "Propriedades", createPropertiesPanel(store));
 side.addTab("job", "Trabalho", createJobPanel(store, planner, createPreviewControls(overlay, player)));
-const machineTab = h("div", { class: "panel" }, createMachinePanel(session));
+const jog = createJogPanel(session, () => side.active === "machine");
+const machineTab = h("div", { class: "panel" }, createMachinePanel(session), jog.el);
 side.addTab("machine", "Máquina", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
+// rodapé: as setas do teclado fazem jog (aba Máquina, conectado) ou movem o desenho?
+const updateArrowMode = () => status.setMessage("arrows", jog.keysActive() ? "Setas: jog da máquina" : undefined);
+side.onChange = updateArrowMode;
+session.subscribe(updateArrowMode);
 
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),
 );
-installShortcuts(store);
+installShortcuts(store, { arrowsEnabled: () => !jog.keysActive() });
 
 store.subscribe((s, prev) => {
   if (s.profile !== prev.profile) canvas.requestRenderAll();

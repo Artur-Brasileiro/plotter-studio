@@ -6,6 +6,8 @@ export class SidePanel {
   private readonly body = h("div", { class: "side-body" });
   private readonly tabs: { id: string; button: HTMLButtonElement; el: HTMLElement }[] = [];
   private current = "";
+  /** Chamado ao trocar de aba (o rodapé mostra se as setas fazem jog). */
+  onChange: (id: string) => void = () => {};
 
   constructor(host: HTMLElement) {
     clear(host);
@@ -26,6 +28,7 @@ export class SidePanel {
     for (const t of this.tabs) t.button.classList.toggle("on", t.id === id);
     clear(this.body);
     this.body.append(tab.el);
+    this.onChange(id);
   }
 
   get active(): string {

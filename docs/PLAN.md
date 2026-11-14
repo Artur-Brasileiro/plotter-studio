@@ -1285,7 +1285,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os testes de `mat2d`, `path` e `flatten` da seção 4.1 passam, inclusive "círculo R30 = 56 segmentos" e "tolerância depois da escala".
 - **Você testa:** nada na máquina; ler os nomes dos testes e ver se fazem sentido.
 
-**T03 — Simplificação**
+**T03 — Simplificação** — ✅ concluída em 14/11/2026
 - **Objetivo:** RDP, fusão de segmentos curtos e pontos.
 - **Arquivos:** `core/geometry/simplify.ts` + testes.
 - **Depende de:** T02.

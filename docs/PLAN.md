@@ -1278,7 +1278,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
   - existe um repositório git com o primeiro commit.
 - **Você testa:** rodar `npm test` no terminal do VS Code. Criar o repositório no GitHub, dar push e, em Settings → Pages → Source, escolher "GitHub Actions". Abrir a URL do Pages.
 
-**T02 — Geometria**
+**T02 — Geometria** — ✅ concluída em 14/11/2026
 - **Objetivo:** a base matemática pura.
 - **Arquivos:** `core/geometry/{vec,mat2d,path,flatten}.ts` + testes.
 - **Depende de:** T01.

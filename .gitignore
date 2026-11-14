@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+# G-codes gerados nos testes locais (os de exemplo ficam em samples/)
+/out/

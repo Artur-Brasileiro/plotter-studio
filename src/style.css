@@ -1,0 +1,6 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, "Segoe UI", sans-serif; background: #e9e6df; color: #222; }
+.topbar { display: flex; gap: 12px; align-items: baseline; padding: 10px 16px; background: #222; color: #f2efe8; }
+.topbar .hint { color: #aaa; font-size: 13px; }
+.workspace { padding: 16px; }
+#canvas-wrap { width: 100%; }

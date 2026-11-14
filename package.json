@@ -1,0 +1,22 @@
+{
+  "name": "plotter-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Software de G-code para a CNC Plotter do Artur (GRBL 1.1h + servo)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fabric": "^7.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

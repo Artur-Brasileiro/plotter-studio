@@ -6,12 +6,15 @@ import { loadJobSettings, loadProfileWithStatus, saveJobSettings, saveProfile } 
 import { restoreSession, startAutosave } from "./storage/sessionStore";
 import { installBoard } from "./ui/board";
 import { CanvasView } from "./ui/canvasView";
+import { DrawingObject } from "./ui/drawingObject";
 import { h, toast } from "./ui/dom";
 import { installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
 import { createJobPanel } from "./ui/panels/jobPanel";
 import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
 import { fmtDuration, Planner } from "./ui/planner";
+import { Overlay, Player } from "./ui/overlay";
+import { createPreviewControls } from "./ui/panels/previewControls";
 import { SidePanel } from "./ui/panels/sidePanel";
 import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
@@ -32,6 +35,13 @@ const canvas = new Canvas(layout.canvasEl, {
   uniformScaling: false, // Shift mantém a proporção (SPEC)
 });
 installBoard(canvas, profile);
+// pré-visualização do caminho: canvas por cima do Fabric
+const overlay = new Overlay(layout.canvasWrap, canvas, () => profile().workArea.height);
+const player = new Player(overlay);
+overlay.onVisibilityChange = (v) => {
+  DrawingObject.dimmed = v;
+  canvas.requestRenderAll();
+};
 
 const status = new StatusBar(layout.status);
 const updateZoom = () => status.setZoom(canvas.getZoom());
@@ -48,6 +58,7 @@ const fit = () => {
 let fitted = false;
 new ResizeObserver(() => {
   canvas.setDimensions({ width: layout.canvasWrap.clientWidth, height: layout.canvasWrap.clientHeight });
+  overlay.resize(layout.canvasWrap.clientWidth, layout.canvasWrap.clientHeight);
   if (!fitted) {
     fit();
     fitted = true;
@@ -71,10 +82,16 @@ updateUndo();
 
 // painel lateral
 const planner = new Planner(store);
+planner.subscribe((plan) => {
+  if (player.playing) player.stop();
+  overlay.setPlan(plan, store.state.job.speedMode === "fixed");
+  status.setMessage("estimate", plan ? `tempo estimado ~${fmtDuration(plan.stats.estimate.totalS)}` : undefined);
+});
+overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
+
 const side = new SidePanel(layout.side);
 side.addTab("props", "Propriedades", createPropertiesPanel(store));
-side.addTab("job", "Trabalho", createJobPanel(store, planner));
-planner.subscribe((plan) => status.setMessage("estimate", plan ? `tempo estimado ~${fmtDuration(plan.stats.estimate.totalS)}` : undefined));
+side.addTab("job", "Trabalho", createJobPanel(store, planner, createPreviewControls(overlay, player)));
 
 const view = new CanvasView(canvas, store, (n) =>
   status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),

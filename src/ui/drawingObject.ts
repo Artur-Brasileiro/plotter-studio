@@ -51,6 +51,8 @@ function pathFor(g: Geometry): Path2D {
  */
 export class DrawingObject extends FabricObject {
   static type = "PlotterDrawing";
+  /** Com a pré-visualização do caminho ligada, os desenhos ficam claros para o caminho aparecer. */
+  static dimmed = false;
 
   readonly drawingId: DrawingId;
   readonly geometry: Geometry;
@@ -99,7 +101,7 @@ export class DrawingObject extends FabricObject {
     ctx.lineWidth = (1.5 * (window.devicePixelRatio || 1)) / scale;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = this.outOfArea ? "#c0392b" : "#1b1b1b";
+    ctx.strokeStyle = this.outOfArea ? "#c0392b" : DrawingObject.dimmed ? "#c9c5bc" : "#1b1b1b";
     ctx.stroke(pathFor(this.geometry));
     ctx.restore();
   }

@@ -26,7 +26,7 @@ function download(name: string, text: string): void {
  * Aba "Trabalho": modo de velocidade, otimização, estatísticas do plano,
  * problemas (desenho fora da área) e o botão de exportar.
  */
-export function createJobPanel(store: Store, planner: Planner): HTMLElement {
+export function createJobPanel(store: Store, planner: Planner, preview?: HTMLElement): HTMLElement {
   const root = h("div", { class: "panel" });
 
   // --- modo de velocidade
@@ -77,6 +77,7 @@ export function createJobPanel(store: Store, planner: Planner): HTMLElement {
     h("h3", null, "Exportar"),
     exportBtn,
     exportMsg,
+    preview,
   ]);
 
   function syncControls() {

@@ -1412,7 +1412,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** exportar baixa um arquivo idêntico ao golden quando a mesa tem só o sample na origem; com desenho fora da área o botão fica bloqueado e explica.
 - **Você testa:** testes manuais v1 1, 2, 3 e 8 (seção 4.4).
 
-**T15 — Pré-visualização do caminho**
+**T15 — Pré-visualização do caminho** — ✅ concluída em 14/11/2026
 - **Arquivos:** `ui/overlay.ts`; toggle "Mostrar caminho"; botão play/pausa; velocidade ×1, ×5, ×20, ×50.
 - **Detalhes:**
   - canvas absoluto sobre o Fabric, `pointer-events: none`, redesenhado no `after:render` do canvas de baixo e quando o plano muda;

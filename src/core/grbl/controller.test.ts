@@ -298,6 +298,17 @@ describe("GrblController com o FakeGrbl", () => {
     expect(s.ctrl.snapshot.homed).toBe(false);
   });
 
+  it("placa travada: 'lento' depois de 1 s e 'travada' depois de 5 s, sem fechar a conexão", async () => {
+    const s = await homed();
+    expect(s.ctrl.snapshot.health).toBe("ok");
+    s.fake.freeze();
+    await s.clock.advance(1300);
+    expect(s.ctrl.snapshot.health).toBe("slow");
+    await s.clock.advance(4000);
+    expect(s.ctrl.snapshot.health).toBe("stuck");
+    expect(s.ctrl.snapshot.link).toBe("connected");
+  });
+
   it("13. $32=1 na placa: aviso de configuração", async () => {
     const s = await connected({ fake: { settings: { 32: "1" } } });
     expect(s.ctrl.snapshot.settingsWarnings.some((w) => w.includes("$32"))).toBe(true);

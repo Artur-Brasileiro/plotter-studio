@@ -89,6 +89,7 @@ export class FakeGrbl implements Transport {
 
   private opened = false;
   private cut = false;
+  private frozen = false;
   private booted = false;
   private rx = "";
   private planner: Block[] = [];
@@ -165,6 +166,11 @@ export class FakeGrbl implements Transport {
     return this.gcodeLines;
   }
 
+  /** Simula a placa travar: a porta continua aberta, mas nada mais é respondido. */
+  freeze(): void {
+    this.frozen = true;
+  }
+
   /** Simula puxar o cabo USB. */
   unplug(): void {
     if (this.opened && !this.cut) this.cutCable();
@@ -188,6 +194,7 @@ export class FakeGrbl implements Transport {
     if (this.opened) throw new Error("InvalidStateError: The port is already open.");
     this.opened = true;
     this.cut = false;
+    this.frozen = false;
     this.booted = false;
     this.powerUp();
     this.lastTick = this.clock.now();
@@ -265,7 +272,7 @@ export class FakeGrbl implements Transport {
   }
 
   private receiveByte(b: number) {
-    if (!this.booted) return; // bootloader do Uno: descarta
+    if (!this.booted || this.frozen) return; // bootloader do Uno (ou placa travada): descarta
     if (b >= 0x80 || b === RT.STATUS || b === RT.HOLD || b === RT.RESUME || b === RT.RESET) {
       this.realtime(b);
       return;

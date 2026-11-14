@@ -16,7 +16,7 @@ npm run build    # typecheck + build em dist/
 ```
 
 - `npm test` passa por `scripts/vitest.mjs` (criado na T01). No terminal do VS Code o diretório vem como `c:\...` (drive minúsculo), e com isso o Vitest 5.1 carrega o próprio módulo duas vezes e falha com `Cannot read properties of undefined (reading 'config')`. O script relança o Vitest com `C:\`. Não chame `npx vitest` direto no Windows.
-- `?sim=1` na URL (v2) troca a máquina pelo simulador de GRBL (`src/core/grbl/fakeGrbl.ts`).
+- `?sim=1` na URL (v2) troca a máquina pelo simulador de GRBL (`src/core/grbl/fakeGrbl.ts`). Extras: `simSpeed=5` (mais rápido), `simNoLift=1` (o 0x9E não levanta a caneta), `simError=30:20` (error:20 na 30ª linha de G-code), `simDisconnect=200` (o cabo "sai" na 200ª linha). No console do navegador, `plotter.session.fake` dá acesso ao simulador (ex.: `powerGlitch()`, `unplug()`, `freeze()`).
 
 ## A máquina (fatos medidos — não alterar sem o Artur confirmar)
 
@@ -72,6 +72,9 @@ Regras de implementação que saem disso:
 - **Perfil da máquina** em `src/core/machine.ts` (`DEFAULT_PROFILE`), editável pela tela de Configurações e salvo no `localStorage`, com botões de exportar/importar o perfil em JSON (para fazer backup). Além de área, caneta e velocidades, guarda os limiares da velocidade dinâmica, as tolerâncias e os parâmetros de movimento usados na estimativa (`$110`, `$120`, `$11`).
 - **Web Serial API** (v2): só funciona em Chrome/Edge e em contexto seguro (localhost ou https). Por isso o deploy é no **GitHub Pages**. O workflow fica em `.github/workflows/deploy.yml` (roda `npm test` e `npm run build` a cada push na `main`).
   - O TypeScript 7 não traz os tipos da Web Serial: eles ficam em `src/serial/web-serial.d.ts`.
+- **Envio (v2)**: `src/core/grbl/controller.ts` (`GrblController`) é a máquina de estados inteira (conexão, fila com contagem de caracteres, trabalho, pausa, parada, emergência, jog). É puro: recebe um `Transport` e um `Clock`, e os testes rodam com o `FakeGrbl` e o `ManualClock` em tempo virtual. Na interface, `src/ui/machine/session.ts` cria um controlador por conexão (a porta pode mudar) e reemite o estado para os painéis da aba **Máquina**.
+  - Regras que não podem quebrar: nunca mandar 0x99–0x9D (o controlador recusa); parar = `!` → `Hold:0` → reset (mantém a posição); `homed` só depois do ok de um `$H` e volta a false com qualquer alarme ou reinício; desenhar exige Home; nunca reconectar sozinho (abrir a porta reinicia o Uno).
+  - Esc com trabalho ativo ou a máquina andando = parada de emergência; Esc num jog só cancela o jog (0x85).
 
 Estrutura (árvore completa em `docs/PLAN.md`, seção 2.1):
 

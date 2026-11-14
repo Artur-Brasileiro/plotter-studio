@@ -69,7 +69,8 @@ $J=G90 G21 X0 Y0 F6000    ; vai para a origem de trabalho
 ```
 - Não altera o modo G90/G91 do programa.
 - Respeita o soft limit: um jog para fora da área dá `error:15` em vez de alarme.
-- Para jog contínuo (segurar a tecla), mandar passos curtos repetidos e `0x85` ao soltar.
+- Jog contínuo (segurar a tecla): **um único** `$J=` até a borda da área e `0x85` ao soltar. O `0x85` para com desaceleração, sem perder a posição, e descarta os jogs que estavam no planejador.
+- Em `Alarm`, `$J=` responde `error:8` (só funciona em Idle/Jog). Depois de um `$X` funciona, mas a posição pode estar errada.
 
 ## Códigos que vão aparecer com mais frequência
 
@@ -85,6 +86,23 @@ $J=G90 G21 X0 Y0 F6000    ; vai para a origem de trabalho
 | `ALARM:3` | Reset com a máquina andando | Posição perdida, refazer o Home |
 | `ALARM:8` | Homing: não conseguiu se afastar da chave | Conferir a chave e o `$27` |
 | `ALARM:9` | Homing: não encontrou a chave | Conferir fiação do fim de curso |
+
+## Detalhes que o envio (v2) precisou respeitar
+
+Conferidos no fonte do GRBL 1.1 (`protocol.c`, `motion_control.c`, `system.c`) e reproduzidos no simulador (`src/core/grbl/fakeGrbl.ts`):
+
+- **O `ok` sai quando a linha entra no planejador**, não quando termina. Uma reta longa e lenta segura o planejador cheio por muito tempo, então não existe "timeout de ok": a saúde da conexão é medida pelo relatório `?`.
+- **`M3`, `M5` e `G4` esperam o planejador esvaziar** antes de executar (e o `ok` do `G4` só vem no fim da pausa). Durante um `G4` o estado é **Idle**, mesmo no meio do trabalho.
+- **Durante um Hold o GRBL não lê linhas novas**: fica preso na rotina de suspensão até o `~` ou o reset.
+- **`!` em Idle vira `Hold:0` na hora**; `!` durante um jog **cancela o jog** (não vira Hold).
+- **O `?` e o `!` são tratados na mesma passada**, com o relatório primeiro. Por isso o primeiro relatório depois de um `!` pode ainda mostrar o estado antigo: espere `Hold:0`. Pelo mesmo motivo, um único "Idle" logo depois do último `ok` não prova que acabou: o Plotter Studio exige dois seguidos.
+- **`WCO` e `Ov` não vêm em todo relatório** (de 10 em 10, ou quando mudam): guarde o último.
+- **Em Alarm, qualquer G-code dá `error:9`**, antes mesmo de interpretar a linha.
+- **Soft limit num G-code** (`G0`/`G1` fora da área) dá `ALARM:2` seguido de `[MSG:Reset to continue]`: o GRBL ignora tudo até um reset (0x18) e depois volta em Alarm.
+- **Depois do Home**, a máquina se afasta da chave pelo `$27` (pull-off): a posição fica perto de 810/385, não exatamente.
+- **Reset (0x18) parado** (Idle ou `Hold:0`): banner novo, posição e Home mantidos, a caneta sobe (o reset executa `M5`). **Andando** (Run, Jog, Home ou `Hold:1`): `ALARM:3` antes do banner.
+- **0x9E (parada do spindle) só vale em Hold**. Com o "spindle" ligado (`M3`), o primeiro 0x9E desliga (a caneta deveria subir) e o segundo religa. Se o `~` vier com o spindle parado, o GRBL religa e **já sai andando**, sem esperar o servo. Por isso o Plotter Studio manda o 0x9E, espera o servo e só então o `~`.
+  - **Falta testar no fork `vankesteren/grbl-servo`** (teste 9 da v2 em `TESTES.md`). Se não funcionar, use a pausa "no fim do traço".
 
 ## Comandos úteis de diagnóstico
 

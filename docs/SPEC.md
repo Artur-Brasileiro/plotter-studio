@@ -97,14 +97,14 @@ Aqui o LaserGRBL sai de cena. Detalhes do protocolo em [GRBL.md](GRBL.md).
 - **Enviar trabalho** com o protocolo de contagem de caracteres, com barra de progresso, tempo decorrido/restante e linha atual destacada na pré-visualização. Só começa com a máquina em Idle, **com Home feito**, G54 correto e nada fora da área. Durante o envio, a tela não apaga (Wake Lock), e fechar a aba pede confirmação.
 - **Pausar:** `!`, espera parar, e **levanta a caneta** (0x9E). **Continuar:** abaixa a caneta, espera o servo, e só então `~`. Alternativa configurável (se o 0x9E não funcionar no fork do servo): pausar no fim do traço atual.
 - **Parar:** `!` → espera `Hold:0` → reset (0x18). A caneta sobe com o M5 do reset e **a posição é mantida** (sem novo Home).
-- **Parada de emergência** (botão vermelho, Esc): reset imediato. Com a máquina andando, gera `ALARM:3` e exige `$H`.
+- **Parada de emergência** (botão vermelho, Esc): reset imediato. Com a máquina andando, gera `ALARM:3` e exige `$H`. Esc durante um jog só cancela o jog (0x85, sem perder a posição).
 - `error:N` durante o trabalho: pausa na hora (`!`) e mostra a linha e a mensagem; o Artur escolhe continuar ou parar.
 - Ajuste de velocidade durante o desenho (feed override: 0x90–0x94). Nunca os overrides de spindle (0x99–0x9D).
 - Console com o log da serial e campo para mandar comandos manuais. `$32=1` é recusado; comandos que gravam na EEPROM (`$N=`, `$RST`, `G10`...) pedem confirmação.
 - Traduzir `error:N` e `ALARM:N` para mensagens em português com o que fazer.
 - Cabo desconectado: avisar na hora, sem travar, explicar o que aconteceu e nunca reconectar sozinho (reconectar reinicia o Uno).
 - Registrar o tempo real de cada trabalho ao lado do estimado.
-- Modo simulador (`?sim=1`): um GRBL falso no lugar da máquina, para testar e ensaiar.
+- Modo simulador (`?sim=1`): um GRBL falso no lugar da máquina, para testar e ensaiar (com `simSpeed`, `simNoLift`, `simError` e `simDisconnect` para provocar falhas; ver `CLAUDE.md`).
 
 ### Critérios de aceite da v2
 - [ ] Fluxo completo sem o LaserGRBL: conectar → Home → contorno → desenhar → fim.

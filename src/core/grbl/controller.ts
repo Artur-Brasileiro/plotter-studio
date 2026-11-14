@@ -135,7 +135,8 @@ export class GrblController {
   private dirty = false;
   private statusTimer: number | undefined;
   private fastTimer: number | undefined;
-  private connectedAt = 0;
+  /** quando saiu o "?" mais antigo ainda sem resposta */
+  private statusAskedAt: number | undefined;
   private statusWaiters: StatusWaiter[] = [];
   private bannerWaiter: ((ok: boolean) => void) | undefined;
   private expectingBanner = false;
@@ -269,7 +270,7 @@ export class GrblController {
       this.patch({ link: "disconnected", linkMessage: msg });
       throw new Error(msg);
     }
-    this.connectedAt = this.clock.now();
+    this.statusAskedAt = undefined;
     this.patch({ link: "connected" });
     this.startStatusPolling();
     await this.readSettings();
@@ -415,19 +416,25 @@ export class GrblController {
     this.fastTimer = undefined;
   }
 
+  /**
+   * A saúde é medida pelo "?" mais antigo ainda sem resposta (e não pelo último relatório): com a aba em
+   * segundo plano o Chrome segura os timers, os "?" saem raramente, e isso não é a placa travada.
+   */
   private pollTick(): void {
-    this.requestStatus();
-    const age = this.clock.now() - (this.snap.lastStatusAt ?? this.connectedAt);
+    const age = this.statusAskedAt === undefined ? 0 : this.clock.now() - this.statusAskedAt;
     const health: Health = age > 5000 ? "stuck" : age > 1000 ? "slow" : "ok";
     if (health !== this.snap.health) {
       this.patch({ health });
       if (health === "slow") this.log("error", "A máquina não responde há mais de 1 s.");
       if (health === "stuck") this.log("error", "A placa parece travada (5 s sem resposta). A conexão continua aberta.");
     }
+    this.requestStatus();
   }
 
   private requestStatus(): void {
-    if (this.snap.link === "connected") this.writeBytes(Uint8Array.of(RT.STATUS));
+    if (this.snap.link !== "connected") return;
+    this.statusAskedAt ??= this.clock.now();
+    this.writeBytes(Uint8Array.of(RT.STATUS));
   }
 
   // ------------------------------------------------------------------ leitura
@@ -488,6 +495,7 @@ export class GrblController {
   private onStatus(r: StatusReport): void {
     const wco = r.wco ?? this.snap.wco;
     const wpos = workPosition(r, wco);
+    this.statusAskedAt = undefined;
     // como o WCO, o Ov só vem de tempos em tempos: guarda o último
     const prevOv = this.snap.status?.overrides;
     this.patch({

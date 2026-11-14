@@ -1545,7 +1545,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os cenários 6 a 12 da seção 4.3 passam e funcionam na UI com o simulador (incluindo `spindleStopInHold: false`).
 - **Você testa:** testes manuais v2 6 a 10 e 12. **Decida o padrão de `pen.pauseLift`** pelo resultado do teste 6.
 
-**T27 — Aceite da v2**
+**T27 — Aceite da v2** — 🟡 parte de software concluída em 14/11/2026 (docs, roteiro da v2 em `docs/TESTES.md`, deploy); faltam o roteiro na máquina e o desenho de 15+ min
 - **Arquivos:** correções; `README.md`; `docs/GRBL.md` (atualizar com o que se aprendeu, por exemplo o comportamento do `0x9E` no fork); deploy.
 - **Depende de:** T23, T24, T26.
 - **Pronto quando:** todos os critérios de aceite da v2 do SPEC.md marcados, e roteiro v2 completo registrado em `docs/TESTES.md`.

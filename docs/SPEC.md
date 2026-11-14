@@ -45,7 +45,7 @@ Nesta fase o envio continua pelo LaserGRBL (que já funciona). Só uma coisa mud
 
 ```gcode
 ; Plotter Studio - <nome do arquivo> - <data e hora>
-; modo: dinamico (reta F2000 / curva F1200 / fechada F600)
+; modo: dinamico - reta F2000 / curva F1200 / fechada F600
 G21
 G90
 G17
@@ -62,7 +62,7 @@ G4 P0.3
 G0 X0.00 Y0.00
 ```
 
-- Comentários só com `;`, nunca parênteses aninhados.
+- Comentários só com `;`, e sem parênteses nem dentro deles (um `( centro (60,60) )` dá erro no GRBL; nome de arquivo com parênteses sai com colchetes).
 - **Arquivo inteiro em ASCII, inclusive os comentários:** sem acentos, sem "—", sem aspas curvas. O GRBL trata bytes acima de 0x7F como comandos em tempo real (ver `CLAUDE.md`).
 - Coordenadas com 2 casas decimais. Só repetir o `F` quando ele mudar.
 - Traços cujas pontas se tocam (< 0,1 mm) são ligados com `G1`, sem `M5`/`M3` entre eles.

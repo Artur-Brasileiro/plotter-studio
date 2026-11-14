@@ -1104,7 +1104,7 @@ Regras verificadas em **todos** os goldens, além do snapshot:
 
 ```gcode
 ; Plotter Studio - teste_quadrado_circulo.svg - 2026-11-14 12:00
-; modo: dinamico (reta F2000 / curva F1200 / fechada F600)
+; modo: dinamico - reta F2000 / curva F1200 / fechada F600
 G21
 G90
 G17
@@ -1391,7 +1391,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os casos das seções 3.5 e 3.6 passam.
 - **Você testa:** ler a tabela de limiares da seção 3.5 e dizer se concorda com os padrões. (Não é bloqueante: eles são editáveis.)
 
-**T13 — G-code e goldens**
+**T13 — G-code e goldens** — ✅ concluída em 14/11/2026 (goldens gerados; falta o Artur aprovar na máquina)
 - **Arquivos:**
   - `core/job/{gcode,pipeline}.ts` + testes;
   - `import/golden.test.ts` completo;
@@ -1644,4 +1644,5 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 | 14/11/2026 | T01 | Repositório criado como `Artur-Brasileiro/plotter-studio` (público), com o GitHub Pages via Actions em https://artur-brasileiro.github.io/plotter-studio/. | Pedido do Artur. |
 | 14/11/2026 | T08 | `DrawingObject` com `objectCaching: false` (o plano dizia "padrão, true"). | Com cache, o Fabric recorta o bitmap na caixa do objeto e o traço que fica exatamente na borda (ex.: o retângulo de `orientacao.svg`) sai com metade da espessura. Sem cache o desenho é direto com `Path2D`; o desempenho é medido na T17 com `estresse.svg`. |
 | 14/11/2026 | T12 | Velocidades de junção corrigidas: 90° = 5,23 mm/s (F314), 45° = 10,25 mm/s (F615), e não 4,39/9,85 como estava na seção 3.5. | O GRBL 1.1 limita a aceleração da junção por eixo na direção do vetor de junção (`limit_value_by_axis_maximum(acceleration, junction_unit_vec)`), o que dá mais que 800 mm/s² em junções diagonais. A conclusão (canto ≥ 45° não precisa de F próprio) continua valendo. |
+| 14/11/2026 | T13 | Cabeçalho sem parênteses (`; modo: dinamico - reta F2000 / ...`) e `toAsciiComment` troca `(` `)` por `[` `]`. | O GRBL ignora parênteses depois de `;`, mas outros programas de envio (LaserGRBL) podem não ignorar, e a regra "nunca `(` no arquivo" fica simples de verificar no golden. Nomes como "desenho (1).svg" são comuns. |
 | 14/11/2026 | T08 | `lockSkewingX/Y` além de `lockScalingFlip`, aplicados também à `ActiveSelection` (via `InteractiveFabricObject.ownDefaults`). | Sem isso, a seleção múltipla podia espelhar, e Shift + alça lateral distorcia (skew) o desenho. |

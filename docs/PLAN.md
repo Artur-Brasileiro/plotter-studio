@@ -1292,7 +1292,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os casos da seção 3.3 passam.
 - **Você testa:** nada.
 
-**T04 — Parser SVG, parte 1**
+**T04 — Parser SVG, parte 1** — ✅ concluída em 14/11/2026
 - **Objetivo:** unidades, viewBox, transforms, path data e arcos.
 - **Arquivos:** `core/svg/{node,units,transform,pathData,arc}.ts` + testes.
 - **Depende de:** T02.

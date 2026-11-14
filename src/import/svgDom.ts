@@ -19,8 +19,11 @@ export function parseSvgText(text: string): SvgNode {
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const err = doc.getElementsByTagName("parsererror")[0];
   if (err) {
-    const detail = (err.textContent ?? "").trim().split("\n")[0].slice(0, 120);
-    throw new SvgImportError(`SVG inválido: ${detail || "XML mal formado"}`);
+    // Chrome: "<h3>This page contains...</h3><div>error on line 1 at column 14: ...</div>"
+    const raw = (err.querySelector("div")?.textContent ?? err.textContent ?? "").trim();
+    const m = /line (\d+) at column (\d+):\s*([^\n]*?)\s*(?:Below is|$)/.exec(raw);
+    const detail = m ? `linha ${m[1]}, coluna ${m[2]}: ${m[3]}` : raw.split("\n")[0].slice(0, 120) || "XML mal formado";
+    throw new SvgImportError(`SVG inválido (${detail.slice(0, 160)})`);
   }
   const root = doc.documentElement;
   if (root.localName !== "svg") throw new SvgImportError("O arquivo não é um SVG.");

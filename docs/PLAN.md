@@ -1337,7 +1337,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
   - a grade fica fina em qualquer zoom.
 - **Você testa:** passear com o mouse pelos cantos e conferir as coordenadas; dar zoom até ver a grade de 10 mm.
 
-**T08 — Desenhos no canvas**
+**T08 — Desenhos no canvas** — ✅ concluída em 14/11/2026
 - **Objetivo:** importar e manipular desenhos.
 - **Arquivos:**
   - `ui/{drawingObject,canvasView}.ts`;
@@ -1642,3 +1642,5 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 |---|---|---|---|
 | 14/11/2026 | T01 | Acrescentado `.gitattributes` com `* text=auto eol=lf`. | O git do Windows está com `core.autocrlf=true`: no checkout, os `.gcode` esperados (goldens) ganhariam CRLF e o `toMatchFileSnapshot` falharia no PC mas não no GitHub Actions (ou vice-versa). |
 | 14/11/2026 | T01 | Repositório criado como `Artur-Brasileiro/plotter-studio` (público), com o GitHub Pages via Actions em https://artur-brasileiro.github.io/plotter-studio/. | Pedido do Artur. |
+| 14/11/2026 | T08 | `DrawingObject` com `objectCaching: false` (o plano dizia "padrão, true"). | Com cache, o Fabric recorta o bitmap na caixa do objeto e o traço que fica exatamente na borda (ex.: o retângulo de `orientacao.svg`) sai com metade da espessura. Sem cache o desenho é direto com `Path2D`; o desempenho é medido na T17 com `estresse.svg`. |
+| 14/11/2026 | T08 | `lockSkewingX/Y` além de `lockScalingFlip`, aplicados também à `ActiveSelection` (via `InteractiveFabricObject.ownDefaults`). | Sem isso, a seleção múltipla podia espelhar, e Shift + alça lateral distorcia (skew) o desenho. |

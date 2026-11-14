@@ -20,6 +20,8 @@ import { SidePanel } from "./ui/panels/sidePanel";
 import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
+import { createConnectControls } from "./ui/machine/connectControls";
+import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
 const layout = getLayout();
@@ -72,11 +74,15 @@ installImport(store, layout.toolbar, layout.canvasWrap);
 const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
 const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
 const settings = createSettingsDialog(store);
+// v2: máquina pela Web Serial (ou o simulador com ?sim=1)
+const session = new MachineSession(store, simSettingsFromUrl(location.search));
+import.meta.hot?.dispose(() => session.dispose());
 layout.toolbar.append(
   undoBtn,
   redoBtn,
   h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"),
   h("span", { class: "spacer" }),
+  createConnectControls(session),
   h("button", { title: "Perfil da máquina", onclick: () => settings.open() }, "⚙ Configurações"),
 );
 const updateUndo = () => {
@@ -138,4 +144,4 @@ restoreSession()
   .finally(() => startAutosave(store, { onError: (e) => console.warn("autosave falhou", e) }));
 
 // acesso pelo console do navegador, para depurar
-Object.assign(window, { plotter: { store, canvas, view, planner, side } });
+Object.assign(window, { plotter: { store, canvas, view, planner, side, session } });

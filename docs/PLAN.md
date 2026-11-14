@@ -1469,7 +1469,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os 14 cenários passam, sem `setTimeout` real em teste nenhum.
 - **Você testa:** nada.
 
-**T21 — Transporte Web Serial**
+**T21 — Transporte Web Serial** — 🟡 software concluído em 14/11/2026 (testado com `?sim=1`); falta conectar na máquina
 - **Arquivos:** `serial/{web-serial.d.ts,webSerialTransport.ts}`; botão Conectar/Desconectar na barra superior; `?sim=1` troca o transporte pelo `FakeGrbl`.
 - **Detalhes:**
   - `navigator.serial.requestPort()` só com clique;

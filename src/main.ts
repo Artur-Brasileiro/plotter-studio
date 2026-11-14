@@ -1,11 +1,12 @@
 import { Canvas } from "fabric";
 import { sceneToMachine } from "./core/coords";
 import { canRedo, canUndo, redoLabel, undoLabel } from "./core/history";
-import { DEFAULT_PROFILE } from "./core/machine";
 import { initialState, Store } from "./core/store";
+import { loadJobSettings, loadProfileWithStatus, saveJobSettings, saveProfile } from "./storage/profileStore";
+import { restoreSession, startAutosave } from "./storage/sessionStore";
 import { installBoard } from "./ui/board";
 import { CanvasView } from "./ui/canvasView";
-import { h } from "./ui/dom";
+import { h, toast } from "./ui/dom";
 import { installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
 import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
@@ -16,7 +17,8 @@ import { fitToScreen, installZoomPan } from "./ui/viewport";
 import "./style.css";
 
 const layout = getLayout();
-const store = new Store(initialState(DEFAULT_PROFILE));
+const loaded = loadProfileWithStatus();
+const store = new Store(initialState(loaded.profile, loadJobSettings()));
 const profile = () => store.state.profile;
 
 // A cena do Fabric é em mm (1 unidade = 1 mm, Y para baixo). Zoom/pan só pelo viewportTransform.
@@ -77,7 +79,33 @@ installShortcuts(store);
 store.subscribe((s, prev) => {
   if (s.profile !== prev.profile) canvas.requestRenderAll();
   if (s.history !== prev.history) updateUndo();
+  if (s.job !== prev.job) saveJobSettings(s.job);
 });
+
+// persistência: perfil no localStorage, sessão no IndexedDB (autosave só depois de restaurar,
+// senão um documento vazio poderia sobrescrever a sessão salva)
+if (loaded.problem) {
+  toast(loaded.problem, "warn", 9000);
+  try {
+    saveProfile(loaded.profile); // grava o padrão: o aviso não se repete a cada abertura
+  } catch {
+    /* armazenamento bloqueado */
+  }
+}
+restoreSession()
+  .then((doc) => {
+    if (doc && doc.drawings.length) {
+      store.replaceDocument(doc);
+      const n = doc.drawings.length;
+      status.setMessage("session", `Sessão restaurada (${n} desenho${n > 1 ? "s" : ""})`);
+      setTimeout(() => status.setMessage("session", undefined), 8000);
+    }
+  })
+  .catch((e) => {
+    console.warn(e);
+    toast("A sessão salva estava corrompida e foi ignorada.", "warn", 9000);
+  })
+  .finally(() => startAutosave(store, { onError: (e) => console.warn("autosave falhou", e) }));
 
 // acesso pelo console do navegador, para depurar
 Object.assign(window, { plotter: { store, canvas, view } });

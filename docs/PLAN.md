@@ -1371,7 +1371,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** cada campo e cada atalho funciona e é desfazível; 10 toques de seta viram uma entrada só no histórico; desfazer com 2 objetos selecionados não os desloca.
 - **Você testa:** digitar X = 100, Y = 50 e conferir no rodapé o canto do desenho; girar 90°; Ctrl+Z várias vezes até o começo e Ctrl+Y até o fim.
 
-**T10 — Persistência**
+**T10 — Persistência** — ✅ concluída em 14/11/2026
 - **Objetivo:** perfil e sessão salvos.
 - **Arquivos:** `storage/{kv,profileStore,sessionStore}.ts` + testes (`mergeProfile`/(de)serialização já testados no core; aqui só o fluxo).
 - **Depende de:** T06, T08.

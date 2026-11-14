@@ -1310,7 +1310,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
   - `curvas` dá 300 × 120 mm e 6 subpaths (o `M250 55` solto antes do `m2 0` da espiral é descartado).
 - **Você testa:** abrir 2 ou 3 SVGs seus do Inkscape com a função de importar (via teste temporário ou console) e conferir as dimensões.
 
-**T06 — Documento, coordenadas e histórico**
+**T06 — Documento, coordenadas e histórico** — ✅ concluída em 14/11/2026
 - **Objetivo:** o modelo da aplicação.
 - **Arquivos:** `core/{coords,document,history,store,project}.ts` + testes; `core/machine.ts` (perfil ampliado da seção 2.4 + `mergeProfile`/`validateProfile`; **os valores atuais não mudam**, só entram campos novos).
 - **Depende de:** T02, T05.

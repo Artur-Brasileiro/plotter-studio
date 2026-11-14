@@ -48,7 +48,7 @@ O CLAUDE.md e o SPEC.md já foram atualizados para refletir estas mudanças.
 3. **A matriz de cada desenho vive no modelo, em mm.** O Fabric exibe e, no fim de cada gesto (`object:modified`), devolve a matriz nova para o modelo. O G-code **nunca** lê o canvas. Ganhos: o núcleo é testável sem navegador, desfazer vira troca de "fotografia" do documento, e salvar a sessão é trivial.
 4. **A cena do Fabric é em mm.** 1 unidade = 1 mm, com Y para baixo como em qualquer tela. Zoom e pan acontecem só pelo `viewportTransform`. A inversão de Y acontece em **uma única função**, `sceneToMachineMatrix(H)` em `src/core/coords.ts`. Com isso some o fator `pxPerMm` espalhado pelo código, que é a fonte clássica de erro de escala e de espelhamento.
 5. **A mesa sai dos objetos do Fabric.** Hoje são uns 120 objetos (linhas da grade, textos). Ela passa a ser desenhada no evento `before:render` do canvas de baixo do Fabric, e a pré-visualização do caminho (e, na v2, a posição da máquina) vai para um **canvas de sobreposição** com `pointer-events: none`. A grade fica sempre fina, independente do zoom, não entra na seleção, e a animação não força o Fabric a redesenhar os desenhos.
-6. **Velocidade dinâmica: canto vivo não ganha F próprio.** A versão anterior do CLAUDE.md mandava "curva fechada/canto vivo → `tightCurve`". Só que o círculo pelos 3 pontos de um canto de quadrado com lados de 100 mm dá R = 70 mm, e o lado inteiro sairia como "curva". Pela fórmula de junção do GRBL (seção 3.5), o próprio GRBL já reduz para **~F264 num canto de 90°** e **~F590 num de 45°**, abaixo do `tightCurve`. Então um vértice que vira mais de 45° é tratado como canto, e quem freia é o GRBL.
+6. **Velocidade dinâmica: canto vivo não ganha F próprio.** A versão anterior do CLAUDE.md mandava "curva fechada/canto vivo → `tightCurve`". Só que o círculo pelos 3 pontos de um canto de quadrado com lados de 100 mm dá R = 70 mm, e o lado inteiro sairia como "curva". Pela fórmula de junção do GRBL (seção 3.5), o próprio GRBL já reduz para **~F314 num canto de 90°** e **~F615 num de 45°**, ou seja, abaixo ou no nível do `tightCurve`. Então um vértice que vira mais de 45° é tratado como canto, e quem freia é o GRBL.
 7. **Os limiares de raio vêm dos testes de 13/11.** Usando aceleração lateral (v²/R): F1000 em R40 dá 7 mm/s² (perfeito) e F2000 em R40 dá 28 mm/s² (ondulações). Com o `curve` = F1200, o raio mínimo seguro fica em ~40 mm. Por isso os padrões são **R ≥ 100 → reta, 40 ≤ R < 100 → curva, R < 40 → curva fechada** (seção 3.5).
 8. **O G-code é só ASCII.** O GRBL trata **todo byte acima de 0x7F como comando em tempo real**, inclusive dentro de comentários. O travessão "—" do exemplo antigo do SPEC vira os bytes `E2 80 94` em UTF-8, e `0x94` é "velocidade −1%". Aspas curvas "”" terminam em `0x9D`, que é "spindle −1%", ou seja, **mexe na posição do servo**. Acentos de nomes de arquivo também entram nessa conta. O gerador remove acentos, troca travessão por `-` e aspas curvas por retas, e o que sobrar fora de ASCII vira `?`. Um teste golden verifica cada byte.
 9. **"Parar" deixa de exigir Home.** O SPEC v2 dizia: "parar = reset 0x18; depois exigir `$H`". Isso contradizia o GRBL.md. Agora **Parar** = `!` → esperar `Hold:0` → `0x18`: a caneta sobe, a posição é mantida e não precisa de Home. **Parada de emergência** = `0x18` direto, que gera `ALARM:3` e exige `$H`.
@@ -899,17 +899,17 @@ Daí os padrões: **R ≥ 100 → reta; 40 ≤ R < 100 → curva; R < 40 → cur
 
 **Por que cantos não ganham F próprio.** O GRBL limita a velocidade em cada junção pelo `$11` (junction deviation δ). Com φ = ângulo de virada:
 
-v² = a · δ · s / (1 − s), com s = cos(φ/2), a = 800 mm/s², δ = 0,01 mm
+v² = a · δ · s / (1 − s), com s = cos(φ/2), δ = 0,01 mm, e a = 800 mm/s² limitado por eixo **na direção da junção** (como o `limit_value_by_axis_maximum` do GRBL 1.1: numa junção diagonal a aceleração efetiva chega a 800/cos 45° = 1131 mm/s²). Valores para movimento ao longo de X:
 
 | φ (virada) | v na junção | equivale a |
 |---|---|---|
-| 90° | 4,4 mm/s | F264 |
-| 45° | 9,9 mm/s | F591 |
-| 30° | 15 mm/s | F903 |
-| 16° (passo de um círculo R5 achatado) | 28,6 mm/s | F1714 |
-| 6° (passo de R40) | 80 mm/s | F4800 |
+| 90° | 5,2 mm/s | F314 |
+| 45° | 10,3 mm/s | F615 |
+| 30° | 15,3 mm/s | F919 |
+| 16° (passo de um círculo R5 achatado) | 28,7 mm/s | F1721 |
+| 6° (passo de R40) | 76 mm/s | F4585 |
 
-Em cantos de 45° ou mais, o GRBL já freia abaixo do `tightCurve`. Já nas curvas achatadas os passos são pequenos e o GRBL quase não freia. É por isso que o F precisa vir de nós.
+Em cantos de 45° o GRBL já freia a ~F615, praticamente o `tightCurve` (F600); em cantos mais fechados, bem abaixo. Já nas curvas achatadas os passos são pequenos e o GRBL quase não freia. É por isso que o F precisa vir de nós.
 
 **Algoritmo** (`speed.ts`, por traço, em mm da máquina):
 
@@ -949,7 +949,7 @@ Uma simulação simplificada do planejador do GRBL:
 - 1 mm a F6000: triângulo, pico √(800·1) = 28,3 mm/s, t = 2·√(1/800) = **0,0707 s**.
 - `G4 P0.3` soma exatamente 0,3 s.
 - 50 + 50 mm colineares no mesmo F levam o mesmo tempo que 100 mm.
-- Canto de 90°: a velocidade na junção é 4,39 mm/s (tolerância 0,01).
+- Canto de 90°: a velocidade na junção é 5,23 mm/s (tolerância 0,01), com a aceleração limitada por eixo na direção da junção, como no GRBL.
 - G0 de 100 mm a 200 mm/s: 25 mm acelerando, 50 mm em cruzeiro, 25 mm freando: 0,25 + 0,25 + 0,25 = **0,75 s**.
 
 ### 3.7 Streaming, conexão, pausa, parada e cabo
@@ -1385,7 +1385,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** os casos das seções 3.3, 3.4, `strokes` e `bounds` passam, inclusive desempenho com 20 mil traços em < 1 s.
 - **Você testa:** nada.
 
-**T12 — Velocidade dinâmica e estimativa**
+**T12 — Velocidade dinâmica e estimativa** — ✅ concluída em 14/11/2026
 - **Arquivos:** `core/job/{speed,estimate}.ts` + testes.
 - **Depende de:** T11.
 - **Pronto quando:** os casos das seções 3.5 e 3.6 passam.
@@ -1643,4 +1643,5 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 | 14/11/2026 | T01 | Acrescentado `.gitattributes` com `* text=auto eol=lf`. | O git do Windows está com `core.autocrlf=true`: no checkout, os `.gcode` esperados (goldens) ganhariam CRLF e o `toMatchFileSnapshot` falharia no PC mas não no GitHub Actions (ou vice-versa). |
 | 14/11/2026 | T01 | Repositório criado como `Artur-Brasileiro/plotter-studio` (público), com o GitHub Pages via Actions em https://artur-brasileiro.github.io/plotter-studio/. | Pedido do Artur. |
 | 14/11/2026 | T08 | `DrawingObject` com `objectCaching: false` (o plano dizia "padrão, true"). | Com cache, o Fabric recorta o bitmap na caixa do objeto e o traço que fica exatamente na borda (ex.: o retângulo de `orientacao.svg`) sai com metade da espessura. Sem cache o desenho é direto com `Path2D`; o desempenho é medido na T17 com `estresse.svg`. |
+| 14/11/2026 | T12 | Velocidades de junção corrigidas: 90° = 5,23 mm/s (F314), 45° = 10,25 mm/s (F615), e não 4,39/9,85 como estava na seção 3.5. | O GRBL 1.1 limita a aceleração da junção por eixo na direção do vetor de junção (`limit_value_by_axis_maximum(acceleration, junction_unit_vec)`), o que dá mais que 800 mm/s² em junções diagonais. A conclusão (canto ≥ 45° não precisa de F próprio) continua valendo. |
 | 14/11/2026 | T08 | `lockSkewingX/Y` além de `lockScalingFlip`, aplicados também à `ActiveSelection` (via `InteractiveFabricObject.ownDefaults`). | Sem isso, a seleção múltipla podia espelhar, e Shift + alça lateral distorcia (skew) o desenho. |

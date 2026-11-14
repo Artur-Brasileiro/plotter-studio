@@ -45,7 +45,7 @@ Regras de implementação que saem disso:
 - **Velocidade dinâmica pela curvatura** (algoritmo completo em `docs/PLAN.md`, seção 3.5):
   - Em cada vértice, o raio é o do círculo pelos 3 pontos vizinhos, e cada segmento ganha F por faixa: trecho reto → `feed.straight`; curva suave → `feed.curve`; curva fechada → `feed.tightCurve`.
   - Limiares padrão (configuráveis): **R ≥ 100 mm reta, 40 ≤ R < 100 curva, R < 40 curva fechada**. Eles saem dos dados acima lidos como aceleração lateral v²/R: F1000 em R40 = 7 mm/s² (perfeito), F2000 em R40 = 28 mm/s² (ondula). Com isso, F1200 só é seguro a partir de ~R40.
-  - **Canto vivo não ganha F próprio.** Um vértice que vira mais de 45° (ou com segmento vizinho > 10 mm) conta como reta. Quem freia no canto é o GRBL (junction deviation, `$11`): pela fórmula dele, ~F264 num canto de 90° e ~F590 num de 45°, abaixo do `tightCurve`. Se o canto puxasse o F, o lado inteiro de um quadrado sairia devagar.
+  - **Canto vivo não ganha F próprio.** Um vértice que vira mais de 45° (ou com segmento vizinho > 10 mm) conta como reta. Quem freia no canto é o GRBL (junction deviation, `$11`): pela fórmula dele, ~F314 num canto de 90° e ~F615 num de 45°, abaixo ou no nível do `tightCurve`. Se o canto puxasse o F, o lado inteiro de um quadrado sairia devagar.
   - A classe mais lenta se estende 2 mm para cada lado (janela), para o F não ficar alternando por ruído.
   - Retas só foram testadas a F1500. O padrão de `feed.straight` é 2000; se o Artur notar tremor, ele baixa na tela de Configurações.
 - **Não gerar segmentos minúsculos:** o planejador do GRBL no Uno guarda só ~15 movimentos. Milhares de segmentos de 0,05 mm a F2000 esvaziam o buffer e a máquina "gagueja". Ao converter curvas em linhas:

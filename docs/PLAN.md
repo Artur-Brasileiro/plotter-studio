@@ -1451,7 +1451,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 
 ### v2 — enviar direto para a máquina
 
-**T18 — Protocolo GRBL puro**
+**T18 — Protocolo GRBL puro** — ✅ concluída em 14/11/2026
 - **Arquivos:** `core/grbl/{protocol,codes,commands}.ts` + testes. Os textos de erro e alarme vêm da lista oficial do gnea/grbl (`doc/csv/error_codes_en_US.csv` e `alarm_codes_en_US.csv`), traduzidos, com a "ação" para os mais comuns (tabela do GRBL.md).
 - **Depende de:** T01.
 - **Pronto quando:** os casos de `protocol`, `codes` e `commands` da seção 4.1 passam.

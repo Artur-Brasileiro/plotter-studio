@@ -76,11 +76,11 @@ G0 X0.00 Y0.00
 - [ ] `samples/teste_quadrado_circulo.svg` importado em (0,0) gera um G-code equivalente ao teste feito à mão em 07/11 (quadrado de 100 mm + círculo de raio 30).
 - [ ] `samples/orientacao.svg` desenhado na máquina sai **igual** à tela (não espelhado, não de cabeça para baixo).
 - [ ] Um SVG de 100 × 100 mm feito no Inkscape mede 100 × 100 mm no papel.
-- [ ] Desenho fora da área → exportação bloqueada com mensagem clara.
+- [x] Desenho fora da área → exportação bloqueada com mensagem clara.
 - [ ] O `.gcode` gerado roda no LaserGRBL sem erros.
 - [ ] `samples/curvas.svg` no modo dinâmico sai sem ondulação visível (limiares calibrados e anotados em `docs/TESTES.md`).
-- [ ] Recarregar a página mantém os desenhos.
-- [ ] `npm test` e `npm run build` passam.
+- [x] Recarregar a página mantém os desenhos.
+- [x] `npm test` e `npm run build` passam.
 
 ---
 

@@ -81,7 +81,9 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   push(up);
   push(dwell);
 
-  let pos = xy(plan.start); // posição atual, já formatada
+  // Posição atual, já formatada. Começa DESCONHECIDA: o arquivo pode ser rodado com a máquina em
+  // qualquer lugar (ex.: logo depois do Home, em 810/385), então o primeiro G0 nunca pode ser omitido.
+  let pos: string | undefined;
   let lastF: number | undefined;
   let penDown = false;
 

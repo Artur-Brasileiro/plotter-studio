@@ -1434,7 +1434,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** mudar `feed.curve` reflete no próximo plano; um JSON exportado e reimportado dá o mesmo perfil; um campo inválido impede salvar.
 - **Você testa:** exportar o perfil como backup; mudar um valor e restaurar o padrão.
 
-**T17 — Aceite da v1**
+**T17 — Aceite da v1** — 🟡 parte de software concluída em 14/11/2026; falta o roteiro na máquina (`docs/TESTES.md`)
 - **Objetivo:** fechar a v1 na máquina.
 - **Arquivos:**
   - `scripts/make-stress-svg.mjs` (20 mil traços pequenos e curvas densas, determinístico);
@@ -1645,4 +1645,8 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 | 14/11/2026 | T08 | `DrawingObject` com `objectCaching: false` (o plano dizia "padrão, true"). | Com cache, o Fabric recorta o bitmap na caixa do objeto e o traço que fica exatamente na borda (ex.: o retângulo de `orientacao.svg`) sai com metade da espessura. Sem cache o desenho é direto com `Path2D`; o desempenho é medido na T17 com `estresse.svg`. |
 | 14/11/2026 | T12 | Velocidades de junção corrigidas: 90° = 5,23 mm/s (F314), 45° = 10,25 mm/s (F615), e não 4,39/9,85 como estava na seção 3.5. | O GRBL 1.1 limita a aceleração da junção por eixo na direção do vetor de junção (`limit_value_by_axis_maximum(acceleration, junction_unit_vec)`), o que dá mais que 800 mm/s² em junções diagonais. A conclusão (canto ≥ 45° não precisa de F próprio) continua valendo. |
 | 14/11/2026 | T13 | Cabeçalho sem parênteses (`; modo: dinamico - reta F2000 / ...`) e `toAsciiComment` troca `(` `)` por `[` `]`. | O GRBL ignora parênteses depois de `;`, mas outros programas de envio (LaserGRBL) podem não ignorar, e a regra "nunca `(` no arquivo" fica simples de verificar no golden. Nomes como "desenho (1).svg" são comuns. |
+| 14/11/2026 | T17 | O gerador sempre emite o primeiro `G0`, mesmo que o primeiro traço comece em `plan.start`. | Bug achado ao gerar `gabarito_a4.gcode` (começa em 0,0): o arquivo descia a caneta "no lugar", mas a máquina pode estar em qualquer posição ao rodar o arquivo (ex.: 810/385 depois do Home) e riscaria uma reta. Teste novo em `gcode.test.ts`. |
+| 14/11/2026 | T17 | `estresse.svg` dividido em dois: `estresse.svg` (desempenho da interface, 20 mil traços; não é para desenhar: 172 min, quase tudo servo) e `buffer.svg` (teste de gagueira na máquina, ~5,6 min). Os dois são gerados e ficam fora do git. Acrescentados `samples/gabarito_a4.svg` e `gabarito_a3.svg` para o teste dos gabaritos. | Um arquivo só não serve para os dois testes. |
+| 14/11/2026 | T17 | RDP em blocos de 512 pontos. | Numa espiral de 351 mil pontos o RDP levava 730 ms (divisões desequilibradas, custo quase quadrático); em blocos, 117 ms. `planJob` do estresse: 337 ms. |
+| 14/11/2026 | T17 | Cache de bitmap do Fabric ligado só durante gestos (arrastar/girar/escalar) e pan (`CanvasView.setCaching`). | Sem cache, arrastar o estresse dava 4 fps (redesenha 411 mil pontos por quadro); com cache sempre ligado, desenhos grandes ficariam borrados no zoom (limite de tamanho do cache do Fabric). Agora: mediana 16,7 ms/quadro, p90 33 ms (Chrome headless sem GPU). |
 | 14/11/2026 | T08 | `lockSkewingX/Y` além de `lockScalingFlip`, aplicados também à `ActiveSelection` (via `InteractiveFabricObject.ownDefaults`). | Sem isso, a seleção múltipla podia espelhar, e Shift + alça lateral distorcia (skew) o desenho. |

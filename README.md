@@ -25,6 +25,6 @@ Testes: `npm test` (no Windows passa por `scripts/vitest.mjs`, que contorna um p
 ## Status
 
 - [x] Esqueleto: mesa 810 × 385 mm com grade e gabaritos A4/A3
-- [ ] v1 — compor desenhos e exportar `.gcode`
+- [x] v1 — compor desenhos e exportar `.gcode` (software pronto em 14/11/2026; falta o roteiro de testes na máquina: [docs/TESTES.md](docs/TESTES.md))
 - [ ] v2 — enviar direto para a máquina
 - [ ] v3 — texto, hachura, várias cores

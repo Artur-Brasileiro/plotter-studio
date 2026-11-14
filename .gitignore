@@ -4,3 +4,7 @@ dist/
 .DS_Store
 # G-codes gerados nos testes locais (os de exemplo ficam em samples/)
 /out/
+
+# SVGs de estresse gerados por scripts/make-stress-svg.mjs
+/samples/estresse.svg
+/samples/buffer.svg

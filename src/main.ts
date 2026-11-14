@@ -46,7 +46,7 @@ overlay.onVisibilityChange = (v) => {
 
 const status = new StatusBar(layout.status);
 const updateZoom = () => status.setZoom(canvas.getZoom());
-installZoomPan(canvas, { minZoom: 0.3, maxZoom: 40, onChange: updateZoom });
+installZoomPan(canvas, { minZoom: 0.3, maxZoom: 40, onChange: updateZoom, onPan: (active) => view.setCaching(active) });
 
 canvas.on("mouse:move", (opt) => status.setCursor(sceneToMachine(canvas.getScenePoint(opt.e), profile().workArea.height)));
 canvas.on("mouse:out", () => status.setCursor(undefined));

@@ -13,7 +13,10 @@ export function fitToScreen(canvas: Canvas, area: { width: number; height: numbe
  * Zoom pela roda do mouse (centrado no cursor) e pan com espaço + arrastar ou botão do meio.
  * Zoom em px por mm. Devolve a função que desliga tudo.
  */
-export function installZoomPan(canvas: Canvas, opts: { minZoom: number; maxZoom: number; onChange?: () => void }): () => void {
+export function installZoomPan(
+  canvas: Canvas,
+  opts: { minZoom: number; maxZoom: number; onChange?: () => void; onPan?: (active: boolean) => void },
+): () => void {
   let spaceDown = false;
   let panning = false;
   let last = { x: 0, y: 0 };
@@ -31,6 +34,7 @@ export function installZoomPan(canvas: Canvas, opts: { minZoom: number; maxZoom:
 
   const startPan = (e: MouseEvent) => {
     panning = true;
+    opts.onPan?.(true);
     last = { x: e.clientX, y: e.clientY };
     saved = { selection: canvas.selection, skipTargetFind: canvas.skipTargetFind };
     canvas.selection = false;
@@ -54,6 +58,7 @@ export function installZoomPan(canvas: Canvas, opts: { minZoom: number; maxZoom:
   const onMouseUp = () => {
     if (!panning) return;
     panning = false;
+    opts.onPan?.(false);
     canvas.selection = saved.selection;
     canvas.skipTargetFind = spaceDown ? true : saved.skipTargetFind;
     canvas.setCursor(spaceDown ? "grab" : "default");

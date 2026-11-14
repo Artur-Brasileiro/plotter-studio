@@ -44,6 +44,9 @@ export class CanvasView {
     canvas.on("object:moving", live);
     canvas.on("object:scaling", live);
     canvas.on("object:rotating", live);
+    // durante um gesto, cada quadro redesenha tudo: com cache, desenhos grandes viram uma cópia de bitmap
+    canvas.on("before:transform", () => this.setCaching(true));
+    canvas.on("mouse:up", () => this.setCaching(false));
     store.subscribe((s, prev) => {
       if (s.history !== prev.history || s.selection !== prev.selection || s.profile !== prev.profile) this.sync();
     });
@@ -175,6 +178,22 @@ export class CanvasView {
       };
       o.setOutOfArea(outside(b, area));
     }
+  }
+
+  /**
+   * Cache de bitmap do Fabric só durante a interação (arrastar, girar, escalar, pan).
+   * Ligado o tempo todo, desenhos grandes ficariam borrados no zoom (o Fabric limita o
+   * tamanho do cache); desligado durante o gesto, cada quadro redesenharia todos os segmentos.
+   */
+  setCaching(on: boolean): void {
+    let changed = false;
+    for (const o of this.objs.values()) {
+      if (o.objectCaching === on) continue;
+      o.objectCaching = on;
+      o.set("dirty", true);
+      changed = true;
+    }
+    if (changed && !on) this.canvas.requestRenderAll();
   }
 
   objectFor(id: DrawingId): FabricObject | undefined {

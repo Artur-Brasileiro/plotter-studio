@@ -1,12 +1,29 @@
 import type { Polyline } from "./flatten";
 import { dist, distToSegment, type Vec } from "./vec";
 
+/** Acima disto, o RDP roda em blocos (ver rdp). */
+const RDP_CHUNK = 512;
+
 /**
  * Ramer–Douglas–Peucker: remove os pontos que ficam a menos de epsMm da reta entre
- * os pontos mantidos. Mantém sempre o primeiro e o último. Iterativo (sem recursão),
- * para aguentar polilinhas de centenas de milhares de pontos.
+ * os pontos mantidos. Mantém sempre o primeiro e o último. Iterativo (sem recursão).
+ *
+ * Polilinhas longas são processadas em blocos de 512 pontos (com as pontas em comum).
+ * Numa espiral densa, as divisões do RDP ficam muito desequilibradas e o custo vira
+ * quase quadrático (351 mil pontos: 730 ms); em blocos, 117 ms. O erro continua
+ * ≤ epsMm; o preço é um vértice a mais a cada bloco.
  */
 export function rdp(points: readonly Vec[], epsMm: number): Vec[] {
+  if (points.length <= RDP_CHUNK) return rdpCore(points, epsMm);
+  const out: Vec[] = [points[0]];
+  for (let i = 0; i < points.length - 1; i += RDP_CHUNK) {
+    const chunk = rdpCore(points.slice(i, Math.min(i + RDP_CHUNK, points.length - 1) + 1), epsMm);
+    for (let k = 1; k < chunk.length; k++) out.push(chunk[k]);
+  }
+  return out;
+}
+
+function rdpCore(points: readonly Vec[], epsMm: number): Vec[] {
   const n = points.length;
   if (n <= 2) return points.slice();
   const keep = new Uint8Array(n);

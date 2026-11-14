@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Retângulo do tamanho do papel A4 em paisagem (297 x 210 mm). Importado em (0,0), cai em cima do gabarito A4 do perfil:
+     desenhe e compare com a marcação na madeira da mesa (teste dos gabaritos). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 297 210">
+  <rect x="0" y="0" width="297" height="210" fill="none" stroke="black" stroke-width="0.5"/>
+</svg>

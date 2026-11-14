@@ -80,6 +80,13 @@ describe("generateGcode", () => {
     expect(b).toEqual(["G0 X1.00 Y1.00", "M3 S220", "G4 P0.3", "G1 X2.00 Y1.00 F1000", "G1 X2.05 Y1.00", "G1 X3.00 Y1.00", "M5", "G4 P0.3", "G0 X0.00 Y0.00"]);
   });
 
+  it("o primeiro G0 sai sempre, mesmo se o traço começa exatamente na posição inicial do plano", () => {
+    // a máquina pode estar em qualquer lugar ao rodar o arquivo (ex.: 810/385 depois do Home)
+    const b = body(plan([stroke([[0, 0], [10, 0]], [1000])]));
+    expect(b[0]).toBe("G0 X0.00 Y0.00");
+    expect(b[1]).toBe("M3 S220");
+  });
+
   it("ponto = desce e sobe a caneta no lugar", () => {
     expect(body(plan([stroke([[5, 5]], [])]))).toEqual(["G0 X5.00 Y5.00", "M3 S220", "G4 P0.3", "M5", "G4 P0.3", "G0 X0.00 Y0.00"]);
   });

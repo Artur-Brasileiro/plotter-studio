@@ -1423,7 +1423,7 @@ Formato: **Objetivo · Arquivos · Depende de · Pronto quando · Você testa** 
 - **Pronto quando:** a pré-visualização acompanha zoom/pan sem atraso, e o "play" mostra a ordem real de desenho de `curvas.svg`.
 - **Você testa:** ver se a ordem do "play" bate com a ordem em que a máquina desenha (comparar com o teste 4 da v1).
 
-**T16 — Configurações**
+**T16 — Configurações** — ✅ concluída em 14/11/2026
 - **Arquivos:** `ui/panels/settingsDialog.ts`.
 - **Detalhes:**
   - todos os campos do perfil, em grupos (Área, Caneta, Velocidades, Velocidade dinâmica, Tolerâncias, Movimento, G-code, Gabaritos), cada um com uma frase de ajuda;

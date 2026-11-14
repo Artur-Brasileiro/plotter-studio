@@ -12,6 +12,7 @@ import { installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
 import { createJobPanel } from "./ui/panels/jobPanel";
 import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
+import { createSettingsDialog } from "./ui/panels/settingsDialog";
 import { fmtDuration, Planner } from "./ui/planner";
 import { Overlay, Player } from "./ui/overlay";
 import { createPreviewControls } from "./ui/panels/previewControls";
@@ -70,7 +71,14 @@ new ResizeObserver(() => {
 installImport(store, layout.toolbar, layout.canvasWrap);
 const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
 const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
-layout.toolbar.append(undoBtn, redoBtn, h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"));
+const settings = createSettingsDialog(store);
+layout.toolbar.append(
+  undoBtn,
+  redoBtn,
+  h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"),
+  h("span", { class: "spacer" }),
+  h("button", { title: "Perfil da máquina", onclick: () => settings.open() }, "⚙ Configurações"),
+);
 const updateUndo = () => {
   const hist = store.state.history;
   undoBtn.disabled = !canUndo(hist);

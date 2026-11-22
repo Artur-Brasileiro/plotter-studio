@@ -125,7 +125,7 @@ O cartaz, na folha inteira (509 × 335 mm), caneta 0,4. Todas as combinações p
 | Papel branco, como abre (pinta o fundo preto) | 9 h 23 min | 12.149 |
 | Papel branco, Traço mínimo 2 mm | 6 h 38 min | 7.001 |
 | Papel branco, Traço mínimo 2 mm, sem pintar o fundo | 5 h 22 min | 6.665 |
-| Papel preto, caneta branca, Traço mínimo 2 mm | 5 h 51 min | 6.862 |
+| Papel preto, caneta branca de 0,5, Traço mínimo 2 mm | 5 h 52 min | 6.867 |
 
 O que ainda falta, e que esses testes mostraram:
 

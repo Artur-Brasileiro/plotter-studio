@@ -135,11 +135,30 @@ export interface TraceStats {
   readonly lengthPx: number;
 }
 
+/** O que é cada traço do resultado (um valor por subcaminho, em `TraceResult.kinds`). */
+export const STROKE_KIND = {
+  /** Linha única: a caneta segue o meio de uma linha do desenho */
+  stroke: 0,
+  /** Pontinho solto */
+  dot: 1,
+  /** Contorno de uma área cheia */
+  outline: 2,
+  /** Hachura (de área cheia, de sombra ou de tom) */
+  hatch: 3,
+} as const;
+
 export interface TraceResult {
   readonly geometry: Geometry;
   readonly width: number;
   readonly height: number;
   readonly stats: TraceStats;
+  /** Um STROKE_KIND por subcaminho de `geometry`, na mesma ordem */
+  readonly kinds: Uint8Array;
+  /**
+   * A largura (px da imagem original) da linha que cada traço seguiu, medida no próprio desenho: é o que
+   * permite separar o traço fino do grosso, cada um para uma caneta. 0 onde não se aplica (contorno, hachura).
+   */
+  readonly widthsPx: Float32Array;
 }
 
 export type TraceProgress = (fraction: number, label: string) => void;
@@ -274,6 +293,14 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
   };
 
   const subpaths: SubPath[] = [];
+  const kinds: number[] = [];
+  const widths: number[] = [];
+  /** Um traço pronto entra no resultado junto com o que ele é e a largura da linha que seguiu. */
+  const add = (sp: SubPath, kind: number, widthPx = 0) => {
+    subpaths.push(sp);
+    kinds.push(kind);
+    widths.push(widthPx);
+  };
   let strokes = 0, dots = 0, outlines = 0, hatches = 0, lengthPx = 0;
   let usedScale = k; // ampliação interna que valeu (no modo "illus" é a da imagem de trabalho)
 
@@ -294,7 +321,23 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     const dist = distanceTransform(m);
     const skel = skeletonize(m);
     progress(from + (to - from) * 0.45, "Seguindo os traços");
-    const res = skeletonStrokes(skel, dist, c.k ?? k, { spurPx: c.spurPx ?? o.spurPx });
+    const kk = c.k ?? k;
+    const res = skeletonStrokes(skel, dist, kk, { spurPx: c.spurPx ?? o.spurPx });
+    /** Largura da linha num ponto do esqueleto (px da imagem original): o dobro da distância até a borda. */
+    const widthAt = (x: number, y: number): number => {
+      const mx = Math.min(m.width - 1, Math.max(0, Math.round(x * kk - 0.5)));
+      const my = Math.min(m.height - 1, Math.max(0, Math.round(y * kk - 0.5)));
+      return (Math.max(1, 2 * dist[my * m.width + mx] - 1) / kk) * (c.outScale ?? 1);
+    };
+    /** A largura típica (mediana) ao longo de um traço: uma ponta afinada não muda a conta. */
+    const widthOf = (p: Float64Array): number => {
+      const n = p.length >> 1;
+      const step = Math.max(1, Math.floor(n / 48));
+      const v: number[] = [];
+      for (let i = 0; i < n; i += step) v.push(widthAt(p[2 * i], p[2 * i + 1]));
+      v.sort((a, b) => a - b);
+      return v.length ? v[v.length >> 1] : 0;
+    };
     progress(from + (to - from) * 0.6, "Ajustando as curvas");
     const total = res.polylines.length;
     res.polylines.forEach((pl: Polyline, i: number) => {
@@ -302,14 +345,14 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
       if (len < (c.minLength ?? 0)) return;
       const sp = fitPolyline(pl.points, pl.closed, strokeFit(len, o));
       if (sp) {
-        subpaths.push(c.out ? c.out(sp) : sp);
+        add(c.out ? c.out(sp) : sp, STROKE_KIND.stroke, widthOf(pl.points));
         strokes++;
         lengthPx += len * (c.outScale ?? 1);
       }
       if (i % 400 === 0) progress(from + (to - from) * (0.6 + (0.4 * i) / Math.max(1, total)), "Ajustando as curvas");
     });
     for (let i = 0; (c.dots ?? o.dots) && i < res.dots.length; i += 2) {
-      subpaths.push(dotSubPath(res.dots[i], res.dots[i + 1]));
+      add(dotSubPath(res.dots[i], res.dots[i + 1]), STROKE_KIND.dot, widthAt(res.dots[i], res.dots[i + 1]));
       dots++;
     }
   };
@@ -350,7 +393,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
           if (polylineLength(z, false) < minLength) continue;
           const sp = polylineToSubPath(z, kp);
           if (sp) {
-            subpaths.push(sp);
+            add(sp, STROKE_KIND.hatch);
             hatches++;
             lengthPx += polylineLength(z, false) / kp;
           }
@@ -397,7 +440,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
           if (polylineLength(z, false) < minLength) continue;
           const sp = polylineToSubPath(z, kp);
           if (sp) {
-            subpaths.push(back(sp));
+            add(back(sp), STROKE_KIND.hatch);
             hatches++;
             lengthPx += (polylineLength(z, false) / kp) * (width / ww);
           }
@@ -451,7 +494,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
           if (polylineLength(pts, true) * o.mmPerPx < o.minLineMm) continue; // manchinha: não vale a descida
           const sp = fitPolyline(pts, true, { tol: 0.13, cL: 2.0, cdeg: 55, gap: 0.9, sharpen: false, straighten: o.straighten });
           if (sp) {
-            subpaths.push(sp);
+            add(sp, STROKE_KIND.outline);
             outlines++;
             lengthPx += polylineLength(pts, true);
           }
@@ -475,7 +518,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
             if ((polylineLength(z, false) / k) * o.mmPerPx < o.hatchMinMm) continue;
             const sp = polylineToSubPath(z, k);
             if (sp) {
-              subpaths.push(sp);
+              add(sp, STROKE_KIND.hatch);
               hatches++;
               lengthPx += polylineLength(z, false) / k;
             }
@@ -487,5 +530,5 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
   }
 
   progress(1, "Pronto");
-  return { geometry: { subpaths }, width, height, stats: { strokes, dots, outlines, hatches, scale: usedScale, lengthPx } };
+  return { geometry: { subpaths }, width, height, stats: { strokes, dots, outlines, hatches, scale: usedScale, lengthPx }, kinds: Uint8Array.from(kinds), widthsPx: Float32Array.from(widths) };
 }

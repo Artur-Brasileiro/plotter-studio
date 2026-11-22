@@ -282,7 +282,8 @@ describe("colorLayers: as camadas que a pessoa escolhe a caneta", () => {
   ]);
   const p = findPalette(rgba, W, H);
   const id = (n: string) => byName(p, n).id;
-  const layersOf = (classes: string[], lengths: number[], paper = "Branco") => colorLayers(p, Uint8Array.from(classes.map(id)), lengths, id(paper));
+  const layersOf = (classes: string[], lengths: number[], paper = "Branco", parts?: number[], names = ["fino", "grosso"]) =>
+    colorLayers(p, Uint8Array.from(classes.map(id)), lengths, id(paper), parts && { partOf: Uint8Array.from(parts), names });
 
   it("a paleta de teste tem as cinco classes", () => {
     expect(names(p).sort()).toEqual(["Branco", "Cinza", "Preto", "Verde", "Vermelho"]);
@@ -324,6 +325,31 @@ describe("colorLayers: as camadas que a pessoa escolhe a caneta", () => {
     const r = layersOf(["Vermelho", "Verde"], [1000, 2]);
     expect(r.layers.map((l) => l.name)).toEqual(["Vermelho"]);
     expect([...r.layerOf]).toEqual([0, 0]);
+  });
+
+  it("com a segunda divisão, cada cor que tem as duas partes vira duas camadas (fino e grosso)", () => {
+    const r = layersOf(["Preto", "Preto", "Cinza", "Vermelho"], [50, 100, 30, 40], "Branco", [0, 1, 1, 1]);
+    expect(r.layers.map((l) => `${l.name} ${l.strokes} ${l.lengthPx}`)).toEqual(["Preto grosso 2 130", "Preto fino 1 50", "Vermelho 1 40"]);
+    expect(r.layers.map((l) => l.key)).toEqual(["Preto/grosso", "Preto/fino", "Vermelho"]);
+    expect([...r.layerOf]).toEqual([1, 0, 0, 2]);
+  });
+
+  it("as duas partes de uma cor têm a mesma cor de amostra, e dizem qual parte são", () => {
+    const r = layersOf(["Preto", "Preto"], [50, 100], "Branco", [0, 1]);
+    expect(r.layers[0].color).toBe(r.layers[1].color);
+    expect(r.layers.map((l) => l.part)).toEqual(["grosso", "fino"]);
+    expect(layersOf(["Preto"], [50]).layers[0].part).toBeUndefined();
+  });
+
+  it("uma parte com quase nenhum traço não vira camada: fica com a outra parte da mesma cor", () => {
+    const r = layersOf(["Preto", "Preto", "Vermelho"], [2, 1000, 300], "Branco", [0, 1, 1]);
+    expect(r.layers.map((l) => l.name)).toEqual(["Preto", "Vermelho"]);
+    expect([...r.layerOf]).toEqual([0, 0, 1]);
+  });
+
+  it("os nomes das partes vêm de quem pediu a divisão (contornos e sombras, na Ilustração)", () => {
+    const r = layersOf(["Preto", "Preto"], [80, 60], "Branco", [0, 1], ["contornos", "sombras"]);
+    expect(r.layers.map((l) => l.name)).toEqual(["Preto contornos", "Preto sombras"]);
   });
 
   it("sem traços, nenhuma camada", () => {

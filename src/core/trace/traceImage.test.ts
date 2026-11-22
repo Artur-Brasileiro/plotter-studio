@@ -7,7 +7,7 @@ import lineArtJson from "./__fixtures__/illus/line_art.json?raw";
 import { loadCases } from "./__fixtures__/raster/load";
 import { flattenSubPath } from "../geometry/flatten";
 import type { SubPath } from "../geometry/path";
-import { illusWorkSize, traceImage, type TraceOptions, type TraceResult } from "./traceImage";
+import { illusWorkSize, STROKE_KIND, traceImage, type TraceOptions, type TraceResult } from "./traceImage";
 import { gray, type GrayImage, type RgbaImage } from "./types";
 
 const [scene] = await loadCases<{ r: GrayImage; g: GrayImage; b: GrayImage }>(lineArtJson);
@@ -435,5 +435,69 @@ describe("modo preto e branco: pintar ou não o fundo", () => {
     const corner = blank(FW, FH);
     rect(corner, 0, 0, 30, 30);
     expect(traceImage(corner, { mode: "ink", mmPerPx: 0.5, penMm: 0.4, hatchMinMm: 1, fillBackground: false }).stats.hatches).toBeGreaterThan(0);
+  });
+});
+
+describe("o traçador diz o que é cada traço e a largura da linha no original", () => {
+  // uma linha fina (2 px), uma grossa (6 px) e um pontinho
+  const KW = 140, KH = 70;
+  const lines = blank(KW, KH);
+  rect(lines, 10, 10, 130, 12);
+  rect(lines, 10, 30, 130, 36);
+  rect(lines, 70, 55, 72, 57);
+  const at = (r: TraceResult, y0: number, y1: number) => r.geometry.subpaths.findIndex((sp) => points(sp).every((p) => p.y > y0 && p.y < y1) && lengthOf(sp) > 50);
+
+  it("uma informação por traço, na mesma ordem dos traços", () => {
+    const r = traceImage(lines, { mode: "line", mmPerPx: 0.5, penMm: 0.4 });
+    expect(r.kinds).toHaveLength(r.geometry.subpaths.length);
+    expect(r.widthsPx).toHaveLength(r.geometry.subpaths.length);
+  });
+
+  it("tipo Traço: a largura de cada traço é a da linha que ele seguiu (2 px e 6 px)", () => {
+    const r = traceImage(lines, { mode: "line", mmPerPx: 0.5, penMm: 0.4 });
+    const thin = at(r, 8, 14), thick = at(r, 28, 38);
+    expect(thin).toBeGreaterThanOrEqual(0);
+    expect(thick).toBeGreaterThanOrEqual(0);
+    expect(r.kinds[thin]).toBe(STROKE_KIND.stroke);
+    expect(r.widthsPx[thin]).toBeGreaterThan(1.3);
+    expect(r.widthsPx[thin]).toBeLessThan(2.7);
+    expect(r.widthsPx[thick]).toBeGreaterThan(5);
+    expect(r.widthsPx[thick]).toBeLessThan(7);
+  });
+
+  it("o pontinho solto é marcado como ponto", () => {
+    const r = traceImage(lines, { mode: "line", mmPerPx: 0.5, penMm: 0.4 });
+    expect([...r.kinds].filter((k) => k === STROKE_KIND.dot)).toHaveLength(r.stats.dots);
+    expect(r.stats.dots).toBe(1);
+  });
+
+  it("Preto e branco: a linha grossa vira contorno e hachura (marcados); a fina continua traço, com a largura dela", () => {
+    // com caneta de 1,6 px, a linha de 1 px é traço e a de 6 px é área cheia
+    const img = blank(KW, KH);
+    rect(img, 10, 10, 130, 11);
+    rect(img, 10, 30, 130, 36);
+    const r = traceImage(img, { mode: "ink", mmPerPx: 0.5, penMm: 0.8, hatchSpacingMm: 1, hatchMinMm: 1 });
+    const count = (k: number) => [...r.kinds].filter((v) => v === k).length;
+    expect(count(STROKE_KIND.outline)).toBe(r.stats.outlines);
+    expect(count(STROKE_KIND.hatch)).toBe(r.stats.hatches);
+    expect(count(STROKE_KIND.stroke)).toBe(r.stats.strokes);
+    expect(r.stats.outlines).toBe(1);
+    expect(r.stats.hatches).toBeGreaterThan(0);
+    const thin = at(r, 7, 14);
+    expect(r.kinds[thin]).toBe(STROKE_KIND.stroke);
+    expect(r.widthsPx[thin]).toBeGreaterThan(0.5);
+    expect(r.widthsPx[thin]).toBeLessThan(1.6);
+    // contorno e hachura não têm "largura de linha"
+    r.kinds.forEach((k, i) => k >= STROKE_KIND.outline && expect(r.widthsPx[i]).toBe(0));
+  });
+
+  it("Ilustração: contornos são traços e sombras são hachura; Foto: tudo hachura", () => {
+    const il = illus({ shade: 0.5 });
+    expect([...il.kinds].filter((k) => k === STROKE_KIND.hatch)).toHaveLength(il.stats.hatches);
+    expect([...il.kinds].filter((k) => k === STROKE_KIND.stroke)).toHaveLength(il.stats.strokes);
+    expect(il.stats.hatches).toBeGreaterThan(0);
+    const ph = traceImage(lines, { mode: "photo", mmPerPx: 0.5, penMm: 0.4, hatchMinMm: 0.5, photoSmoothMm: 0.3 });
+    expect(ph.geometry.subpaths.length).toBeGreaterThan(0);
+    expect([...ph.kinds].every((k) => k === STROKE_KIND.hatch)).toBe(true);
   });
 });

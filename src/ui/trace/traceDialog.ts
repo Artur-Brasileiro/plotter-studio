@@ -7,7 +7,8 @@ import { penOf, type MachineProfile, type Pen } from "../../core/machine";
 import type { Store } from "../../core/store";
 import { backgroundRgb, colorLayers, findPalette, lightOnDark, paperClass, strokeColors, type ColorLayer, type Palette } from "../../core/trace/colors";
 import { borderMedian, colorfulness, DARK_BACKGROUND } from "../../core/trace/illus";
-import { DEFAULT_TRACE, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
+import { strokeParts } from "../../core/trace/parts";
+import { DEFAULT_TRACE, STROKE_KIND, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
 import type { GrayImage } from "../../core/trace/types";
 import { saveProfile } from "../../storage/profileStore";
 import { CancelledError, loadImage, PlanEstimator, Tracer, type LoadedImage } from "../../trace/client";
@@ -51,7 +52,7 @@ const ILLUS_STYLES: readonly { name: string; title: string; detail: number; edge
   { name: "Detalhado", title: "Para gravura e desenho cheio de linha fina: entra o detalhe miúdo, e demora mais", detail: 1, edge: 0.8, minStrokeMm: 1.5 },
 ];
 
-/** Caneta de uma camada de cor: a principal (sem valor), outra do estojo (id) ou nenhuma. */
+/** Caneta de uma camada: a do desenho (sem valor), outra do estojo (id) ou nenhuma. */
 const SKIP = "-";
 const NEW_PEN = "+";
 
@@ -91,10 +92,11 @@ interface PenGroup {
 }
 
 /**
- * Tela de vetorização: a imagem vira traço de caneta aqui mesmo. À esquerda, a imagem e o resultado
- * (com zoom), na cor do papel e das canetas; à direita, o tipo de desenho, o papel e a caneta, o tamanho,
- * os ajustes, as cores que o programa achou na imagem (cada uma pode ir para uma caneta) e o tempo de
- * máquina. "Colocar na mesa" cria um desenho por caneta, que segue o mesmo caminho de um SVG importado.
+ * Tela de vetorização: a imagem vira traço de caneta aqui mesmo. À esquerda, a imagem e o resultado (com
+ * zoom), na cor do papel e das canetas. À direita, de cima para baixo: o tipo de desenho, o papel e a
+ * caneta, o tamanho, os poucos ajustes que mais mudam o resultado (o resto fica em "Mais ajustes"), as
+ * camadas (por cor e, se a pessoa quiser, por traço fino e grosso, cada uma com a sua caneta) e o tempo de
+ * máquina. "Colocar na mesa" cria um desenho por caneta, todos no mesmo conjunto.
  */
 export function openTraceDialog(store: Store, file: File): void {
   const dialog = h("dialog", { class: "sheet trace", "aria-label": "Vetorizar imagem" });
@@ -103,7 +105,7 @@ export function openTraceDialog(store: Store, file: File): void {
   const estimator = new PlanEstimator();
   const profile = (): MachineProfile => store.state.profile;
   const zone = profile().drawZone;
-  // a caneta principal: é ela que decide o que é "fino" e o que é "área cheia"
+  // a caneta do desenho: é ela que decide o que é "fino" e o que é "área cheia"
   let pen = penOf(profile(), undefined);
   const s: Settings = { ...DEFAULT_TRACE, ...loadPrefs(), penMm: pen.widthMm };
   // o traçado só começa depois que a pessoa escolhe o tipo de desenho: calcular no tipo errado é tempo jogado fora
@@ -118,11 +120,17 @@ export function openTraceDialog(store: Store, file: File): void {
   let view: View = "result";
   let zoom = 1, panX = 0, panY = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  // cores: a paleta é da imagem; as camadas são do resultado; a caneta de cada camada é escolha da pessoa
+  // camadas: a paleta é da imagem; a cor e o comprimento de cada traço são do resultado; a divisão em
+  // fino e grosso e a caneta de cada camada são escolhas da pessoa (não precisam traçar de novo)
   let palette: Palette | undefined;
+  let classOf: Uint8Array = new Uint8Array(0);
+  let lengths: number[] = [];
   let layers: ColorLayer[] = [];
   let layerOf: Uint8Array = new Uint8Array(0);
   const layerPen = new Map<string, string>();
+  let splitOn = false;
+  let thinMm = 0.5;
+  let thinTouched = false;
   let groups: PenGroup[] = [];
   let allPath: Path2D | undefined;
 
@@ -136,8 +144,7 @@ export function openTraceDialog(store: Store, file: File): void {
     h("button", { onclick: () => setView(v) }, v === "result" ? "Resultado" : v === "both" ? "Os dois" : "Original"),
   );
   const viewBar = h("div", { class: "trace-view", hidden: true }, ...viewButtons);
-  const ask = h("div", { class: "trace-busy", hidden: true }, h("span", null, "Escolha o tipo de desenho, à direita. O cálculo só começa depois da escolha."));
-  const stage = h("div", { class: "trace-stage" }, canvas, placeholder, viewBar, ask, busy);
+  const stage = h("div", { class: "trace-stage" }, canvas, placeholder, viewBar, busy);
 
   const setView = (v: View) => {
     view = v;
@@ -271,7 +278,7 @@ export function openTraceDialog(store: Store, file: File): void {
 
   // ------------------------------------------------------------------ controles
   const side = h("div", { class: "trace-side panel" });
-  const stats = h("p", { class: "hint" });
+  const emptyNote = h("p", { class: "notice", hidden: true });
   const timeBox = h("div", { class: "time-box", hidden: true });
   // o tempo também fica no rodapé, sempre à vista; clicar leva aos detalhes
   const timeChip = h("button", { class: "time-chip", hidden: true, title: "Ver os detalhes do tempo de máquina", onclick: () => timeBox.scrollIntoView({ behavior: "smooth", block: "center" }) });
@@ -281,7 +288,7 @@ export function openTraceDialog(store: Store, file: File): void {
   const illusBox = h("div", { class: "panel-section" });
   const photoBox = h("div", { class: "panel-section" });
   const strokeBox = h("div", { class: "panel-section" });
-  const colorBox = h("div", { class: "panel-section", hidden: true });
+  const layerBox = h("div", { class: "panel-section", hidden: true });
   // imagem colorida num tipo feito para desenho de traço: avisa que existe um tipo próprio
   let colorful = false;
   const colorNote = h("p", { class: "notice", hidden: true });
@@ -324,7 +331,8 @@ export function openTraceDialog(store: Store, file: File): void {
     return { el: h("div", { class: "seg-row" }, ...buttons), sync };
   };
 
-  const range = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void, fmt: (v: number) => string, title = "") => {
+  /** Um controle deslizante. `change` é o que acontece depois de mexer (o padrão é traçar de novo). */
+  const range = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void, fmt: (v: number) => string, title = "", change: () => void = () => schedule()) => {
     const out = h("output", null, fmt(get()));
     const input = h("input", { type: "range", min: String(min), max: String(max), step: String(step), value: String(get()), "aria-label": label });
     input.addEventListener("input", () => {
@@ -332,7 +340,7 @@ export function openTraceDialog(store: Store, file: File): void {
       set(v);
       out.textContent = fmt(v);
       refreshers.forEach((f) => f());
-      schedule();
+      change();
     });
     refreshers.push(() => {
       if (Number(input.value) !== get()) input.value = String(get());
@@ -340,22 +348,25 @@ export function openTraceDialog(store: Store, file: File): void {
     });
     return h("label", { class: "range", title }, h("span", null, label), out, input);
   };
-  const check = (label: string, get: () => boolean, set: (v: boolean) => void, title = "") => {
+  const check = (label: string, get: () => boolean, set: (v: boolean) => void, title = "", change: () => void = () => schedule(150)) => {
     const cb = h("input", { type: "checkbox", checked: get() });
     cb.addEventListener("change", () => {
       set(cb.checked);
-      schedule(150);
+      change();
     });
     return h("label", { class: "check", title }, cb, label);
   };
+  /** Os ajustes que quase ninguém precisa mexer ficam recolhidos. */
+  const more = (...children: HTMLElement[]) => h("details", { class: "more" }, h("summary", null, "Mais ajustes"), ...children);
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   const px = (v: number) => `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} px`;
   const mmFmt = (v: number) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1 })} mm`;
   const minFmt = (v: number) => (v === 0 ? "fica tudo" : mmFmt(v));
+  const signed = (v: number) => (v === 0 ? "normal" : v > 0 ? `+${v}` : String(v));
+  const angle = (v: number) => `${v}°`;
 
-  const modeHint = h("p", { class: "hint" });
   const mode = seg<TraceMode>(
-    MODES.map((m) => [m, MODE_NAME[m]]),
+    MODES.map((m) => [m, MODE_NAME[m], MODE_FOR[m]]),
     () => s.mode,
     (v) => {
       s.mode = v;
@@ -395,7 +406,8 @@ export function openTraceDialog(store: Store, file: File): void {
       schedule(150);
     },
   );
-  const paperPicker = createPaperPicker("Cor do papel");
+  const drawsField = h("label", { class: "field" }, "A caneta desenha", draws.el);
+  const paperPicker = createPaperPicker("Papel");
   const offPaper = onPaperChange(() => {
     const before = s.invert;
     defaultInvert();
@@ -415,17 +427,12 @@ export function openTraceDialog(store: Store, file: File): void {
     schedule(0);
   };
   const choices = MODES.map((m) => h("button", { class: "choice", disabled: true, onclick: () => choose(m) }, h("strong", null, MODE_NAME[m]), h("span", null, MODE_FOR[m])));
-  const chooser = h(
-    "div",
-    { class: "panel-section" },
-    h("p", { class: "hint" }, "Escolha como esta imagem vai virar traço. O cálculo só começa depois da escolha, e dá para trocar de tipo a qualquer momento."),
-    ...choices,
-  );
-  const resultHead = h("h3", null, "Resultado");
+  const chooser = h("div", { class: "panel-section" }, h("h3", null, "Que tipo de imagem é esta?"), ...choices, h("p", { class: "hint" }, "Dá para trocar depois."));
+
   const orient = seg<boolean>(
     [
       [false, "Em pé"],
-      [true, "Deitado"],
+      [true, "Deitado", "O topo da imagem fica do lado direito da mesa"],
     ],
     () => turned,
     (v) => {
@@ -453,7 +460,7 @@ export function openTraceDialog(store: Store, file: File): void {
   sizeInput.addEventListener("keydown", (e) => e.key === "Enter" && commitSize());
 
   const penLabel = (p: Pen) => `${p.name} (${p.widthMm.toLocaleString("pt-BR")} mm)`;
-  const penSelect = h("select", { "aria-label": "Caneta deste desenho" });
+  const penSelect = h("select", { "aria-label": "Caneta deste desenho", title: "É a largura da caneta que decide o que vira linha única e o que vira área com hachura" });
   const fillPenSelect = () => {
     clear(penSelect);
     append(penSelect, profile().pens.map((p) => h("option", { value: p.id, selected: p.id === pen.id }, penLabel(p))));
@@ -464,7 +471,6 @@ export function openTraceDialog(store: Store, file: File): void {
     pen = p;
     s.penMm = pen.widthMm;
     fillPenSelect();
-    renderSize();
     renderMode();
     if (widthChanged) schedule(150);
     else applyPens();
@@ -485,43 +491,36 @@ export function openTraceDialog(store: Store, file: File): void {
       /* sem armazenamento: a caneta vale só até fechar a página */
     }
     fillPenSelect();
-    toast(`A caneta “${name}” entrou no estojo. A largura e o nome podem ser acertados em Configurações → Estojo de canetas.`, "info", 8000);
+    toast(`A caneta “${name}” entrou no estojo. Acerte a largura dela em Configurações → Estojo de canetas.`, "info", 7000);
     return created;
   };
 
+  const sections = h("div", { class: "trace-sections" });
   function renderMode() {
-    modeHint.textContent =
-      s.mode === "line"
-        ? "Cada linha do desenho vira um traço único da caneta. Para desenho de contorno, planta, texto vazado."
-        : s.mode === "ink"
-          ? "Traço fino vira linha única; área cheia mais larga que a caneta vira contorno com hachura. Para gravura, nanquim, logotipo cheio."
-          : s.mode === "illus"
-            ? "Para pintura, desenho colorido ou imagem com textura. O programa primeiro redesenha a imagem (a textura some, ficam os contornos das formas) e só depois traça. As partes escuras podem ganhar hachura."
-            : "Foto não tem linhas: o tom vira hachura. Quanto mais escuro, mais direções se cruzam. É uma interpretação, não uma cópia.";
-    // antes da escolha só aparecem os quatro tipos (e o papel e o tamanho); depois, o tipo vira a fileira de botões
+    // antes da escolha só aparecem os quatro tipos; depois, tudo o mais
     chooser.hidden = started;
-    ask.hidden = started || !img;
-    mode.el.hidden = modeHint.hidden = resultHead.hidden = stats.hidden = !started;
-    fillBox.hidden = !started || s.mode !== "ink";
-    illusBox.hidden = !started || s.mode !== "illus";
-    photoBox.hidden = !started || s.mode !== "photo";
-    strokeBox.hidden = !started || s.mode === "photo" || s.mode === "illus";
-    if (!started) colorBox.hidden = timeBox.hidden = timeChip.hidden = true;
+    sections.hidden = !started;
+    fillBox.hidden = s.mode !== "ink";
+    illusBox.hidden = s.mode !== "illus";
+    photoBox.hidden = s.mode !== "photo";
+    strokeBox.hidden = s.mode === "photo" || s.mode === "illus";
 
+    // "a caneta desenha" só aparece quando há o que decidir: imagem de fundo escuro, papel escuro, ou depois de mexer
     const dark = paperDark();
-    darkNote.hidden = !img || !(darkBackground || dark);
+    drawsField.hidden = !(darkBackground || dark || invertTouched);
+    darkNote.hidden = drawsField.hidden || !(darkBackground || dark);
     if (!darkNote.hidden)
       darkNote.textContent = dark
         ? s.invert
-          ? "Papel escuro: a caneta desenha as partes CLARAS da imagem, e o que é escuro fica sendo o próprio papel."
+          ? "O que é escuro na imagem fica sendo o próprio papel."
           : darkBackground
-            ? "Papel escuro com a caneta desenhando o escuro da imagem: o resultado sai em negativo. Para sair igual à imagem, escolha “O claro da imagem”."
-            : "Papel escuro e imagem de fundo claro: a caneta desenha as linhas (o escuro da imagem) e o fundo fica sendo o papel, como giz em quadro-negro. Para pintar o claro da imagem em vez das linhas, escolha “O claro da imagem”."
+            ? "Assim o desenho sai em negativo."
+            : "A caneta clara desenha as linhas, como giz em quadro-negro."
         : s.invert
-          ? "O fundo desta imagem é escuro e o desenho é de linhas claras: a caneta vai desenhar o CLARO da imagem, como um negativo. Se preferir o contrário, escolha “O escuro da imagem”."
+          ? "A caneta desenha as linhas claras; o fundo escuro fica em branco."
           : s.mode === "illus"
-            ? "O fundo desta imagem é escuro. A Ilustração desenha os contornos e deixa o fundo em branco."
-            : `O fundo desta imagem é escuro. Em papel claro, a caneta teria que pintar esse fundo todo${s.mode === "ink" ? " (ou desmarque “Pintar o fundo”, mais abaixo)" : ""}. Se for usar papel preto com caneta clara, escolha o papel preto acima: aí o fundo é o próprio papel.`;
+            ? "A Ilustração deixa o fundo escuro em branco."
+            : `Em papel claro, a caneta pinta o fundo escuro inteiro${s.mode === "ink" ? " (ou desmarque “Pintar o fundo”)" : ""}.`;
 
     // caneta que não aparece no papel escolhido
     const contrast = Math.abs(luminance(pen.color) - luminance(paperColor()));
@@ -536,46 +535,52 @@ export function openTraceDialog(store: Store, file: File): void {
           ? light
             ? h("button", { onclick: () => setPen(light) }, `Usar a caneta ${light.name}`)
             : h("button", { onclick: () => setPen(addPen("Branca", "#ffffff", 0.5)) }, "Criar uma caneta branca")
-          : "Escolha outra caneta, ou outra cor de papel.",
+          : "Escolha outra caneta ou outro papel.",
       ]);
     }
 
     // uma planta azul também é "colorida", mas é desenho de linhas: o aviso só vale para fundo claro
     const wrongType = started && colorful && !darkBackground && (s.mode === "line" || s.mode === "ink");
     colorNote.hidden = !wrongType;
-    if (wrongType) colorNote.textContent = `Esta imagem é colorida. O tipo ${MODE_NAME[s.mode]} foi feito para desenho que já é de linhas: numa pintura, mancha vira rabisco. Experimente o tipo ${MODE_NAME.illus}.`;
+    if (wrongType) colorNote.textContent = `Imagem colorida: o tipo ${MODE_NAME.illus} costuma ficar melhor.`;
   }
 
   function renderSize() {
     if (!img) return;
     const p = paperSize();
     const fits = p.w <= zone.maxX - zone.minX + 0.01 && p.h <= zone.maxY - zone.minY + 0.01;
-    const penPx = s.penMm / s.mmPerPx;
-    sizeNote.textContent =
-      `No papel: ${Math.round(p.w)} × ${Math.round(p.h)} mm${fits ? "" : " — não cabe na folha"}. ` +
-      `Cada pixel da imagem vale ${s.mmPerPx.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} mm; a caneta de ${s.penMm.toLocaleString("pt-BR")} mm cobre ${penPx.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} pixel(s).` +
-      (turned ? " Deitado: o topo da imagem fica do lado direito da mesa." : "");
+    sizeNote.textContent = `${Math.round(p.w)} × ${Math.round(p.h)} mm no papel${fits ? "" : ": não cabe na folha"}`;
     sizeNote.className = fits ? "hint" : "notice";
   }
 
+  // --- os ajustes de cada tipo: à vista, só os que mais mudam o resultado
+  const hatchAngle = () => range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), angle);
+  const smooth = () => range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct);
+  const straighten = () => range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade");
+
   append(fillBox, [
     h("h3", null, "Áreas cheias"),
-    check("Contornar a área", () => s.outline, (v) => (s.outline = v)),
-    check("Pintar o fundo", () => s.fillBackground, (v) => (s.fillBackground = v), "O fundo é a área cheia que encosta na borda da imagem. Desmarcado, fica só o contorno dele (as molduras), e o desenho sai bem mais rápido."),
+    check("Pintar o fundo", () => s.fillBackground, (v) => (s.fillBackground = v), "O fundo é a área cheia que encosta na borda da imagem. Desmarcado, fica só o contorno dele, e o desenho sai bem mais rápido."),
     range("Distância da hachura", 0, 4, 0.1, () => s.hatchSpacingMm, (v) => (s.hatchSpacingMm = v), (v) => (v === 0 ? "sem hachura" : mmFmt(v)), "Menor = mais escuro e mais demorado. 0 = só o contorno."),
-    range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), (v) => `${v}°`),
-    check("Hachura cruzada", () => s.hatchCross, (v) => (s.hatchCross = v), "Uma segunda hachura, a 90° da primeira"),
+    more(
+      check("Contornar a área", () => s.outline, (v) => (s.outline = v)),
+      hatchAngle(),
+      check("Hachura cruzada", () => s.hatchCross, (v) => (s.hatchCross = v), "Uma segunda hachura, a 90° da primeira"),
+    ),
   ]);
-
-  append(photoBox, [
-    h("h3", null, "Hachura dos tons"),
-    range("Realçar os tons", 0, 1, 0.05, () => s.photoBoost, (v) => (s.photoBoost = v), (v) => (v === 0 ? "desligado" : pct(v)), "Para imagem escura ou de pouco contraste: espalha os tons pela escala toda, e o que estava tudo igual ganha degraus"),
-    range("Direções que se cruzam", 1, 4, 1, () => s.photoLevels, (v) => (s.photoLevels = v), (v) => String(v), "Mais direções = sombras mais escuras e mais tempo de máquina"),
-    range("Distância da hachura", 0.8, 6, 0.1, () => s.photoSpacingMm, (v) => (s.photoSpacingMm = v), mmFmt, "Menor = mais escuro e mais demorado"),
-    range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), (v) => `${v}°`),
-    range("Suavizar os tons", 0.3, 4, 0.1, () => s.photoSmoothMm, (v) => (s.photoSmoothMm = v), mmFmt, "Maior = manchas mais lisas e menos detalhe"),
-    range("Claro ou escuro", -100, 100, 5, () => s.ink, (v) => (s.ink = v), (v) => (v === 0 ? "normal" : v > 0 ? `+${v}` : String(v)), "Para a direita, mais hachura"),
-    range("Tracinho mínimo", 0.5, 10, 0.5, () => s.hatchMinMm, (v) => (s.hatchMinMm = v), mmFmt, "Linhas mais curtas que isto não valem a descida da caneta"),
+  append(strokeBox, [
+    h("h3", null, "Traço"),
+    range("Traço mínimo", 0, 10, 0.5, () => s.minLineMm, (v) => (s.minLineMm = v), minFmt, "Traços mais curtos que isto somem. Os tracinhos de 1 ou 2 mm são metade das descidas da caneta e quase nada da tinta: tirar encurta muito o tempo."),
+    range("Tinta", -100, 100, 5, () => s.ink, (v) => (s.ink = v), signed, "Para a direita, mais coisa vira traço"),
+    range("Linhas claras", 0, 1, 0.05, () => s.faint, (v) => (s.faint = v), pct, "Quanto das linhas apagadas entra no traçado"),
+    more(
+      range("Nitidez", 0, 1.5, 0.1, () => s.sharpen, (v) => (s.sharpen = v), pct, "Separa linhas que estão quase encostadas"),
+      range("Limpar sujeira", 0, 12, 0.5, () => s.speckPx, (v) => (s.speckPx = v), px, "Manchas menores que isto somem"),
+      range("Tirar rebarbas", 0, 4, 0.25, () => s.spurPx, (v) => (s.spurPx = v), px, "Fiapos mais curtos que isto somem"),
+      smooth(),
+      straighten(),
+      check("Manter os pontinhos soltos", () => s.dots, (v) => (s.dots = v), "Cada pontinho é uma descida da caneta"),
+    ),
   ]);
   const illusStyle = seg<number>(
     ILLUS_STYLES.map((st, i) => [i, st.name, st.title]),
@@ -595,57 +600,55 @@ export function openTraceDialog(store: Store, file: File): void {
   append(illusBox, [
     h("h3", null, "Ilustração"),
     illusStyle.el,
-    h("p", { class: "hint" }, "Três pontos de partida. Gravura ou desenho cheio de linha fina pede o Detalhado; os controles abaixo afinam."),
-    range("Detalhe", 0, 1, 0.05, () => s.detail, (v) => (s.detail = v), pct, "Para a esquerda, só as formas grandes: desenho mais limpo e mais rápido de plotar"),
-    range("Traço mínimo", 0, 10, 0.5, () => s.minStrokeMm, (v) => (s.minStrokeMm = v), mmFmt, "Traços mais curtos que isto somem: cada um seria uma descida da caneta"),
     range("Sombras", 0, 1, 0.05, () => s.shade, (v) => (s.shade = v), (v) => (v === 0 ? "sem sombra" : pct(v)), "Quanto da imagem ganha hachura. No zero ficam só as linhas, e o desenho sai bem mais rápido."),
-    h("h3", null, "Ajuste fino"),
-    range("Linhas fracas", 0, 1, 0.05, () => s.edge, (v) => (s.edge = v), pct, "Para a direita, as bordas de pouco contraste também viram linha"),
-    range("Distância da hachura", 0.8, 6, 0.1, () => s.shadeSpacingMm, (v) => (s.shadeSpacingMm = v), mmFmt, "Menor = sombra mais escura e mais demorada"),
-    range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), (v) => `${v}°`),
-    range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct),
-    range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade"),
+    more(
+      range("Detalhe", 0, 1, 0.05, () => s.detail, (v) => (s.detail = v), pct, "Para a esquerda, só as formas grandes"),
+      range("Linhas fracas", 0, 1, 0.05, () => s.edge, (v) => (s.edge = v), pct, "Para a direita, as bordas de pouco contraste também viram linha"),
+      range("Traço mínimo", 0, 10, 0.5, () => s.minStrokeMm, (v) => (s.minStrokeMm = v), mmFmt, "Traços mais curtos que isto somem"),
+      range("Distância da hachura", 0.8, 6, 0.1, () => s.shadeSpacingMm, (v) => (s.shadeSpacingMm = v), mmFmt, "Menor = sombra mais escura e mais demorada"),
+      hatchAngle(),
+      smooth(),
+      straighten(),
+    ),
   ]);
-  append(strokeBox, [
-    h("h3", null, "Ajustes do traço"),
-    range("Traço mínimo", 0, 10, 0.5, () => s.minLineMm, (v) => (s.minLineMm = v), minFmt, "Traços e contornos mais curtos que isto somem. Num desenho cheio, os tracinhos de 1 ou 2 mm são metade das descidas da caneta e quase nada da tinta: tirar encurta muito o tempo."),
-    range("Tinta", -100, 100, 5, () => s.ink, (v) => (s.ink = v), (v) => (v === 0 ? "normal" : v > 0 ? `+${v}` : String(v)), "Mais para a direita, mais coisa vira traço"),
-    range("Linhas claras", 0, 1, 0.05, () => s.faint, (v) => (s.faint = v), pct, "Quanto das linhas apagadas entra no traçado"),
-    range("Nitidez", 0, 1.5, 0.1, () => s.sharpen, (v) => (s.sharpen = v), pct, "Separa linhas que estão quase encostadas"),
-    range("Limpar sujeira", 0, 12, 0.5, () => s.speckPx, (v) => (s.speckPx = v), px, "Manchas menores que isto somem"),
-    range("Tirar rebarbas", 0, 4, 0.25, () => s.spurPx, (v) => (s.spurPx = v), px, "Fiapos mais curtos que isto somem"),
-    range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct),
-    range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade"),
-    check("Manter os pontinhos soltos", () => s.dots, (v) => (s.dots = v), "Cada pontinho é uma descida da caneta. Num céu estrelado são centenas: tirar poupa o servo."),
+  append(photoBox, [
+    h("h3", null, "Hachura dos tons"),
+    range("Distância da hachura", 0.8, 6, 0.1, () => s.photoSpacingMm, (v) => (s.photoSpacingMm = v), mmFmt, "Menor = mais escuro e mais demorado"),
+    range("Direções que se cruzam", 1, 4, 1, () => s.photoLevels, (v) => (s.photoLevels = v), (v) => String(v), "Mais direções = sombras mais escuras e mais tempo de máquina"),
+    range("Claro ou escuro", -100, 100, 5, () => s.ink, (v) => (s.ink = v), signed, "Para a direita, mais hachura"),
+    more(
+      range("Realçar os tons", 0, 1, 0.05, () => s.photoBoost, (v) => (s.photoBoost = v), (v) => (v === 0 ? "desligado" : pct(v)), "Para imagem escura ou de pouco contraste: espalha os tons pela escala toda"),
+      hatchAngle(),
+      range("Suavizar os tons", 0.3, 4, 0.1, () => s.photoSmoothMm, (v) => (s.photoSmoothMm = v), mmFmt, "Maior = manchas mais lisas e menos detalhe"),
+      range("Tracinho mínimo", 0.5, 10, 0.5, () => s.hatchMinMm, (v) => (s.hatchMinMm = v), mmFmt, "Linhas mais curtas que isto não valem a descida da caneta"),
+    ),
   ]);
-  append(side, [
-    h("h3", null, "Tipo de desenho"),
-    chooser,
+  append(sections, [
+    h("h3", null, "Tipo"),
     mode.el,
-    modeHint,
     colorNote,
     h("h3", null, "Papel e caneta"),
     paperPicker.el,
-    h("label", { class: "field", title: "É a largura da caneta que decide o que vira linha única e o que vira área com hachura. Dá para trocar depois, no passo 1." }, "Caneta", penSelect),
+    h("label", { class: "field" }, "Caneta", penSelect),
     penNote,
-    h("label", { class: "field" }, "A caneta desenha", draws.el),
+    drawsField,
     darkNote,
-    h("h3", null, "Tamanho no papel"),
-    orient.el,
-    h("label", { class: "field" }, "Lado maior (mm)", sizeInput),
+    h("h3", null, "Tamanho"),
+    h("div", { class: "size-row" }, orient.el, h("label", { class: "field" }, "Lado maior (mm)", sizeInput)),
     sizeNote,
     fillBox,
     illusBox,
     photoBox,
     strokeBox,
-    colorBox,
-    resultHead,
+    layerBox,
+    h("h3", null, "Tempo de máquina"),
+    emptyNote,
     timeBox,
-    stats,
   ]);
+  append(side, [chooser, sections]);
 
-  // ------------------------------------------------------------------ cores e canetas
-  /** A caneta de uma camada: a que a pessoa escolheu, ou a principal. undefined = não desenhar. */
+  // ------------------------------------------------------------------ camadas e canetas
+  /** A caneta de uma camada: a que a pessoa escolheu, ou a do desenho. undefined = não desenhar. */
   const penFor = (layer: ColorLayer): Pen | undefined => {
     const choice = layerPen.get(layer.key);
     if (choice === SKIP) return undefined;
@@ -674,63 +677,135 @@ export function openTraceDialog(store: Store, file: File): void {
     groups = [...byPen.values()].sort((a, b) => order.indexOf(a.pen.id) - order.indexOf(b.pen.id));
   }
 
-  /** As cores que o programa achou: uma linha por cor, com a caneta que vai desenhá-la. */
-  function renderLayers() {
-    clear(colorBox);
-    colorBox.hidden = !started || layers.length < 2;
-    if (colorBox.hidden) return;
-    const rows = layers.map((layer) => {
-      const choice = layerPen.get(layer.key) ?? "";
-      const sel = h(
-        "select",
-        { "aria-label": `Caneta da cor ${layer.name}` },
-        h("option", { value: "", selected: choice === "" }, `Com a caneta do desenho (${pen.name})`),
-        ...profile().pens.filter((p) => p.id !== pen.id).map((p) => h("option", { value: p.id, selected: choice === p.id }, penLabel(p))),
-        h("option", { value: NEW_PEN }, "Criar uma caneta desta cor…"),
-        h("option", { value: SKIP, selected: choice === SKIP }, "Não desenhar esta cor"),
-      );
-      sel.addEventListener("change", () => {
-        if (sel.value === NEW_PEN) layerPen.set(layer.key, addPen(layer.name, layer.color, pen.widthMm).id);
-        else if (sel.value === "") layerPen.delete(layer.key);
-        else layerPen.set(layer.key, sel.value);
-        applyPens();
-      });
-      const p = penFor(layer);
-      return h(
-        "div",
-        { class: `color-layer${p ? "" : " skip"}` },
-        h("span", { class: "dot", style: `--c:${layer.color}`, "aria-hidden": "true" }),
-        h("span", { class: "what" }, layer.name, " ", h("small", null, `${layer.strokes.toLocaleString("pt-BR")} traços, ${fmtLength(layer.lengthPx * s.mmPerPx)}`)),
-        sel,
-      );
+  /** O que a segunda divisão separa neste tipo: nada (Foto), contornos e sombras, ou a largura do traço. */
+  const splitKind = (): "none" | "shade" | "width" => (s.mode === "photo" ? "none" : s.mode === "illus" ? "shade" : "width");
+
+  /**
+   * Um bom ponto de partida para "Fino até": a largura do meio dos traços deste desenho (metade do
+   * comprimento das linhas fica de cada lado). A largura depende do tamanho no papel, então não há valor fixo.
+   */
+  function suggestThin(): number {
+    const r = result;
+    if (!r) return thinMm;
+    const w: [number, number][] = [];
+    r.kinds.forEach((k, i) => {
+      if (k === STROKE_KIND.stroke || k === STROKE_KIND.dot) w.push([r.widthsPx[i] * s.mmPerPx, lengths[i] + 1e-6]);
     });
-    append(colorBox, [
-      h("h3", null, "Cores da imagem"),
-      h("p", { class: "hint" }, `O programa achou ${layers.length} cores neste desenho. Do jeito que está, a mesma caneta desenha tudo. Para usar mais de uma, escolha a caneta de cada cor: cada caneta vira um desenho próprio na mesa, plotado em separado.`),
-      h("div", { class: "color-layers" }, ...rows),
-    ]);
+    if (!w.length) return thinMm;
+    w.sort((a, b) => a[0] - b[0]);
+    const half = w.reduce((t, x) => t + x[1], 0) / 2;
+    let acc = 0;
+    for (const [width, len] of w) {
+      acc += len;
+      if (acc >= half) return Math.min(3, Math.max(0.1, Math.round(width / 0.05) * 0.05));
+    }
+    return thinMm;
   }
 
-  /** Depois de mexer nas canetas: refaz os grupos, a lista, o desenho e o tempo (não precisa traçar de novo). */
-  function applyPens() {
+  /** As camadas deste resultado: por cor e, se a pessoa pediu, também por parte (fino e grosso). */
+  function relayer() {
+    layers = [];
+    layerOf = new Uint8Array(0);
+    if (!result || !palette || !result.geometry.subpaths.length) return;
+    if (splitOn && !thinTouched && splitKind() === "width") thinMm = suggestThin();
+    const split = splitOn ? strokeParts(result, s.mode, s.mmPerPx, thinMm) : undefined;
+    ({ layers, layerOf } = colorLayers(palette, classOf, lengths, paperClass(palette, s.invert), split));
+  }
+
+  /** As camadas: uma linha para cada, com a caneta que vai desenhá-la. */
+  let rowsKey = "";
+  function renderLayers() {
+    clear(layerBox);
+    rowsKey = layers.map((l) => l.key).join("|");
+    const kind = splitKind();
+    layerBox.hidden = !started || !result || (layers.length < 2 && kind === "none");
+    if (layerBox.hidden) return;
+    const rows =
+      layers.length < 2
+        ? []
+        : layers.map((layer) => {
+            const choice = layerPen.get(layer.key) ?? "";
+            const sel = h(
+              "select",
+              { "aria-label": `Caneta da camada ${layer.name}` },
+              h("option", { value: "", selected: choice === "" }, penLabel(pen)),
+              ...profile().pens.filter((p) => p.id !== pen.id).map((p) => h("option", { value: p.id, selected: choice === p.id }, penLabel(p))),
+              h("option", { value: NEW_PEN }, "Criar uma caneta desta cor…"),
+              h("option", { value: SKIP, selected: choice === SKIP }, "Não desenhar"),
+            );
+            sel.addEventListener("change", () => {
+              if (sel.value === NEW_PEN) layerPen.set(layer.key, addPen(layer.name, layer.color, pen.widthMm).id);
+              else if (sel.value === "") layerPen.delete(layer.key);
+              else layerPen.set(layer.key, sel.value);
+              applyPens();
+            });
+            return h(
+              "div",
+              { class: `color-layer${penFor(layer) ? "" : " skip"}`, title: `${layer.strokes.toLocaleString("pt-BR")} traços, ${fmtLength(layer.lengthPx * s.mmPerPx)} de tinta` },
+              h("span", { class: `dot${layer.part === "fino" ? " thin" : ""}`, style: `--c:${layer.color}`, "aria-hidden": "true" }),
+              h("span", { class: "what" }, layer.name),
+              sel,
+            );
+          });
+    const splitCheck =
+      kind === "none"
+        ? null
+        : check(
+            kind === "width" ? "Separar o traço fino do grosso" : "Separar contornos e sombras",
+            () => splitOn,
+            (v) => (splitOn = v),
+            kind === "width" ? "Os detalhes finos viram uma camada e os traços fortes, outra: dá para usar a caneta fina numa e a grossa na outra" : "Os contornos viram uma camada e a hachura das sombras, outra",
+            () => {
+              relayer();
+              applyPens();
+            },
+          );
+    const thinRange =
+      splitOn && kind === "width"
+        ? range(
+            "Fino até",
+            0.1,
+            3,
+            0.05,
+            () => thinMm,
+            (v) => {
+              thinMm = v;
+              thinTouched = true;
+            },
+            (v) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} mm`,
+            "As linhas do desenho até esta largura (no papel) vão para a camada fina",
+            () => {
+              relayer();
+              applyPens(false);
+            },
+          )
+        : null;
+    append(layerBox, [h("h3", null, "Camadas"), splitCheck, thinRange, rows.length ? h("div", { class: "color-layers" }, ...rows) : null]);
+  }
+
+  /** Depois de mexer nas camadas: refaz os grupos, a lista, o desenho e o tempo (não precisa traçar de novo). */
+  function applyPens(rebuildList = true) {
     buildGroups();
-    renderLayers();
+    // arrastando "Fino até", a lista só é refeita quando o conjunto de camadas muda (senão o controle perderia o foco)
+    if (rebuildList || layers.map((l) => l.key).join("|") !== rowsKey) {
+      const had = document.activeElement?.getAttribute("aria-label") === "Fino até";
+      renderLayers();
+      if (had) layerBox.querySelector<HTMLInputElement>('input[aria-label="Fino até"]')?.focus();
+    }
     placeBtn.disabled = !fresh || groups.length === 0;
     draw();
     void estimate();
   }
 
-  /** Acha as cores da imagem e a cor de cada traço do resultado. */
-  function findLayers() {
-    layers = [];
-    layerOf = new Uint8Array(0);
+  /** A cor e o comprimento de cada traço do resultado (a parte demorada das camadas: uma vez por traçado). */
+  function analyze() {
+    classOf = new Uint8Array(0);
+    lengths = [];
     if (!img || !result || !result.geometry.subpaths.length) return;
     const { width, height } = img.gray;
     palette ??= findPalette(img.rgba, width, height);
-    const paper = paperClass(palette, s.invert);
-    const classOf = strokeColors(result.geometry, img.rgba, width, height, palette, { paper });
-    const lengths = result.geometry.subpaths.map(subPathLength);
-    ({ layers, layerOf } = colorLayers(palette, classOf, lengths, paper));
+    classOf = strokeColors(result.geometry, img.rgba, width, height, palette, { paper: paperClass(palette, s.invert) });
+    lengths = result.geometry.subpaths.map(subPathLength);
   }
 
   // ------------------------------------------------------------------ tempo de máquina
@@ -742,7 +817,7 @@ export function openTraceDialog(store: Store, file: File): void {
     timeBox.hidden = timeChip.hidden = false;
     timeBox.className = "time-box";
     timeChip.className = "time-chip";
-    timeBox.textContent = "Calculando o tempo de máquina…";
+    timeBox.textContent = "Calculando…";
     timeChip.textContent = "calculando o tempo…";
     const m = placement();
     const def = penOf(profile(), undefined).id;
@@ -756,7 +831,7 @@ export function openTraceDialog(store: Store, file: File): void {
     } catch (e) {
       if (e instanceof CancelledError) return;
       console.error(e);
-      timeBox.textContent = "Não consegui calcular o tempo de máquina. Ele aparece no passo Conferir.";
+      timeBox.textContent = "Não consegui calcular. O tempo aparece no passo Conferir.";
       timeChip.hidden = true;
       return;
     }
@@ -767,20 +842,20 @@ export function openTraceDialog(store: Store, file: File): void {
     const long = totalS > LONG_JOB_S;
     const shorter =
       s.mode === "photo"
-        ? "aumente a distância da hachura, use menos direções, uma caneta mais grossa (a mesma sombra com menos traço) ou um tamanho menor no papel"
+        ? "hachura mais aberta, menos direções, caneta mais grossa ou tamanho menor"
         : s.mode === "illus"
-          ? "diminua as Sombras, aumente a distância da hachura, use o estilo Limpo ou um tamanho menor no papel"
-          : `aumente o Traço mínimo (tracinho de 1 ou 2 mm quase não aparece, e cada um é uma descida da caneta)${s.mode === "ink" ? ", aumente a distância da hachura, desmarque “Pintar o fundo”" : ""} ou diminua o tamanho no papel`;
+          ? "menos Sombras, estilo Limpo ou tamanho menor"
+          : `Traço mínimo maior${s.mode === "ink" ? ", hachura mais aberta, sem “Pintar o fundo”" : ""} ou tamanho menor`;
     clear(timeBox);
     timeBox.className = `time-box${long ? " long" : ""}`;
     timeChip.className = `time-chip${long ? " long" : ""}`;
     timeChip.textContent = `${fmtDuration(totalS)} de máquina`;
     append(timeBox, [
-      h("b", null, `${fmtDuration(totalS)} de máquina`),
-      `${descents.toLocaleString("pt-BR")} descidas da caneta, ${fmtLength(drawMm)} de tinta.`,
-      waitS > 60 ? ` Desse tempo, ${fmtDuration(waitS)} é a caneta esperando em cima para o servo não esquentar: quanto menos descidas, menos espera.` : "",
-      times.length > 1 ? ` Por caneta: ${times.map((l) => `${l.penName}, ${fmtDuration(l.totalS)}`).join("; ")}.` : "",
-      long ? ` São mais de 3 horas, e acima disso o risco de a caneta falhar aumenta. Para encurtar: ${shorter}.` : "",
+      h("b", null, fmtDuration(totalS)),
+      `${descents.toLocaleString("pt-BR")} descidas da caneta · ${fmtLength(drawMm)} de tinta`,
+      waitS > 300 ? h("span", { class: "line" }, `Inclui ${fmtDuration(waitS)} de espera para o servo não esquentar.`) : null,
+      times.length > 1 ? h("span", { class: "line" }, times.map((l) => `${l.penName}: ${fmtDuration(l.totalS)}`).join(" · ")) : null,
+      long ? h("span", { class: "line" }, `Mais de 3 horas aumenta o risco de a caneta falhar. Para encurtar: ${shorter}.`) : null,
     ]);
   }
 
@@ -800,14 +875,13 @@ export function openTraceDialog(store: Store, file: File): void {
     busy.hidden = false;
     busyFill.style.width = "2%";
     busyLabel.textContent = "Começando…";
-    stats.textContent = "Calculando o traçado…";
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify(s));
     } catch {
       /* sem armazenamento: só não lembra */
     }
     try {
-      const { result: r, ms } = await tracer.run(
+      const { result: r } = await tracer.run(
         grayFor(),
         { ...s },
         (f, label) => {
@@ -818,9 +892,10 @@ export function openTraceDialog(store: Store, file: File): void {
       );
       const first = !result;
       result = r;
-      busyLabel.textContent = "Separando as cores…";
+      busyLabel.textContent = "Separando as camadas…";
       await new Promise((ok) => setTimeout(ok)); // deixa a tela mostrar a mensagem antes da conta
-      findLayers();
+      analyze();
+      relayer();
       buildGroups();
       fresh = true;
       busy.hidden = true;
@@ -832,22 +907,14 @@ export function openTraceDialog(store: Store, file: File): void {
       }
       renderLayers();
       placeBtn.disabled = groups.length === 0;
-      const st = r.stats;
-      const parts: string[] = [];
-      if (st.strokes) parts.push(`${st.strokes.toLocaleString("pt-BR")} traços`);
-      if (st.dots) parts.push(`${st.dots.toLocaleString("pt-BR")} pontos`);
-      if (st.outlines) parts.push(`${st.outlines.toLocaleString("pt-BR")} contornos`);
-      if (st.hatches) parts.push(`${st.hatches.toLocaleString("pt-BR")} hachuras`);
-      stats.textContent =
-        r.geometry.subpaths.length === 0
-          ? `Não achei traço nenhum com estes ajustes. ${s.mode === "illus" ? "Aumente o Detalhe ou as Linhas fracas." : s.mode === "photo" ? "Leve o “Claro ou escuro” para a direita." : "Aumente a Tinta ou as Linhas claras, ou diminua o Traço mínimo."}`
-          : `${parts.join(", ")}. Traçado calculado em ${fmtDuration(ms / 1000)} (ampliação interna de ${st.scale}×).`;
+      emptyNote.hidden = r.geometry.subpaths.length > 0;
+      if (!emptyNote.hidden)
+        emptyNote.textContent = `Não achei traço nenhum com estes ajustes. ${s.mode === "illus" ? "Experimente o estilo Detalhado." : s.mode === "photo" ? "Leve “Claro ou escuro” para a direita." : "Aumente a Tinta, ou diminua o Traço mínimo."}`;
       draw();
       void estimate();
     } catch (e) {
       if (e instanceof CancelledError) return;
       busy.hidden = true;
-      stats.textContent = "";
       console.error(e);
       toast(`O traçado falhou: ${(e as Error).message}`, "error", 9000);
     }
@@ -858,20 +925,13 @@ export function openTraceDialog(store: Store, file: File): void {
     if (!img || !result || !fresh || !groups.length) return;
     const m = placement();
     const def = penOf(profile(), undefined).id;
-    const base = `${img.name.replace(/\.[^.]+$/, "")} (${MODE_NAME[s.mode].toLowerCase()})`;
-    // um desenho por caneta: cada caneta é uma camada, plotada em separado sem mexer no papel
-    const made: Drawing[] = groups.map((g) =>
-      createDrawing(crypto.randomUUID(), groups.length > 1 ? `${base} · ${g.pen.name}` : base, { subpaths: g.subpaths }, m, g.pen.id === def ? undefined : g.pen.id),
-    );
+    const name = `${img.name.replace(/\.[^.]+$/, "")} (${MODE_NAME[s.mode].toLowerCase()})`;
+    // um desenho por caneta, todos no mesmo conjunto: na mesa eles andam juntos, e cada caneta é plotada em separado
+    const set = groups.length > 1 ? crypto.randomUUID() : undefined;
+    const made: Drawing[] = groups.map((g) => createDrawing(crypto.randomUUID(), name, { subpaths: g.subpaths }, m, g.pen.id === def ? undefined : g.pen.id, set));
     store.commit("Vetorizar imagem", (doc) => made.reduce(addDrawing, doc));
     store.setSelection(made.map((d) => d.id));
-    toast(
-      made.length > 1
-        ? `“${base}” está na mesa em ${made.length} desenhos, um por caneta. Eles já estão selecionados juntos: mova e redimensione todos de uma vez, para as cores não desencontrarem.`
-        : `“${base}” está na mesa. Posicione no passo 1 e confira no passo 2.`,
-      "info",
-      made.length > 1 ? 10000 : 5000,
-    );
+    toast(made.length > 1 ? `“${name}” está na mesa, em ${made.length} camadas (uma por caneta).` : `“${name}” está na mesa.`);
     close();
   }
 
@@ -895,7 +955,7 @@ export function openTraceDialog(store: Store, file: File): void {
   append(dialog, [
     h("header", { class: "settings-head" }, title, h("button", { class: "close", title: "Fechar sem colocar na mesa", "aria-label": "Fechar", onclick: close }, "✕")),
     h("div", { class: "trace-main" }, stage, side),
-    h("footer", { class: "settings-foot" }, h("span", { class: "hint" }, "Role o mouse para aproximar, arraste para mover, dois cliques para ver tudo."), h("span", { class: "spacer" }), timeChip, h("button", { onclick: close }, "Cancelar"), placeBtn),
+    h("footer", { class: "settings-foot" }, h("span", { class: "hint" }, "Roda do mouse aproxima · arrastar move · dois cliques mostram tudo"), h("span", { class: "spacer" }), timeChip, h("button", { onclick: close }, "Cancelar"), placeBtn),
   ]);
   renderMode();
   setView("original");

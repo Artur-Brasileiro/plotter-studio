@@ -1,9 +1,9 @@
 import { ActiveSelection, FabricObject, InteractiveFabricObject, util, type TMat2D } from "fabric";
+import { isDark } from "../core/color";
 import { fabricMatrixFromModel } from "../core/coords";
 import type { Drawing, DrawingId } from "../core/document";
 import type { Mat2D } from "../core/geometry/mat2d";
-import { bboxCenter, type BBox, type Geometry } from "../core/geometry/path";
-import { isDark } from "../core/color";
+import { bboxCenter, emptyBBox, unionBBox, type BBox, type Geometry } from "../core/geometry/path";
 import { paperColor } from "./paper";
 
 const ACCENT = "#1b4fa8"; // azul de planta (--plan em style.css)
@@ -46,10 +46,28 @@ function pathFor(g: Geometry): Path2D {
   return p;
 }
 
+/** Uma camada dentro do objeto da mesa: um desenho do documento, com a caneta dele. */
+interface Part {
+  readonly id: DrawingId;
+  readonly geometry: Geometry;
+  penId: string | undefined;
+}
+
+/** A caixa de um item da mesa: a união das caixas das camadas (todas no mesmo sistema de coordenadas). */
+export function unionLocalBBox(members: readonly Drawing[]): BBox {
+  let b = emptyBBox();
+  for (const d of members) b = unionBBox(b, d.localBBox);
+  return b;
+}
+
 /**
- * A "vista" de um Drawing no Fabric. O traço é desenhado à mão em _render (strokeWidth 0
- * no objeto, porque o strokeWidth do Fabric entra no cálculo da caixa), com a largura real da
- * caneta na escala da mesa, e nunca menos de ~1,25 px para não sumir de longe.
+ * A "vista" de um item da mesa no Fabric: um desenho solto, ou um CONJUNTO (as camadas de uma mesma
+ * imagem, uma por caneta), que na mesa é uma coisa só. Mover, girar ou redimensionar o objeto vale para
+ * todas as camadas, e por isso elas nunca desencontram.
+ *
+ * O traço é desenhado à mão em _render (strokeWidth 0 no objeto, porque o strokeWidth do Fabric entra no
+ * cálculo da caixa), cada camada com a cor e a largura real da caneta dela na escala da mesa, e nunca
+ * menos de ~1,25 px para não sumir de longe.
  */
 export class DrawingObject extends FabricObject {
   static type = "PlotterDrawing";
@@ -58,17 +76,17 @@ export class DrawingObject extends FabricObject {
   /** Largura e cor da caneta de um desenho: ele aparece na mesa como vai sair no papel. */
   static penStyle: (penId: string | undefined) => { widthMm: number; color: string } = () => ({ widthMm: 0.4, color: "#10151f" });
 
-  readonly drawingId: DrawingId;
-  readonly geometry: Geometry;
+  /** Os desenhos que este objeto mostra (um só, ou as camadas de um conjunto), na ordem do documento */
+  readonly drawingIds: readonly DrawingId[];
+  private readonly parts: Part[];
+  /** A união das caixas das camadas, no sistema de coordenadas delas */
   readonly localBBox: BBox;
-  /** Caneta do desenho (atualizada no sync) */
-  penId: string | undefined;
   /** Matriz do modelo aplicada por último (comparada por referência no sync) */
   modelTransform: Mat2D;
   outOfArea = false;
 
-  constructor(d: Drawing) {
-    const b = d.localBBox;
+  constructor(members: readonly Drawing[]) {
+    const b = unionLocalBBox(members);
     super({
       width: Math.max(b.maxX - b.minX, MIN_SIZE),
       height: Math.max(b.maxY - b.minY, MIN_SIZE),
@@ -78,12 +96,30 @@ export class DrawingObject extends FabricObject {
       objectCaching: false,
       ...SAFE_DEFAULTS,
     });
-    this.drawingId = d.id;
-    this.geometry = d.geometry;
+    this.drawingIds = members.map((d) => d.id);
+    this.parts = members.map((d) => ({ id: d.id, geometry: d.geometry, penId: d.penId }));
     this.localBBox = b;
-    this.penId = d.penId;
-    this.modelTransform = d.transform;
-    this.applyModel(d.transform);
+    this.modelTransform = members[0].transform;
+    this.applyModel(members[0].transform);
+  }
+
+  /** O primeiro (ou único) desenho deste objeto. */
+  get drawingId(): DrawingId {
+    return this.drawingIds[0];
+  }
+
+  /** Este objeto ainda mostra exatamente estes desenhos, com estas geometrias? (senão é refeito) */
+  shows(members: readonly Drawing[]): boolean {
+    return members.length === this.parts.length && members.every((d, i) => this.parts[i].id === d.id && this.parts[i].geometry === d.geometry);
+  }
+
+  /** Atualiza a caneta de cada camada (trocar de caneta não refaz o objeto). */
+  setPens(members: readonly Drawing[]): void {
+    members.forEach((d, i) => {
+      if (this.parts[i].penId === d.penId) return;
+      this.parts[i].penId = d.penId;
+      this.set("dirty", true);
+    });
   }
 
   /** Posiciona o objeto pela matriz do modelo (o Fabric posiciona pelo centro: ver coords.ts). */
@@ -106,15 +142,17 @@ export class DrawingObject extends FabricObject {
     ctx.save();
     ctx.translate(-c.x, -c.y);
     const dpr = window.devicePixelRatio || 1;
-    const pen = DrawingObject.penStyle(this.penId);
-    const penPx = pen.widthMm * (this.canvas?.getZoom() ?? 1) * dpr;
-    ctx.lineWidth = Math.max(1.25 * dpr, penPx) / scale;
+    const zoom = this.canvas?.getZoom() ?? 1;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     // apagado (com o caminho por cima): quase da cor do papel, para o caminho aparecer
     const dim = isDark(paperColor()) ? "#4b5160" : "#c5cbd6";
-    ctx.strokeStyle = this.outOfArea ? "#c0362c" : DrawingObject.dimmed ? dim : pen.color;
-    ctx.stroke(pathFor(this.geometry));
+    for (const part of this.parts) {
+      const pen = DrawingObject.penStyle(part.penId);
+      ctx.lineWidth = Math.max(1.25 * dpr, pen.widthMm * zoom * dpr) / scale;
+      ctx.strokeStyle = this.outOfArea ? "#c0362c" : DrawingObject.dimmed ? dim : pen.color;
+      ctx.stroke(pathFor(part.geometry));
+    }
     ctx.restore();
   }
 }

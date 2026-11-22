@@ -1,6 +1,6 @@
 import { ActiveSelection, type Canvas, type FabricObject } from "fabric";
 import { modelMatrixFromFabric, sceneToMachineMatrix } from "../core/coords";
-import { machineBBox, setTransforms, type DrawingId, type PlotDocument } from "../core/document";
+import { expandToGroups, machineBBox, setTransforms, tableItems, type Drawing, type DrawingId, type PlotDocument } from "../core/document";
 import { apply, multiply, type Mat2D } from "../core/geometry/mat2d";
 import type { BBox } from "../core/geometry/path";
 import type { Store } from "../core/store";
@@ -26,8 +26,14 @@ function outside(b: BBox, zone: { minX: number; minY: number; maxX: number; maxY
  * - modelo → Fabric: sync() cria, remove e reposiciona objetos, preservando a seleção.
  * - Fabric → modelo: no fim de cada gesto (object:modified), a matriz de cada objeto
  *   (calcTransformMatrix, que inclui a seleção múltipla) vira um commit no store.
+ *
+ * Um objeto do Fabric é um ITEM da mesa (`tableItems`): um desenho solto, ou um conjunto inteiro (as
+ * camadas de uma mesma imagem). O gesto num conjunto grava a mesma matriz em todas as camadas, numa
+ * entrada só do histórico. A seleção do store continua sendo uma lista de desenhos, sempre com os
+ * conjuntos inteiros.
  */
 export class CanvasView {
+  /** O objeto de cada desenho (as camadas de um conjunto apontam para o mesmo objeto) */
   private readonly objs = new Map<DrawingId, DrawingObject>();
   private syncing = false;
 
@@ -66,55 +72,58 @@ export class CanvasView {
     return this.canvas.getActiveObjects().filter((o): o is DrawingObject => o instanceof DrawingObject);
   }
 
+  /** Os objetos que existem agora, sem repetir (um conjunto aparece uma vez). */
+  private objects(): Set<DrawingObject> {
+    return new Set(this.objs.values());
+  }
+
   /** Reconcilia o Fabric com o documento. */
   sync(): void {
     this.syncing = true;
     try {
       const doc = this.store.doc;
-      const ids = new Set(doc.drawings.map((d) => d.id));
+      const byId = new Map(doc.drawings.map((d) => [d.id, d]));
       const active = new Set(this.activeDrawings());
       let touchesSelection = false;
 
-      const removed: DrawingObject[] = [];
-      for (const [id, o] of this.objs) {
-        if (!ids.has(id)) {
-          removed.push(o);
-          if (active.has(o)) touchesSelection = true;
-        }
-      }
-      const updates: [DrawingObject, Mat2D][] = [];
+      const keep = new Set<DrawingObject>();
+      const order: DrawingObject[] = [];
       const added: DrawingObject[] = [];
-      for (const d of doc.drawings) {
-        const o = this.objs.get(d.id);
-        if (!o || o.geometry !== d.geometry) {
-          if (o) {
-            removed.push(o);
+      const updates: [DrawingObject, Mat2D][] = [];
+      const next = new Map<DrawingId, DrawingObject>();
+      for (const ids of tableItems(doc)) {
+        const members = ids.map((id) => byId.get(id)) as Drawing[];
+        let o = this.objs.get(ids[0]);
+        // mudou a geometria (traços apagados) ou as camadas do conjunto: o objeto é refeito
+        if (o && (keep.has(o) || !o.shows(members))) o = undefined;
+        if (!o) {
+          o = new DrawingObject(members);
+          added.push(o);
+        } else {
+          if (o.modelTransform !== members[0].transform) {
+            updates.push([o, members[0].transform]);
             if (active.has(o)) touchesSelection = true;
           }
-          const n = new DrawingObject(d);
-          this.objs.set(d.id, n);
-          added.push(n);
-        } else if (o.modelTransform !== d.transform) {
-          updates.push([o, d.transform]);
-          if (active.has(o)) touchesSelection = true;
+          o.setPens(members);
         }
-        const cur = this.objs.get(d.id)!;
-        if (cur.penId !== d.penId) cur.penId = d.penId;
+        keep.add(o);
+        order.push(o);
+        for (const id of ids) next.set(id, o);
       }
+      const removed = [...this.objects()].filter((o) => !keep.has(o));
+      if (removed.some((o) => active.has(o))) touchesSelection = true;
 
       // Mexer num objeto que está dentro de uma ActiveSelection corrompe a posição:
       // desfaz a seleção, aplica as matrizes e recria a seleção depois.
       if (touchesSelection) this.canvas.discardActiveObject();
-      for (const o of removed) {
-        this.canvas.remove(o);
-        if (this.objs.get(o.drawingId) === o) this.objs.delete(o.drawingId);
-      }
+      for (const o of removed) this.canvas.remove(o);
+      this.objs.clear();
+      for (const [id, o] of next) this.objs.set(id, o);
       for (const [o, m] of updates) o.applyModel(m);
       for (const o of added) this.canvas.add(o);
 
       // ordem de empilhamento = ordem do documento
-      doc.drawings.forEach((d, i) => {
-        const o = this.objs.get(d.id)!;
+      order.forEach((o, i) => {
         if (this.canvas.getObjects()[i] !== o) this.canvas.moveObjectTo(o, i);
       });
 
@@ -126,18 +135,26 @@ export class CanvasView {
     }
   }
 
+  /** Os objetos dos desenhos indicados, sem repetir e na ordem da mesa. */
+  private objectsOf(ids: readonly DrawingId[]): DrawingObject[] {
+    const want = new Set(ids.map((id) => this.objs.get(id)).filter((o): o is DrawingObject => !!o));
+    return this.canvas.getObjects().filter((o): o is DrawingObject => o instanceof DrawingObject && want.has(o));
+  }
+
   private applySelection(ids: readonly DrawingId[]): void {
-    const current = this.activeDrawings().map((o) => o.drawingId);
-    if (current.length === ids.length && current.every((id) => ids.includes(id))) return;
+    const wanted = this.objectsOf(ids);
+    const current = this.activeDrawings();
+    if (current.length === wanted.length && current.every((o) => wanted.includes(o))) return;
     this.canvas.discardActiveObject();
-    const objs = ids.map((id) => this.objs.get(id)).filter((o): o is DrawingObject => !!o);
-    if (objs.length === 1) this.canvas.setActiveObject(objs[0]);
-    else if (objs.length > 1) this.canvas.setActiveObject(new ActiveSelection(objs, { canvas: this.canvas }));
+    if (wanted.length === 1) this.canvas.setActiveObject(wanted[0]);
+    else if (wanted.length > 1) this.canvas.setActiveObject(new ActiveSelection(wanted, { canvas: this.canvas }));
   }
 
   private pushSelection(): void {
     if (this.syncing) return;
-    this.store.setSelection(this.activeDrawings().map((o) => o.drawingId));
+    // um conjunto entra sempre inteiro na seleção
+    const ids = this.activeDrawings().flatMap((o) => o.drawingIds);
+    this.store.setSelection(expandToGroups(this.store.doc, ids));
   }
 
   private onModified(action: string | undefined): void {
@@ -146,19 +163,24 @@ export class CanvasView {
       const m = modelMatrixFromFabric(o.calcTransformMatrix() as unknown as Mat2D, o.localBBox);
       // já marca como aplicada: o sync que vem do commit não precisa mexer neste objeto
       o.modelTransform = m;
-      updates.set(o.drawingId, m);
+      // todas as camadas do conjunto recebem a MESMA matriz: é isso que as mantém registradas
+      for (const id of o.drawingIds) updates.set(id, m);
     }
     if (updates.size === 0) return;
     this.store.commit(ACTION_LABEL[action ?? ""] ?? "Transformar", (doc) => setTransforms(doc, updates));
   }
 
-  /** Verificação exata (geometria achatada) depois de cada mudança no documento. */
+  /** Verificação exata (geometria achatada) depois de cada mudança no documento. Um conjunto está fora se qualquer camada estiver. */
   private updateArea(): void {
     const { profile } = this.store.state;
+    const byId = new Map(this.store.doc.drawings.map((d) => [d.id, d]));
     let count = 0;
-    for (const d of this.store.doc.drawings) {
-      const out = outside(machineBBox(d, this.H, profile.tolerance.chordMm), profile.drawZone);
-      this.objs.get(d.id)?.setOutOfArea(out);
+    for (const o of this.objects()) {
+      const out = o.drawingIds.some((id) => {
+        const d = byId.get(id);
+        return !!d && outside(machineBBox(d, this.H, profile.tolerance.chordMm), profile.drawZone);
+      });
+      o.setOutOfArea(out);
       if (out) count++;
     }
     this.onOutOfArea(count);
@@ -190,7 +212,7 @@ export class CanvasView {
    */
   setCaching(on: boolean): void {
     let changed = false;
-    for (const o of this.objs.values()) {
+    for (const o of this.objects()) {
       if (o.objectCaching === on) continue;
       o.objectCaching = on;
       o.set("dirty", true);

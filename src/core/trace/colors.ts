@@ -345,9 +345,9 @@ export function strokeColors(
   return out;
 }
 
-/** Uma camada de cor do desenho: tudo o que uma caneta pode desenhar de uma vez. */
+/** Uma camada do desenho: tudo o que uma caneta pode desenhar de uma vez. */
 export interface ColorLayer {
-  /** Nome estável da camada ("Preto", "Vermelho"): a escolha de caneta da pessoa é guardada por ele */
+  /** Nome estável da camada ("Preto", "Vermelho", "Preto/fino"): a escolha de caneta da pessoa é guardada por ele */
   readonly key: string;
   readonly name: string;
   /** Cor para a amostra na tela (e para criar uma caneta dessa cor) */
@@ -355,43 +355,86 @@ export interface ColorLayer {
   readonly strokes: number;
   /** Comprimento somado dos traços, na mesma unidade de `lengths` */
   readonly lengthPx: number;
+  /** A parte ("fino", "grosso", "contornos", "sombras") quando a cor foi dividida em mais de uma camada */
+  readonly part?: string;
 }
 
-/** Uma cor com menos que esta fração do traço não vale uma troca de caneta: vai junto com a maior. */
+/** Uma camada com menos que esta fração do traço não vale uma troca de caneta: vai junto com a maior. */
 const MIN_LAYER_SHARE = 0.003;
 
 /**
- * Junta os traços em camadas, uma por cor de caneta. Preto, cinza e branco são a MESMA caneta (a que
- * contrasta com o papel), então viram uma camada só: "Preto" em papel claro, "Branco" em papel escuro.
- * Cada cor de verdade é uma camada, menos as que têm quase nenhum traço. `layerOf` diz a camada de cada
- * traço; as camadas vêm da que tem mais traço para a que tem menos.
+ * Junta os traços em camadas, uma por caneta possível. Preto, cinza e branco são a MESMA caneta (a que
+ * contrasta com o papel), então viram uma cor só: "Preto" em papel claro, "Branco" em papel escuro. Cada
+ * cor de verdade é uma camada, menos as que têm quase nenhum traço.
+ *
+ * Com `split` (src/core/trace/parts.ts), cada cor ainda se divide pelas partes do desenho ("Preto fino" e
+ * "Preto grosso"): é o que deixa usar a caneta fina nos detalhes e a grossa nos contornos. Uma parte com
+ * quase nenhum traço fica com a outra parte da mesma cor, e uma cor de uma parte só não ganha sobrenome.
+ *
+ * `layerOf` diz a camada de cada traço; as camadas vêm da que tem mais traço para a que tem menos.
  */
-export function colorLayers(palette: Palette, classOf: ArrayLike<number>, lengths: ArrayLike<number>, paper: number): { layers: ColorLayer[]; layerOf: Uint8Array } {
+export function colorLayers(
+  palette: Palette,
+  classOf: ArrayLike<number>,
+  lengths: ArrayLike<number>,
+  paper: number,
+  split?: { readonly partOf: ArrayLike<number>; readonly names: readonly string[] },
+): { layers: ColorLayer[]; layerOf: Uint8Array } {
   const n = classOf.length;
   const layerOf = new Uint8Array(n);
   if (!n) return { layers: [], layerOf };
   const NEUTRAL = -1;
-  const groupOf = (cls: number) => (palette.classes[cls]?.neutral ?? true ? NEUTRAL : cls);
-  const len = new Map<number, number>(), count = new Map<number, number>();
+  const colorOf = (cls: number) => (palette.classes[cls]?.neutral ?? true ? NEUTRAL : cls);
+  const parts = split ? Math.max(1, split.names.length) : 1;
+  const partOf = (i: number) => (split ? Math.min(parts - 1, split.partOf[i]) : 0);
+
+  // --- 1) as cores: as que têm quase nenhum traço vão para a "casa" (a sem cor, se existir; senão, a maior)
+  const colorLen = new Map<number, number>();
   let total = 0;
   for (let i = 0; i < n; i++) {
-    const g = groupOf(classOf[i]);
-    len.set(g, (len.get(g) ?? 0) + lengths[i]);
-    count.set(g, (count.get(g) ?? 0) + 1);
+    const g = colorOf(classOf[i]);
+    colorLen.set(g, (colorLen.get(g) ?? 0) + lengths[i]);
     total += lengths[i];
   }
-  // a camada que recebe as cores pequenas: a sem cor, se existir; senão, a maior
-  const biggest = [...len.keys()].sort((a, b) => len.get(b)! - len.get(a)!)[0];
-  const home = len.has(NEUTRAL) ? NEUTRAL : biggest;
-  const kept = [...len.keys()].filter((g) => g === home || len.get(g)! >= MIN_LAYER_SHARE * total);
-  const target = (g: number) => (kept.includes(g) ? g : home);
+  const biggest = [...colorLen.keys()].sort((a, b) => colorLen.get(b)! - colorLen.get(a)!)[0];
+  const home = colorLen.has(NEUTRAL) ? NEUTRAL : biggest;
+  const keptColor = new Set([...colorLen.keys()].filter((g) => g === home || colorLen.get(g)! >= MIN_LAYER_SHARE * total));
+  const color = (i: number) => {
+    const g = colorOf(classOf[i]);
+    return keptColor.has(g) ? g : home;
+  };
+
+  // --- 2) as partes de cada cor: a que tem quase nenhum traço fica com a maior parte da mesma cor
+  const id = (g: number, p: number) => (g + 1) * parts + p; // g = −1 é a sem cor
+  const partLen = new Map<number, number>();
+  for (let i = 0; i < n; i++) partLen.set(id(color(i), partOf(i)), (partLen.get(id(color(i), partOf(i))) ?? 0) + lengths[i]);
+  const mainPart = new Map<number, number>(); // cor → a parte com mais traço
+  const keptParts = new Map<number, number[]>(); // cor → partes que viram camada
+  for (const g of keptColor) {
+    let best = 0;
+    for (let p = 1; p < parts; p++) if ((partLen.get(id(g, p)) ?? 0) > (partLen.get(id(g, best)) ?? 0)) best = p;
+    mainPart.set(g, best);
+    const kept: number[] = [];
+    for (let p = 0; p < parts; p++) {
+      const len = partLen.get(id(g, p));
+      if (len !== undefined && (p === best || len >= MIN_LAYER_SHARE * total)) kept.push(p);
+    }
+    keptParts.set(g, kept);
+  }
+  const part = (i: number) => {
+    const g = color(i), p = partOf(i);
+    return keptParts.get(g)!.includes(p) ? p : mainPart.get(g)!;
+  };
+
+  // --- 3) as camadas
   const L = new Map<number, number>(), C = new Map<number, number>();
-  // cor da camada sem cor: média das classes que entraram nela, pelo comprimento
+  // cor da camada sem cor: média das classes que entraram nela, pelo comprimento (a mesma nas duas partes)
   let nr = 0, ng = 0, nb = 0, nw = 0;
   for (let i = 0; i < n; i++) {
-    const g = target(groupOf(classOf[i]));
-    L.set(g, (L.get(g) ?? 0) + lengths[i]);
-    C.set(g, (C.get(g) ?? 0) + 1);
+    const g = color(i);
+    const k = id(g, part(i));
+    L.set(k, (L.get(k) ?? 0) + lengths[i]);
+    C.set(k, (C.get(k) ?? 0) + 1);
     if (g === NEUTRAL) {
       const c = palette.classes[classOf[i]];
       const w = Math.max(lengths[i], 1e-9);
@@ -400,16 +443,24 @@ export function colorLayers(palette: Palette, classOf: ArrayLike<number>, length
   }
   const order = [...L.keys()].sort((a, b) => L.get(b)! - L.get(a)! || a - b);
   const paperIsLight = (palette.classes[paper]?.lightness ?? 1) >= 0.5;
-  const layers: ColorLayer[] = order.map((g) => {
-    if (g === NEUTRAL) {
-      const name = paperIsLight ? "Preto" : "Branco";
-      return { key: name, name, color: nw > 0 ? toHex(nr / nw, ng / nw, nb / nw) : paperIsLight ? "#000000" : "#ffffff", strokes: C.get(g)!, lengthPx: L.get(g)! };
-    }
-    const c = palette.classes[g];
-    return { key: c.name, name: c.name, color: c.color, strokes: C.get(g)!, lengthPx: L.get(g)! };
+  const layers: ColorLayer[] = order.map((k) => {
+    const g = Math.floor(k / parts) - 1, p = k % parts;
+    const cls = g === NEUTRAL ? undefined : palette.classes[g];
+    const base = cls ? cls.name : paperIsLight ? "Preto" : "Branco";
+    const tint = cls ? cls.color : nw > 0 ? toHex(nr / nw, ng / nw, nb / nw) : paperIsLight ? "#000000" : "#ffffff";
+    const divided = split !== undefined && keptParts.get(g)!.length > 1;
+    const partName = divided ? split.names[p] : undefined;
+    return {
+      key: partName ? `${base}/${partName}` : base,
+      name: partName ? `${base} ${partName}` : base,
+      color: tint,
+      strokes: C.get(k)!,
+      lengthPx: L.get(k)!,
+      ...(partName ? { part: partName } : {}),
+    };
   });
-  const index = new Map(order.map((g, i) => [g, i]));
-  for (let i = 0; i < n; i++) layerOf[i] = index.get(target(groupOf(classOf[i])))!;
+  const index = new Map(order.map((k, i) => [k, i]));
+  for (let i = 0; i < n; i++) layerOf[i] = index.get(id(color(i), part(i)))!;
   return { layers, layerOf };
 }
 

@@ -27,9 +27,9 @@ export function createHelpDialog(): { open(): void } {
           "Imagem: escolha o tipo na tela que abre. Traço para desenho que já é de linhas, Preto e branco para nanquim e gravura, Ilustração para pintura ou desenho colorido, Foto para fotografia.",
           "Imagem com mais de uma cor: na mesma tela, “Cores da imagem” mostra as cores que o programa achou, e você escolhe a caneta de cada uma. O tempo de máquina aparece no rodapé, e muda a cada ajuste.",
           "A parte clara da mesa é a sua folha. O desenho já cai dentro dela. Papel preto ou colorido? Escolha em “Papel”, na barra de cima: a tela mostra o desenho como vai ficar.",
-          "Clique no desenho para mover, girar ou mudar o tamanho. “Encaixar na folha” faz ele ocupar o máximo possível.",
-          "Sobrou um traço que você não quer? Dê dois cliques no desenho (ou use “Apagar traços…”), clique nos traços para marcar e aperte Delete.",
-          "Se for usar mais de uma caneta, escolha a caneta de cada desenho em “Caneta”.",
+          "Tudo o que está na mesa aparece na lista “Na mesa”. Clique numa linha da lista, ou no próprio desenho, para mover, girar ou mudar o tamanho; “Soltar” deixa de selecionar. “Encaixar na folha” faz ele ocupar o máximo possível.",
+          "Uma imagem com várias canetas é um desenho só, com uma camada por caneta: as camadas andam sempre juntas. Em “Camadas” você troca a caneta de cada uma, apaga traços dela ou tira a camada inteira.",
+          "Sobrou um traço que você não quer? Use “Apagar traços” na camada (ou dê dois cliques no desenho), clique nos traços para marcar e aperte Delete.",
         ),
       ),
       step(

@@ -5,7 +5,7 @@ import type { Geometry } from "../core/geometry/path";
 import { penOf } from "../core/machine";
 import type { Store } from "../core/store";
 import { removeStrokes, sceneStrokes, StrokeIndex, type EditStroke } from "../core/strokeEdit";
-import { append, h, toast } from "./dom";
+import { append, clear, h, toast } from "./dom";
 import { onPaperChange, paperColor } from "./paper";
 
 /** O mouse pega o traço que estiver a até isto dele (pixels de tela). */
@@ -43,8 +43,12 @@ const plural = (n: number, one: string, many: string) => `${nf(n)} ${n === 1 ? o
 
 /**
  * Tela "Apagar traços": os desenhos escolhidos aparecem grandes, cada traço (cada descida da caneta) pode
- * ser marcado com um clique ou com um retângulo, e Delete tira os marcados. "Concluir" guarda o desenho sem
- * eles, numa mudança só, que o Ctrl+Z da mesa desfaz. Nada aqui chega à máquina.
+ * ser marcado com um clique ou com um retângulo, e Delete tira os marcados. "Guardar e voltar" guarda o
+ * desenho sem eles, numa mudança só, que o Ctrl+Z da mesa desfaz. Nada aqui chega à máquina.
+ *
+ * Com mais de um desenho (as camadas de uma imagem, uma por caneta), a pessoa escolhe AQUI em qual camada
+ * quer mexer: só os traços dela podem ser marcados, e as outras ficam apagadinhas, só para localizar.
+ * `focusId` abre a tela já numa camada.
  *
  * Para um desenho de 20 mil traços continuar leve, a tela pinta em três camadas:
  *  - a base (folha, os outros desenhos, os traços que ficam) só é refeita quando um traço sai ou volta, ou
@@ -52,7 +56,7 @@ const plural = (n: number, one: string, many: string) => `${nf(n)} ${n === 1 ? o
  *  - os marcados, só quando uma marca muda;
  *  - o traço embaixo do mouse e o retângulo, a cada movimento (é quase nada).
  */
-export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void {
+export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusId?: DrawingId): void {
   if (document.querySelector("dialog.strokes")) return; // já está aberta (botão + dois cliques)
   const profile = store.state.profile;
   const doc = store.doc;
@@ -72,7 +76,17 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
   let shortMm = 0;
   /** Cada Delete é uma entrada: os traços que saíram naquela vez */
   const undoStack: number[][] = [];
-  const isMarked = (i: number) => !removed[i] && (manual[i] === 1 || (manual[i] === 0 && strokes[i].lengthMm < shortMm));
+  /** A camada em que a pessoa está mexendo; undefined = todas */
+  let activeLayer: DrawingId | undefined = edited.length > 1 && edited.some((d) => d.id === focusId) ? focusId : undefined;
+  const inLayer = (i: number) => activeLayer === undefined || strokes[i].drawingId === activeLayer;
+  // "Marcar os curtos" só vale para a camada escolhida; as marcas feitas à mão valem onde foram feitas
+  const isMarked = (i: number) => !removed[i] && (manual[i] === 1 || (manual[i] === 0 && inLayer(i) && strokes[i].lengthMm < shortMm));
+  /** 1 = o mouse não pega este traço: já foi apagado, ou é de outra camada */
+  const blocked = new Uint8Array(n);
+  const refreshBlocked = () => {
+    for (let i = 0; i < n; i++) blocked[i] = removed[i] || !inLayer(i) ? 1 : 0;
+  };
+  refreshBlocked();
 
   // de subcaminho do desenho → número do traço nesta tela (−1 = subcaminho vazio, que não é traço)
   const strokeOfSubpath = new Map<DrawingId, Int32Array>();
@@ -212,12 +226,14 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
         b.strokeStyle = legible(pen.color, paper);
         strokeDrawing(b, d, p, Math.max(pen.widthMm, 1.25 / bz));
       }
-      b.globalAlpha = 1;
       for (const d of edited) {
         const pen = penOf(profile, d.penId);
+        // as camadas em que a pessoa não está mexendo ficam apagadinhas
+        b.globalAlpha = activeLayer === undefined || d.id === activeLayer ? 1 : 0.25;
         b.strokeStyle = legible(pen.color, paper);
         strokeDrawing(b, d, basePaths.get(d.id)!, Math.max(pen.widthMm, 1.25 / bz)); // largura real da caneta, nunca menos de ~1 px
       }
+      b.globalAlpha = 1;
       baseDirty = false;
       marksDirty = true;
     }
@@ -282,7 +298,27 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
   const deleteBtn = h("button", { title: "Tira do desenho os traços marcados (tecla Delete)", onclick: () => removeMarked() }, "Apagar os marcados");
   const clearBtn = h("button", { class: "quiet", title: "Tira todas as marcas (tecla Esc)", onclick: () => clearMarks() }, "Desmarcar tudo");
   const undoBtn = h("button", { title: "Traz de volta os últimos traços apagados (Ctrl+Z)", onclick: () => undoRemoval() }, "↶ Desfazer");
-  const doneBtn = h("button", { class: "primary big", onclick: () => conclude() }, "Concluir");
+  const doneBtn = h("button", { class: "primary big", onclick: () => conclude() }, "Voltar para a mesa");
+  const backBtn = h("button", { title: "Sai desta tela e deixa o desenho como estava", onclick: () => close() }, "Voltar sem apagar");
+  // a camada em que se mexe (só aparece quando há mais de uma)
+  const layerChips = h("div", { class: "layer-chips", role: "radiogroup", "aria-label": "Camada em que você está mexendo" });
+  const layerBox = h("div", { class: "panel-section", hidden: edited.length < 2 }, h("h3", null, "Camada"), layerChips);
+  /** Troca a camada em que a pessoa mexe. As marcas do "Marcar os curtos" viram marcas comuns e o controle volta a zero. */
+  function setLayer(id: DrawingId | undefined) {
+    if (id === activeLayer) return;
+    if (shortMm > 0) {
+      for (let i = 0; i < n; i++) if (manual[i] === 0 && isMarked(i)) manual[i] = 1;
+      shortMm = 0;
+      shortInput.value = "0";
+      shortOut.textContent = "desligado";
+    }
+    activeLayer = id;
+    refreshBlocked();
+    hover = -1;
+    updateHover();
+    renderPanel();
+    repaint();
+  }
   const shortOut = h("output", null, "desligado");
   const shortInput = h("input", { type: "range", min: "0", max: "20", step: "0.5", value: "0", "aria-label": "Marcar os traços curtos" });
   shortInput.addEventListener("input", () => {
@@ -305,7 +341,29 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
     deleteBtn.disabled = marked === 0;
     clearBtn.disabled = marked === 0;
     undoBtn.disabled = undoStack.length === 0;
-    doneBtn.textContent = marked > 0 ? "Apagar os marcados e concluir" : "Concluir";
+    // os botões de sair dizem o que vai acontecer
+    doneBtn.textContent = marked > 0 ? "Apagar os marcados e voltar" : gone > 0 ? "Guardar e voltar" : "Voltar para a mesa";
+    backBtn.hidden = marked === 0 && gone === 0;
+    if (edited.length < 2) return;
+    // uma ficha por camada, com a cor da caneta e quantos traços ainda tem
+    const left = new Map<DrawingId, number>();
+    for (let i = 0; i < n; i++) if (!removed[i]) left.set(strokes[i].drawingId, (left.get(strokes[i].drawingId) ?? 0) + 1);
+    const chip = (id: DrawingId | undefined, label: string, total: number, color?: string) =>
+      h(
+        "button",
+        { class: `layer-chip${activeLayer === id ? " on" : ""}`, role: "radio", "aria-checked": String(activeLayer === id), onclick: () => setLayer(id) },
+        h("span", color ? { class: "dot", style: `--c:${color}`, "aria-hidden": "true" } : { class: "dot all", "aria-hidden": "true" }),
+        h("span", { class: "name" }, label),
+        h("span", { class: "n" }, nf(total)),
+      );
+    clear(layerChips);
+    append(layerChips, [
+      chip(undefined, "Todas", n - gone),
+      ...edited.map((d) => {
+        const pen = penOf(profile, d.penId);
+        return chip(d.id, pen.name, left.get(d.id) ?? 0, pen.color);
+      }),
+    ]);
   }
   function marksChanged() {
     marksDirty = true;
@@ -334,6 +392,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
   function geometryChanged(list: readonly number[]) {
     const touched = new Set(list.map((i) => strokes[i].drawingId));
     for (const d of edited) if (touched.has(d.id)) rebuildBase(d);
+    refreshBlocked();
     updateHover();
     renderPanel();
     repaint();
@@ -347,7 +406,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
   }
 
   function conclude() {
-    removeMarked(); // quem marcou e foi direto em "concluir" queria apagar (o botão diz isso)
+    removeMarked(); // quem marcou e foi direto no botão de voltar queria apagar (o botão diz "Apagar os marcados e voltar")
     const map = new Map<DrawingId, number[]>();
     let total = 0;
     strokes.forEach((s, i) => {
@@ -377,7 +436,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
   const toScene = (p: { x: number; y: number }) => ({ x: (p.x - panX) / zoom, y: (p.y - panY) / zoom });
   const pick = (p: { x: number; y: number }) => {
     const s = toScene(p);
-    return index.nearest(s.x, s.y, PICK_PX / zoom, removed);
+    return index.nearest(s.x, s.y, PICK_PX / zoom, blocked);
   };
 
   type Gesture =
@@ -443,7 +502,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
         marksChanged();
       }
     } else if (!cancelled && g.kind === "rect" && rect) {
-      const hit = index.inRect(rect.x0, rect.y0, rect.x1, rect.y1, removed);
+      const hit = index.inRect(rect.x0, rect.y0, rect.x1, rect.y1, blocked);
       const value = e.altKey ? 2 : 1;
       for (const i of hit) manual[i] = value;
       rect = undefined;
@@ -496,7 +555,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
     if (gone > 0 && !escArmed) {
       escArmed = true;
       setTimeout(() => (escArmed = false), 5000);
-      return toast("Há traços apagados que ainda não foram guardados. “Concluir” guarda; Esc de novo sai sem apagar nada.", "warn", 5000);
+      return toast("Há traços apagados que ainda não foram guardados. “Guardar e voltar” guarda; Esc de novo sai sem apagar nada.", "warn", 5000);
     }
     close();
   }
@@ -551,31 +610,40 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[]): void 
 
   const side = h("div", { class: "trace-side panel" });
   append(side, [
-    h("h3", null, "Como apagar"),
-    h("p", { class: "hint" }, "Clique num traço para marcar: ele fica vermelho. Clique de novo para desmarcar. Para marcar vários, arraste um retângulo em volta deles (segurando Alt, o retângulo desmarca). Depois aperte Delete."),
-    h("h3", null, "Traços"),
+    layerBox,
+    h("h3", null, "Marcar e apagar"),
+    h("p", { class: "hint" }, "Clique num traço para marcar (fica vermelho); clique de novo para desmarcar. Arraste para marcar vários. Delete apaga os marcados."),
     count,
     h("div", { class: "row" }, deleteBtn, undoBtn),
     h("div", { class: "row" }, clearBtn),
-    h("h3", null, "Limpar sujeira"),
-    h("label", { class: "range", title: "Marca de uma vez todos os traços pequenos" }, h("span", null, "Marcar os curtos"), shortOut, shortInput),
-    h("p", { class: "hint" }, "Marca todos os traços menores que este tamanho no papel. Confira o que ficou vermelho e aperte Delete. Clicar num deles tira a marca só dele."),
-    h("h3", null, "Para terminar"),
-    h("p", { class: "hint" }, "“Concluir” guarda o desenho sem os traços apagados. Se mudar de ideia depois, Ctrl+Z na mesa traz todos de volta. “Cancelar” sai sem mudar nada."),
+    h(
+      "label",
+      { class: "range", title: "Marca de uma vez todos os traços menores que este tamanho no papel. Confira o que ficou vermelho antes de apagar; clicar num deles tira a marca só dele." },
+      h("span", null, "Marcar os curtos"),
+      shortOut,
+      shortInput,
+    ),
   ]);
   // depois de um clique num botão, o foco volta para o desenho: Delete e Espaço continuam valendo lá
   side.addEventListener("click", (e) => (e.target as HTMLElement).closest("button") && stage.focus());
 
-  const name = edited.length === 1 ? edited[0].name : `${edited.length} desenhos`;
+  // as camadas de um conjunto têm o mesmo nome (o da imagem): o título diz o nome uma vez só
+  const names = [...new Set(edited.map((d) => d.name))];
+  const name = names.length === 1 ? names[0] : `${edited.length} desenhos`;
   append(dialog, [
-    h("header", { class: "settings-head" }, h("strong", null, `Apagar traços de ${name}`), h("button", { class: "close", title: "Fechar sem apagar nada", "aria-label": "Fechar", onclick: close }, "✕")),
+    h(
+      "header",
+      { class: "settings-head" },
+      h("strong", null, `Apagar traços de ${name}`),
+      h("button", { class: "close", title: "Voltar para a mesa sem apagar nada", "aria-label": "Voltar para a mesa sem apagar nada", onclick: close }, "✕"),
+    ),
     h("div", { class: "trace-main" }, stage, side),
     h(
       "footer",
       { class: "settings-foot" },
       h("span", { class: "hint" }, "Roda do mouse aproxima. Botão direito (ou Espaço) arrasta a vista. Dois cliques no vazio mostram tudo."),
       h("span", { class: "spacer" }),
-      h("button", { onclick: close }, "Cancelar"),
+      backBtn,
       doneBtn,
     ),
   ]);

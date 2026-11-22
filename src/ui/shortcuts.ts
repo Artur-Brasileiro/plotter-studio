@@ -1,4 +1,4 @@
-import { translateMachine } from "../core/document";
+import { expandToGroups, translateMachine } from "../core/document";
 import type { Store } from "../core/store";
 import { isTyping } from "./dom";
 import { deleteSelection, duplicateSelection } from "./panels/propertiesPanel";
@@ -28,7 +28,8 @@ export function installShortcuts(store: Store, opts: { arrowsEnabled?: () => boo
     else if (!ctrl && key.startsWith("Arrow") && store.state.selection.length && (opts.arrowsEnabled?.() ?? true)) {
       const step = e.shiftKey ? 10 : 1;
       const d = { ArrowLeft: { x: -step, y: 0 }, ArrowRight: { x: step, y: 0 }, ArrowUp: { x: 0, y: step }, ArrowDown: { x: 0, y: -step } }[key];
-      if (d) store.commit("Mover", (doc) => translateMachine(doc, store.state.selection, d), { coalesceKey: "nudge" });
+      // (as camadas de um conjunto andam sempre juntas)
+      if (d) store.commit("Mover", (doc) => translateMachine(doc, expandToGroups(doc, store.state.selection), d), { coalesceKey: "nudge" });
       else handled = false;
     } else handled = false;
 

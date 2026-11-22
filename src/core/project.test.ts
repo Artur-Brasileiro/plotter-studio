@@ -31,6 +31,17 @@ describe("project", () => {
     expect(sp.segments[sp.segments.length - 1].to).toBe(sp.start);
   });
 
+  it("o conjunto (camadas da mesma imagem) vai e volta; arquivo antigo, sem conjunto, continua abrindo", () => {
+    const g = { subpaths: [{ start: { x: 0, y: 0 }, segments: [{ kind: "line" as const, to: { x: 5, y: 0 } }], closed: false }] };
+    const doc = { drawings: [createDrawing("a", "cartaz", g, [1, 0, 0, 1, 0, 0], undefined, "g1"), createDrawing("b", "solto", g, [1, 0, 0, 1, 0, 0])] };
+    const file = JSON.parse(JSON.stringify(serializeDocument(doc, new Date(0))));
+    expect(file.drawings[0].group).toBe("g1");
+    expect("group" in file.drawings[1]).toBe(false);
+    const back = deserializeDocument(file);
+    expect(back.drawings[0].group).toBe("g1");
+    expect("group" in back.drawings[1]).toBe(false);
+  });
+
   it("rejeita formato errado, versão 2 e transform com 5 números", () => {
     const ok = serializeDocument(doc, new Date());
     expect(() => deserializeDocument({ format: "outro" })).toThrow("não é um arquivo do Plotter Studio");

@@ -172,7 +172,8 @@ installShortcuts(store, { arrowsEnabled: () => !jog.keysActive() });
 canvas.on("mouse:dblclick", (opt) => {
   const t = opt.target;
   if (!t) return;
-  if (t instanceof DrawingObject && !store.state.selection.includes(t.drawingId)) store.setSelection([t.drawingId]);
+  // (um conjunto é um objeto só: os dois cliques abrem a tela com todas as camadas dele, e lá dentro se escolhe uma)
+  if (t instanceof DrawingObject && !store.state.selection.includes(t.drawingId)) store.setSelection([...t.drawingIds]);
   editStrokesOfSelection(store);
 });
 

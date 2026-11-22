@@ -142,6 +142,41 @@ O que ainda falta, e que esses testes mostraram:
   tempo, mas desenharia o contorno das manchas; não foi feito.
 - **Nada disso rodou na máquina.**
 
+## Acrescentado em 23/11/2026: traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas
+
+O Artur testou as camadas e o apagar traços ("funcionou") e pediu duas coisas. Primeira: separar o detalhe fino do
+grosso, como nos G-codes da máscara que ele plotou antes (`mascara_2fina_003mm`, `mascara_3grossa_04mm`): lá, as
+linhas finas do desenho foram para a caneta 0,03 e os contornos fortes para a 0,4. Segunda: as telas estavam com
+texto e ajuste demais, e a mesa era confusa (para apagar traços de uma camada era preciso clicar nela no desenho, e
+para voltar à lista só com Esc, que ele achou por acaso).
+
+**Traço fino e grosso.** O traçador passou a dizer, para cada traço, o que ele é (linha, ponto, contorno, hachura)
+e a largura da linha que ele seguiu no desenho original. Na tela de vetorizar, em "Camadas", a caixinha "Separar o
+traço fino do grosso" divide cada cor em duas camadas ("Preto fino" e "Preto grosso"), cada uma com a sua caneta. O
+controle "Fino até" diz até que largura (no papel) a linha é fina; ele começa na largura do meio do desenho. Na
+Ilustração a divisão é entre contornos e sombras. Na Foto não há divisão. No desenho de linhas de teste, na folha
+inteira: 2.740 traços finos e 1.870 grossos com o limite em 0,6 mm.
+
+**Conjuntos na mesa.** As camadas de uma mesma imagem (uma por caneta) agora formam um conjunto: na mesa são um
+objeto só, que se move, gira e muda de tamanho junto. Acabou o risco de uma cor desencontrar da outra.
+
+**Telas mais enxutas.**
+- Vetorizar: a janela ocupa quase a tela toda; cada tipo mostra só os dois ou três ajustes que mais mudam o
+  resultado, e o resto fica em "Mais ajustes"; os textos longos viraram dicas ao passar o mouse; "A caneta desenha"
+  só aparece quando há o que decidir (imagem de fundo escuro ou papel escuro).
+- Passo Desenho: a lista "Na mesa" fica sempre à vista; o item escolhido mostra as suas camadas, e cada camada tem
+  na própria linha a caneta e o botão "Apagar traços". Não é mais preciso clicar na camada no desenho, nem usar Esc
+  para voltar.
+- Apagar traços: dá para escolher a camada lá dentro.
+
+O que ainda falta:
+
+- **A largura é medida no desenho original.** Uma linha que afina na ponta conta pela largura do meio dela, e vai
+  inteira para uma camada só.
+- **Só os tipos Traço e Preto e branco medem largura.** No Preto e branco, a área cheia (contorno e hachura) é
+  sempre do grosso.
+- **Nada disso rodou na máquina.**
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -164,8 +199,9 @@ O que ainda falta, e que esses testes mostraram:
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 | 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
 | 8. Cores em camadas, papel e caneta, apagar traços, tempo de máquina na tela de vetorizar | pronto em 22/11, à noite (ver acima) |
+| 9. Traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas | pronto em 23/11 (ver acima) |
 
-Testes automáticos: 1.558 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.596 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

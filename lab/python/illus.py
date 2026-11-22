@@ -262,8 +262,30 @@ def line_art(rgb: np.ndarray, detail_px: float, sigma_e: float, coherence: float
             "gray": (255.0 * (1.0 - v.astype(np.float64))).astype(np.float32)}
 
 
+# Fundo com luminancia abaixo disto e "fundo escuro" (planta azul, cena noturna, personagem em fundo chapado)
+DARK_BACKGROUND = 0.45
+# Diferenca minima (luminancia 0..1) entre o papel e o preto na conta das sombras
+MIN_TONE_SPAN = 0.1
+
+
+def border_median(tone: np.ndarray) -> float:
+    """O tom do fundo: a mediana de uma faixa em volta da imagem (4% do lado menor, pelo menos 1 px)."""
+    h, w = tone.shape
+    b = max(1, int(math.floor(0.04 * min(w, h) + 0.5)))
+    m = np.zeros((h, w), bool)
+    m[:b] = m[-b:] = True
+    m[:, :b] = m[:, -b:] = True
+    return float(np.percentile(tone[m].astype(np.float32), [50])[0])
+
+
 def tone_darkness(tone: np.ndarray) -> np.ndarray:
-    """0 = papel, 1 = preto. O papel sao os 10% mais claros; o preto, o 1% mais escuro."""
+    """0 = papel, 1 = preto. O preto e o 1% mais escuro. O papel sao os 10% mais claros; mas, se o FUNDO da
+    imagem e escuro, o papel e o fundo: fundo escuro nao e sombra, e hachura-lo cobriria a folha inteira."""
     lo, hi = np.percentile(tone.astype(np.float32).ravel(), [1, 90])
-    d = np.clip((hi - tone.astype(np.float64)) / max(hi - lo, 1e-6), 0, 1)
+    bg = border_median(tone)
+    if bg < DARK_BACKGROUND:
+        hi = bg
+    # a escala nunca e menor que MIN_TONE_SPAN: numa imagem em que nada e bem mais escuro que o papel
+    # (fundo preto, desenho palido), o grao do fundo nao pode virar "sombra"
+    d = np.clip((hi - tone.astype(np.float64)) / max(hi - lo, MIN_TONE_SPAN), 0, 1)
     return d.astype(np.float32)

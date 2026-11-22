@@ -209,6 +209,28 @@ describe("modo ilustração: sombras (hachura só nas partes escuras)", () => {
   });
 });
 
+describe("modo ilustração: imagem de fundo escuro", () => {
+  // o negativo da cena: fundo quase preto, roda clara de miolo escuro, caixa azulada
+  const neg: RgbaImage = { width: W, height: H, data: color.data.map((v, i) => (i % 4 === 3 ? 255 : 255 - v)) };
+  const negMono = gray(W, H, mono.data.map((v) => 255 - v));
+  const dark = (opts: Partial<TraceOptions> = {}) => traceImage(negMono, { mode: "illus", mmPerPx: 0.8, penMm: 0.4, ...opts }, undefined, neg);
+
+  it("as sombras não hachuram o fundo (fundo escuro não é sombra)", () => {
+    const r = dark({ shade: 0.9 });
+    // margens da cena, que são só fundo
+    expect(pointsIn(hatchesOf(r), 0, 0, 6, 64)).toBe(0);
+    expect(pointsIn(hatchesOf(r), 0, 0, 44, 3)).toBe(0);
+    expect(pointsIn(hatchesOf(r), 46, 24, 80, 30)).toBe(0);
+  });
+
+  it("os contornos saem do mesmo jeito, sem precisar marcar 'fundo escuro'", () => {
+    const r = dark({ shade: 0 });
+    const wheel = strokesOf(r).flatMap(points).filter((p) => Math.abs(Math.hypot(p.x - 58, p.y - 46) - 13) < 2.5);
+    expect(wheel.length).toBeGreaterThan(20);
+    expect(r.stats.strokes).toBeGreaterThanOrEqual(6);
+  });
+});
+
 describe("tamanho da imagem de trabalho do modo ilustração (1 px = 1 largura de caneta)", () => {
   it("imagem que já está nessa escala não é mexida", () => {
     expect(illusWorkSize(736, 1313, 0.405, 0.4)).toEqual({ width: 736, height: 1313 });

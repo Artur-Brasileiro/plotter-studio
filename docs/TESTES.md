@@ -95,6 +95,7 @@ Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pr
 | C4 | Imagem vira traço | **Trazer desenho → Imagem**, uma imagem de linha pequena (~15 min), tipo **Traço** | O desenho sai igual à prévia da tela de vetorizar. Compare o tempo real com o estimado em "Últimos trabalhos" | |
 | C5 | Preto e branco com hachura | Uma imagem de nanquim pequena, tipo **Preto e branco** | Áreas cheias com contorno e hachura a 45°; traços finos em linha única | |
 | C5b | Ilustração (acrescentado em 22/11) | Uma imagem colorida pequena (~20 min), tipo **Ilustração**: primeiro com **Sombras** no zero, depois em 50% | Contornos limpos, sem rabisco onde a imagem tem textura; a hachura cai só nas partes escuras e não atravessa área clara. Compare com a prévia da tela | |
+| C5c | Fundo escuro (acrescentado em 22/11) | Uma planta azul pequena (linhas claras em fundo escuro), tipo **Traço** | "A imagem tem fundo escuro" já vem marcado; saem só as linhas, e o fundo fica em branco | |
 | C6 | Duas canetas | Dois desenhos na mesa, um com a caneta **Fina 0,03** (passo 1 → Caneta). Plote a camada 1, troque a caneta **sem mexer no papel**, plote a camada 2 | Cada camada começa com uma cruz em X20 Y12 e termina com outra em X580 Y12. As cruzes das duas canetas têm que cair uma em cima da outra. Se não caírem, meça a diferença (o braço da cruz tem 6 mm) e ajuste o desvio em Configurações → Estojo de canetas | |
 | C7 | Aceite | Um desenho real de 1 h ou mais, em partes ou inteiro | Termina com o servo frio e sem falha de caneta | |
 

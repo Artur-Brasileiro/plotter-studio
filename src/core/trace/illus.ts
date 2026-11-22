@@ -583,11 +583,38 @@ export function lineArt(rgb: RgbImage, p: LineArtParams, progress: (fraction: nu
   return { gray: gray(W, H, out), tone };
 }
 
-/** Tom → 0 (papel) a 1 (preto). O papel são os 10% mais claros da imagem; o preto, o 1% mais escuro. */
+/** Fundo com luminância (0..1) abaixo disto é "fundo escuro": planta azul, cena noturna, personagem em fundo chapado. */
+export const DARK_BACKGROUND = 0.45;
+/** Diferença mínima (luminância 0..1) entre o papel e o preto na conta das sombras */
+const MIN_TONE_SPAN = 0.1;
+
+/**
+ * O tom do fundo: a mediana de uma faixa em volta da imagem (4% do lado menor, pelo menos 1 px).
+ * Devolve na mesma escala da imagem (0..1 ou 0..255).
+ */
+export function borderMedian(img: GrayImage): number {
+  const { width: W, height: H, data } = img;
+  if (W === 0 || H === 0) return NaN;
+  const b = Math.max(1, Math.floor(0.04 * Math.min(W, H) + 0.5));
+  const band: number[] = [];
+  for (let y = 0; y < H; y++) {
+    const edgeRow = y < b || y >= H - b;
+    for (let x = 0; x < W; x++) if (edgeRow || x < b || x >= W - b) band.push(data[y * W + x]);
+  }
+  return percentile(Float32Array.from(band), 50);
+}
+
+/**
+ * Tom → 0 (papel) a 1 (preto). O preto é o 1% mais escuro. O papel são os 10% mais claros; mas, se o
+ * FUNDO da imagem é escuro, o papel é o fundo: fundo escuro não é sombra, e hachurá-lo cobriria a folha.
+ */
 export function toneDarkness(tone: GrayImage): Float32Array {
   const lo = percentile(tone.data, 1);
-  const hi = percentile(tone.data, 90);
-  const span = Math.max(hi - lo, 1e-6);
+  const background = borderMedian(tone);
+  const hi = background < DARK_BACKGROUND ? background : percentile(tone.data, 90);
+  // a escala nunca é menor que MIN_TONE_SPAN: numa imagem em que nada é bem mais escuro que o papel
+  // (fundo preto, desenho pálido), o grão do fundo não pode virar "sombra"
+  const span = Math.max(hi - lo, MIN_TONE_SPAN);
   const out = new Float32Array(tone.data.length);
   for (let i = 0; i < out.length; i++) {
     const d = (hi - tone.data[i]) / span;

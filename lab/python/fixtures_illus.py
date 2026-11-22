@@ -80,10 +80,10 @@ def fx_line_art(u8: np.ndarray) -> int:
     rgb = u8.astype(np.float32) / 255.0
     cases = []
 
-    def add(name, detail, edge=0.5, mono=False):
-        src = rgb
+    def add(name, detail, edge=0.5, mono=False, negative=False):
+        src = 1.0 - rgb if negative else rgb
         if mono:
-            lum = illus.luma(rgb)
+            lum = illus.luma(src)
             src = np.stack([lum, lum, lum], -1)
         p = illus.params_for(detail, edge)
         r = illus.line_art(src, mono=mono, **p)
@@ -95,7 +95,7 @@ def fx_line_art(u8: np.ndarray) -> int:
                 "tone": enc(r["tone"]), "tx": enc(r["tx"]), "ty": enc(r["ty"]), "coherent": enc(coherent(chans, sigma_c)),
                 "raw": enc(r["raw"]), "resp": enc(r["resp"]), "lo": r["lo"], "hi": r["hi"],
                 "keep": enc(r["keep"]), "v": enc(r["v"]), "gray": enc(r["gray"]),
-                "dark": enc(illus.tone_darkness(r["tone"]))}
+                "background": illus.border_median(r["tone"]), "dark": enc(illus.tone_darkness(r["tone"]))}
         cases.append(case)
         print(f"    {name}: linha {r['keep'].mean() * 100:.1f}% dos px, resposta max {r['resp'].max():.3f}, "
               f"limiares {r['lo']:.4f} / {r['hi']:.4f}")
@@ -105,6 +105,7 @@ def fx_line_art(u8: np.ndarray) -> int:
     add("cena detalhe 0.25 (limpo)", 0.25)
     add("cena detalhe 1 com linhas fracas (edge 0.9)", 1.0, 0.9)
     add("cena em cinza (mono) detalhe 0.5", 0.5, mono=True)
+    add("cena em negativo (fundo escuro) detalhe 0.75", 0.75, negative=True)
     return write("line_art.json", cases,
                  "illus.line_art(rgb, **illus.params_for(detail, edge)) etapa por etapa + illus.tone_darkness(tone); "
                  "r, g, b em 0..1 (float32)")

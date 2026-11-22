@@ -3,7 +3,7 @@ import type { Mat2D } from "../../core/geometry/mat2d";
 import type { Geometry } from "../../core/geometry/path";
 import { penOf } from "../../core/machine";
 import type { Store } from "../../core/store";
-import { colorfulness } from "../../core/trace/illus";
+import { borderMedian, colorfulness, DARK_BACKGROUND } from "../../core/trace/illus";
 import { DEFAULT_TRACE, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
 import { CancelledError, loadImage, Tracer, type LoadedImage } from "../../trace/client";
 import { append, h, toast } from "../dom";
@@ -21,12 +21,21 @@ const COLORFUL = 0.03;
 
 /** O nome de cada tipo de desenho, como aparece nos botões. */
 const MODE_NAME: Record<TraceMode, string> = { line: "Traço", ink: "Preto e branco", illus: "Ilustração", photo: "Foto" };
+/** Para que serve cada tipo, em uma linha: é o que a pessoa lê para escolher, antes de qualquer cálculo. */
+const MODE_FOR: Record<TraceMode, string> = {
+  line: "Desenho que já é de linhas: contorno, planta, lápis. Cada linha vira um traço da caneta.",
+  ink: "Nanquim, gravura, mangá, logotipo cheio. Traço fino em linha única; área preta com contorno e hachura.",
+  illus: "Pintura, desenho colorido, imagem com textura. Ficam os contornos das formas; o escuro pode ganhar hachura.",
+  photo: "Fotografia. Não tem linhas: o claro e o escuro viram hachura cruzada.",
+};
+const MODES: readonly TraceMode[] = ["line", "ink", "illus", "photo"];
 
 function loadPrefs(): Partial<Settings> {
   try {
     const d = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Record<string, unknown>;
     const out: Record<string, unknown> = {};
-    for (const [k, def] of Object.entries(DEFAULT_TRACE)) if (typeof d[k] === typeof def && k !== "mmPerPx" && k !== "penMm" && k !== "scale") out[k] = d[k];
+    // tamanho, caneta e "fundo escuro" são de cada imagem: não são lembrados de uma para a outra
+    for (const [k, def] of Object.entries(DEFAULT_TRACE)) if (typeof d[k] === typeof def && k !== "mmPerPx" && k !== "penMm" && k !== "scale" && k !== "invert") out[k] = d[k];
     return out as Partial<Settings>;
   } catch {
     return {};
@@ -59,8 +68,9 @@ export function openTraceDialog(store: Store, file: File): void {
   const zone = profile.drawZone;
   // a caneta dos desenhos novos: é ela que decide o que é "fino" e o que é "área cheia"
   let pen = penOf(profile, undefined);
-  const prefs = loadPrefs();
-  const s: Settings = { ...DEFAULT_TRACE, ...prefs, penMm: pen.widthMm };
+  const s: Settings = { ...DEFAULT_TRACE, ...loadPrefs(), penMm: pen.widthMm };
+  // o traçado só começa depois que a pessoa escolhe o tipo de desenho: calcular no tipo errado é tempo jogado fora
+  let started = false;
   let img: LoadedImage | undefined;
   let result: TraceResult | undefined;
   let resultPath: Path2D | undefined;
@@ -80,7 +90,9 @@ export function openTraceDialog(store: Store, file: File): void {
   const viewButtons = (["result", "both", "original"] as const).map((v) =>
     h("button", { onclick: () => setView(v) }, v === "result" ? "Resultado" : v === "both" ? "Os dois" : "Original"),
   );
-  const stage = h("div", { class: "trace-stage" }, canvas, placeholder, h("div", { class: "trace-view" }, ...viewButtons), busy);
+  const viewBar = h("div", { class: "trace-view", hidden: true }, ...viewButtons);
+  const ask = h("div", { class: "trace-busy", hidden: true }, h("span", null, "Escolha o tipo de desenho, à direita. O cálculo só começa depois da escolha."));
+  const stage = h("div", { class: "trace-stage" }, canvas, placeholder, viewBar, ask, busy);
 
   const setView = (v: View) => {
     view = v;
@@ -205,8 +217,15 @@ export function openTraceDialog(store: Store, file: File): void {
   // imagem colorida num tipo feito para desenho de traço: avisa que existe um tipo próprio
   let colorful = false;
   const colorNote = h("p", { class: "notice", hidden: true });
+  // fundo escuro (planta azul, cena noturna): "A imagem tem fundo escuro" já vem marcado nos tipos que precisam,
+  // até a pessoa mexer na caixinha; daí em diante vale a escolha dela
+  let darkBackground = false;
+  let invertTouched = false;
+  const darkNote = h("p", { class: "hint", hidden: true });
+  const invertBoxes: HTMLInputElement[] = [];
 
   const schedule = (delay = 650) => {
+    if (!started) return;
     fresh = false;
     placeBtn.disabled = true;
     draw();
@@ -265,10 +284,47 @@ export function openTraceDialog(store: Store, file: File): void {
     () => s.mode,
     (v) => {
       s.mode = v;
+      defaultInvert();
       renderMode();
       schedule(150);
     },
   );
+  /** A caixinha "A imagem tem fundo escuro" (aparece em três painéis; as três andam juntas). */
+  const invertCheck = () => {
+    const cb = h("input", { type: "checkbox", checked: s.invert });
+    invertBoxes.push(cb);
+    cb.addEventListener("change", () => {
+      s.invert = cb.checked;
+      invertTouched = true;
+      invertBoxes.forEach((o) => (o.checked = s.invert));
+      renderMode();
+      schedule(150);
+    });
+    return h("label", { class: "check", title: "Para desenho CLARO em fundo escuro (planta azul, giz em quadro-negro): o programa trabalha com o negativo da imagem" }, cb, "A imagem tem fundo escuro");
+  };
+  /** Fundo escuro: os tipos de traço e a Foto precisam do negativo; a Ilustração não (ela deixa o fundo em branco). */
+  function defaultInvert() {
+    if (!invertTouched) s.invert = darkBackground && s.mode !== "illus";
+    invertBoxes.forEach((o) => (o.checked = s.invert));
+  }
+  /** Primeira escolha do tipo: é aqui que o traçado começa. */
+  const choose = (m: TraceMode) => {
+    if (!img || started) return;
+    started = true;
+    s.mode = m;
+    mode.sync();
+    defaultInvert();
+    renderMode();
+    schedule(0);
+  };
+  const choices = MODES.map((m) => h("button", { class: "choice", disabled: true, onclick: () => choose(m) }, h("strong", null, MODE_NAME[m]), h("span", null, MODE_FOR[m])));
+  const chooser = h(
+    "div",
+    { class: "panel-section" },
+    h("p", { class: "hint" }, "Escolha como esta imagem vai virar traço. O cálculo só começa depois da escolha, e dá para trocar de tipo a qualquer momento."),
+    ...choices,
+  );
+  const resultHead = h("h3", null, "Resultado");
   const orient = seg<boolean>(
     [
       [false, "Em pé"],
@@ -320,11 +376,24 @@ export function openTraceDialog(store: Store, file: File): void {
           : s.mode === "illus"
             ? "Para pintura, desenho colorido ou imagem com textura. O programa primeiro redesenha a imagem (a textura some, ficam os contornos das formas) e só depois traça. As partes escuras podem ganhar hachura."
             : "Foto não tem linhas: o tom vira hachura. Quanto mais escuro, mais direções se cruzam. É uma interpretação, não uma cópia.";
-    fillBox.hidden = s.mode !== "ink";
-    illusBox.hidden = s.mode !== "illus";
-    photoBox.hidden = s.mode !== "photo";
-    strokeBox.hidden = s.mode === "photo" || s.mode === "illus";
-    const wrongType = colorful && (s.mode === "line" || s.mode === "ink");
+    // antes da escolha só aparecem os quatro tipos (e o tamanho no papel); depois, o tipo vira a fileira de botões
+    chooser.hidden = started;
+    ask.hidden = started || !img;
+    mode.el.hidden = modeHint.hidden = resultHead.hidden = stats.hidden = !started;
+    fillBox.hidden = !started || s.mode !== "ink";
+    illusBox.hidden = !started || s.mode !== "illus";
+    photoBox.hidden = !started || s.mode !== "photo";
+    strokeBox.hidden = !started || s.mode === "photo" || s.mode === "illus";
+    darkNote.hidden = !started || !darkBackground;
+    if (!darkNote.hidden)
+      darkNote.textContent =
+        s.mode === "illus"
+          ? "O fundo desta imagem é escuro. A Ilustração deixa o fundo em branco. Se as LINHAS do desenho forem claras (planta azul), marque “A imagem tem fundo escuro”, mais abaixo."
+          : s.invert
+            ? "O fundo desta imagem é escuro: “A imagem tem fundo escuro” já está marcado (o programa trabalha com o negativo)."
+            : "O fundo desta imagem é escuro, e “A imagem tem fundo escuro” está desmarcado: o fundo inteiro vai ser tratado como tinta.";
+    // uma planta azul também é "colorida", mas é desenho de linhas: o aviso só vale para fundo claro
+    const wrongType = started && colorful && !darkBackground && (s.mode === "line" || s.mode === "ink");
     colorNote.hidden = !wrongType;
     if (wrongType) colorNote.textContent = `Esta imagem é colorida. O tipo ${MODE_NAME[s.mode]} foi feito para desenho que já é de linhas: numa pintura, mancha vira rabisco. Experimente o tipo ${MODE_NAME.illus}.`;
   }
@@ -358,7 +427,7 @@ export function openTraceDialog(store: Store, file: File): void {
     range("Suavizar os tons", 0.3, 4, 0.1, () => s.photoSmoothMm, (v) => (s.photoSmoothMm = v), mmFmt, "Maior = manchas mais lisas e menos detalhe"),
     range("Claro ou escuro", -100, 100, 5, () => s.ink, (v) => (s.ink = v), (v) => (v === 0 ? "normal" : v > 0 ? `+${v}` : String(v)), "Para a direita, mais hachura"),
     range("Tracinho mínimo", 0.5, 10, 0.5, () => s.hatchMinMm, (v) => (s.hatchMinMm = v), mmFmt, "Linhas mais curtas que isto não valem a descida da caneta"),
-    check("A imagem tem fundo escuro", () => s.invert, (v) => (s.invert = v)),
+    invertCheck(),
   ]);
   const mmShort = (v: number) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1 })} mm`;
   append(illusBox, [
@@ -372,13 +441,15 @@ export function openTraceDialog(store: Store, file: File): void {
     range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), (v) => `${v}°`),
     range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct),
     range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade"),
-    check("A imagem tem fundo escuro", () => s.invert, (v) => (s.invert = v)),
+    invertCheck(),
   ]);
   append(side, [
     h("h3", null, "Tipo de desenho"),
+    chooser,
     mode.el,
     modeHint,
     colorNote,
+    darkNote,
     h("h3", null, "Tamanho no papel"),
     orient.el,
     h("label", { class: "field" }, "Lado maior (mm)", sizeInput),
@@ -388,7 +459,7 @@ export function openTraceDialog(store: Store, file: File): void {
     illusBox,
     photoBox,
     strokeBox,
-    h("h3", null, "Resultado"),
+    resultHead,
     stats,
     budget,
   ]);
@@ -402,12 +473,12 @@ export function openTraceDialog(store: Store, file: File): void {
     range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct),
     range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade"),
     check("Manter os pontinhos soltos", () => s.dots, (v) => (s.dots = v), "Cada pontinho é uma descida da caneta. Num céu estrelado são centenas: tirar poupa o servo."),
-    check("A imagem tem fundo escuro", () => s.invert, (v) => (s.invert = v)),
+    invertCheck(),
   ]);
 
   // ------------------------------------------------------------------ traçar
   async function run() {
-    if (!img) return;
+    if (!img || !started) return;
     timer = undefined;
     busy.hidden = false;
     busyFill.style.width = "2%";
@@ -428,10 +499,17 @@ export function openTraceDialog(store: Store, file: File): void {
         },
         img.rgba,
       );
+      const first = !result;
       result = r;
       resultPath = geometryPath(r.geometry);
       fresh = true;
       busy.hidden = true;
+      if (first) {
+        // até aqui a tela mostrava a imagem original; agora há um resultado para ver e comparar
+        viewBar.hidden = false;
+        view = "result";
+        viewButtons.forEach((b, i) => b.classList.toggle("active", i === 0));
+      }
       placeBtn.disabled = r.geometry.subpaths.length === 0;
       const st = r.stats;
       const lengthMm = st.lengthPx * s.mmPerPx;
@@ -503,7 +581,7 @@ export function openTraceDialog(store: Store, file: File): void {
     h("footer", { class: "settings-foot" }, h("span", { class: "hint" }, "Role o mouse para aproximar, arraste para mover, dois cliques para ver tudo."), h("span", { class: "spacer" }), h("button", { onclick: close }, "Cancelar"), placeBtn),
   ]);
   renderMode();
-  setView("result");
+  setView("original");
   dialog.showModal();
 
   loadImage(file)
@@ -517,16 +595,14 @@ export function openTraceDialog(store: Store, file: File): void {
       applySize();
       renderSize();
       if (loaded.reducedFrom) toast(`A imagem era grande (${loaded.reducedFrom.width} × ${loaded.reducedFrom.height} px) e foi reduzida para ${loaded.gray.width} × ${loaded.gray.height} px. O traçado continua fiel.`, "info", 8000);
-      // imagem colorida: quem nunca escolheu um tipo já começa no certo; quem já escolheu fica com o seu, e a tela avisa
+      // nada é calculado ainda: a pessoa vê a imagem, escolhe o tipo e só então o traçado começa
       colorful = colorfulness(loaded.rgba) > COLORFUL;
-      if (colorful && prefs.mode === undefined) {
-        s.mode = "illus";
-        mode.sync();
-      }
+      darkBackground = borderMedian(loaded.gray) / 255 < DARK_BACKGROUND;
+      choices.forEach((b) => (b.disabled = false));
       renderMode();
       fit();
       draw();
-      void run();
+      choices[0].focus();
     })
     .catch((e: Error) => {
       toast(e.message, "error", 9000);

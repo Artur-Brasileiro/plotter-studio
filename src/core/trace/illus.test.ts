@@ -9,8 +9,10 @@ import { countDiff, loadCases, maxAbsDiff } from "./__fixtures__/raster/load";
 import {
   acrossDog,
   alongFlow,
+  borderMedian,
   boxBlur,
   colorfulness,
+  DARK_BACKGROUND,
   edgeFlow,
   guidedFilter,
   hysteresis,
@@ -54,6 +56,7 @@ interface LineArtCase {
   keep: Mask;
   v: GrayImage;
   gray: GrayImage;
+  background: number;
   dark: GrayImage;
 }
 interface ResampleCase {
@@ -414,6 +417,74 @@ describe("tons para a hachura = illus.tone_darkness", () => {
   it("imagem toda de um tom só: tudo papel, nada de NaN", () => {
     const d = toneDarkness(gray(8, 8, new Float32Array(64).fill(0.4)));
     expect([...d].every((v) => v === 0)).toBe(true);
+  });
+
+  it("os fixtures têm cena de fundo claro e cena de fundo escuro", () => {
+    expect(cases.some((c) => c.background < DARK_BACKGROUND)).toBe(true);
+    expect(cases.some((c) => c.background >= DARK_BACKGROUND)).toBe(true);
+  });
+
+  it("fundo escuro não é sombra: o fundo é o papel, e só o que é mais escuro que ele conta", () => {
+    // fundo 0,2; um disco claro (0,8) e um retângulo quase preto (0,03)
+    const W = 60, H = 40;
+    const d = new Float32Array(W * H).fill(0.2);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        if (Math.hypot(x - 20, y - 20) < 9) d[y * W + x] = 0.8;
+        if (x >= 38 && x < 50 && y >= 12 && y < 28) d[y * W + x] = 0.03;
+      }
+    const dark = toneDarkness(gray(W, H, d));
+    expect(dark[2 * W + 2]).toBe(0); // fundo
+    expect(dark[20 * W + 20]).toBe(0); // figura clara
+    expect(dark[20 * W + 44]).toBe(1); // o que é mais escuro que o fundo
+  });
+
+  it("imagem em que nada é bem mais escuro que o papel: o grão do fundo não vira sombra", () => {
+    // fundo escuro com grão de ±0,01 e uma figura clara; e papel claro com o mesmo grão
+    for (const base of [0.1, 0.9]) {
+      const W = 40, H = 40;
+      const d = new Float32Array(W * H);
+      let seed = 3;
+      const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296 - 0.5) * 0.02;
+      for (let i = 0; i < d.length; i++) d[i] = base + rnd();
+      if (base < 0.5) for (let y = 14; y < 26; y++) for (let x = 14; x < 26; x++) d[y * W + x] = 0.7;
+      expect(Math.max(...toneDarkness(gray(W, H, d)))).toBeLessThan(0.25);
+    }
+  });
+
+  it("fundo claro: continua valendo 'papel = os 10% mais claros'", () => {
+    const W = 60, H = 40;
+    const d = new Float32Array(W * H).fill(0.9);
+    for (let y = 10; y < 30; y++) for (let x = 10; x < 50; x++) d[y * W + x] = 0.5;
+    for (let y = 16; y < 24; y++) for (let x = 20; x < 40; x++) d[y * W + x] = 0.1;
+    const dark = toneDarkness(gray(W, H, d));
+    expect(dark[2 * W + 2]).toBe(0);
+    expect(dark[12 * W + 12]).toBeCloseTo(0.5, 6);
+    expect(dark[20 * W + 30]).toBe(1);
+  });
+});
+
+describe("borderMedian = illus.border_median (o tom do fundo)", () => {
+  it.each(cases)("$name", (c) => {
+    expect(borderMedian(c.tone)).toBeCloseTo(c.background, 6);
+  });
+
+  it("olha só a faixa da borda: o miolo não muda a resposta", () => {
+    const W = 50, H = 50; // faixa de 2 px (4% de 50)
+    const d = new Float32Array(W * H).fill(0.15);
+    for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) d[y * W + x] = 0.95;
+    expect(borderMedian(gray(W, H, d))).toBeCloseTo(0.15, 6);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) d[y * W + x] = x < 2 || y < 2 || x >= W - 2 || y >= H - 2 ? 0.95 : 0.15;
+    expect(borderMedian(gray(W, H, d))).toBeCloseTo(0.95, 6);
+  });
+
+  it("imagem minúscula: a faixa tem pelo menos 1 px e nunca passa da imagem", () => {
+    expect(borderMedian(gray(1, 1, new Float32Array([0.3])))).toBeCloseTo(0.3, 6);
+    expect(borderMedian(gray(3, 2, new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])))).toBeCloseTo(0.35, 6);
+  });
+
+  it("serve para a imagem em 0..255 também (a tela usa assim)", () => {
+    expect(borderMedian(gray(4, 4, new Float32Array(16).fill(51))) / 255).toBeCloseTo(0.2, 6);
   });
 });
 

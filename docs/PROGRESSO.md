@@ -44,6 +44,41 @@ Limites conhecidos do tipo Ilustração:
 - **Sombras em folha grande custam mais de uma hora.** No zero ficam só as linhas.
 - **Nada disso rodou na máquina.** O teste é o C5b de [TESTES.md](TESTES.md).
 
+## Acrescentado em 22/11/2026, à tarde: escolher o tipo antes, fundo escuro, e seis imagens de teste
+
+O Artur aprovou o resultado do robô e trouxe seis imagens de estilos diferentes. Pediu também uma mudança na tela:
+ela não deve começar a calcular sozinha no tipo que estiver marcado.
+
+- **O tipo é escolhido antes de qualquer cálculo.** A tela de vetorizar abre mostrando a imagem e quatro cartões
+  (Traço, Preto e branco, Ilustração, Foto), cada um dizendo para que serve. O traçado só começa no clique. Depois
+  dá para trocar de tipo na fileira de botões, como antes. A tela não escolhe nem sugere um tipo sozinha (medi cor,
+  fundo e quantidade de figura nas onze imagens de teste e nenhuma conta simples acerta todas).
+- **Fundo escuro é detectado** (pela borda da imagem). Nos tipos Traço, Preto e branco e Foto, "A imagem tem fundo
+  escuro" já vem marcado, com um aviso. Na Ilustração não vem: ela não precisa.
+- **"A imagem tem fundo escuro" não é mais lembrado** de uma imagem para a outra (era uma armadilha: a imagem
+  seguinte, de fundo branco, saía em negativo).
+- **Ilustração com fundo escuro:** as sombras tratam o fundo como papel. Antes a hachura cobria o fundo inteiro.
+- O aviso "esta imagem é colorida" só aparece em imagem de fundo claro (uma planta azul também é "colorida").
+
+As seis imagens, no tamanho que a tela escolhe (folha inteira), caneta 0,4, com o tempo do planejador de verdade.
+Todas passam nas regras.
+
+| Imagem | O que funcionou | Tempo | Observação |
+|---|---|---|---|
+| Planta azul de um carro (linhas brancas) | Traço + fundo escuro | 1 h 09 min | Excelente, texto legível. Sem marcar fundo escuro saía lixo; agora vem marcado |
+| Personagem de cores chapadas em fundo verde-escuro | Ilustração | 37 min (20 min sem sombras) | Contorno limpo |
+| Estudo de castelo, gravura colorida cheia de detalhe e texto | Ilustração com Detalhe 100% e Linhas fracas 80% | 1 h 04 min (só linhas) | No padrão some detalhe demais. O Traço é mais fiel e leva 3 h 15 min. Texto miúdo não sai em nenhum |
+| Retrato, fotografia em preto e branco | Foto | 3 h 18 min | Reconhecível. Com hachura de 1,4 mm e 4 direções fica bem melhor, mas são 6 h |
+| Dragão, render escuro e cheio de escamas | nenhum ficou bom | 57 min na Foto + fundo escuro | Imagem quase toda escura e de pouco contraste: sai um "negativo" fraco |
+| Página de mangá (nanquim com hachura) | Preto e branco, ou Traço | 5 h 28 min, ou 2 h 09 min | O Preto e branco é fiel e pesado demais; o Traço perde o preto chapado do título |
+
+O que esses testes mostram que ainda falta:
+
+- **Imagem escura e de pouco contraste** (o dragão) não tem tipo que resolva.
+- **Foto é lenta** para ficar boa: hachura fina em folha grande passa de 5 horas.
+- **Mangá no Preto e branco é pesado**: milhares de tracinhos de hachura do original viram descidas da caneta.
+- **Ilustração no padrão perde detalhe fino** em gravura detalhada; é preciso subir o Detalhe e as Linhas fracas.
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -66,7 +101,7 @@ Limites conhecidos do tipo Ilustração:
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 | 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
 
-Testes automáticos: 1.437 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.462 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

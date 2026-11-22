@@ -361,3 +361,8 @@ dialog.sheet.trace { width: min(1280px, 96vw); height: min(860px, 94vh); }
   .trace-main, .settings-main { grid-template-columns: 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
 }
+
+/* retomada: discreta, só aparece para quem precisa */
+.resume { margin-top: 4px; }
+.resume .row { align-items: flex-end; }
+

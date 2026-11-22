@@ -1,7 +1,22 @@
+import { createDrawing, type Drawing } from "../document";
+import { IDENTITY } from "../geometry/mat2d";
+import type { Geometry } from "../geometry/path";
 import { polylineLength } from "../geometry/simplify";
 import { DEFAULT_PROFILE, type MachineProfile } from "../machine";
 import { scheduleJob } from "./schedule";
 import type { JobPlan, PlannedStroke } from "./types";
+
+/** Só para testes: desenho feito de polilinhas dadas em mm da MÁQUINA (a cena tem o Y para baixo). */
+export function machineDrawing(id: string, polys: [number, number][][], penId?: string, workHeight = DEFAULT_PROFILE.workArea.height): Drawing {
+  const geometry: Geometry = {
+    subpaths: polys.map((pts) => ({
+      start: { x: pts[0][0], y: workHeight - pts[0][1] },
+      segments: pts.slice(1).map(([x, y]) => ({ kind: "line" as const, to: { x, y: workHeight - y } })),
+      closed: false,
+    })),
+  };
+  return createDrawing(id, `${id}.svg`, geometry, IDENTITY, penId);
+}
 
 /** Só para testes: monta traços e planos sem passar pelo documento. */
 export function stroke(pts: [number, number][], o: { joined?: boolean; relift?: boolean; feeds?: number[]; closed?: boolean } = {}): PlannedStroke {

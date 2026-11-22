@@ -1,5 +1,5 @@
 import { auditGcode, auditOptionsOf, type AuditReport } from "../core/job/audit";
-import { generateGcode, type GcodeProgram } from "../core/job/gcode";
+import { generateGcode, type GcodeOptions, type GcodeProgram } from "../core/job/gcode";
 import { planLayers } from "../core/job/pipeline";
 import type { JobPlan } from "../core/job/types";
 import { penOf } from "../core/machine";
@@ -81,10 +81,19 @@ export class Planner {
     return this.drawingNames(plan).join(" + ");
   }
 
-  /** Gera o G-code de um plano (inteiro ou uma parte). Lança se houver desenho fora da área. */
-  program(part?: number, plan: JobPlan | undefined = this.plan): GcodeProgram | undefined {
+  /**
+   * Gera o G-code de um plano: inteiro, uma parte (número ou `{ part }`) ou a retomada a partir de uma
+   * descida (`{ fromDescent }`). Lança se houver desenho fora da área.
+   */
+  program(what?: number | GcodeOptions, plan: JobPlan | undefined = this.plan): GcodeProgram | undefined {
     if (!plan) return undefined;
-    return generateGcode(plan, this.store.state.profile, { fileName: this.jobName(plan), date: new Date(), job: this.store.state.job }, { part });
+    const opts: GcodeOptions = typeof what === "number" ? { part: what } : (what ?? {});
+    return generateGcode(plan, this.store.state.profile, { fileName: this.jobName(plan), date: new Date(), job: this.store.state.job }, opts);
+  }
+
+  /** Confere um G-code feito deste plano (uma parte, uma retomada) com as mesmas regras do arquivo inteiro. */
+  audit(program: GcodeProgram, plan: JobPlan | undefined = this.plan): AuditReport {
+    return auditGcode(program.lines.map((l) => l.text), this.store.state.profile, plan ? auditOptionsOf(plan) : {});
   }
 
   /** Plano + G-code + auditoria (padrão: da camada ativa). */

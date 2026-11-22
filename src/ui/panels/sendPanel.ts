@@ -3,6 +3,7 @@ import { isJobActive, type ControllerSnapshot, type JobState } from "../../core/
 import { RT } from "../../core/grbl/protocol";
 import { bboxOfPoints } from "../../core/geometry/path";
 import type { GcodeProgram } from "../../core/job/gcode";
+import { parseWhat, planSignature, resumeDescent, sendSpan, type SendWhat } from "../../core/job/resume";
 import type { JobPlan } from "../../core/job/types";
 import type { Store } from "../../core/store";
 import { addRun, loadRuns, type RunRecord } from "../../storage/runsStore";
@@ -23,11 +24,37 @@ interface ActiveJob {
   /** tempo estimado (s) da posição atual, para a barra e o "restante" */
   estAt: number;
   recorded: boolean;
-  /** O envio vai até o fim da camada (tudo, ou a última parte): ao terminar, a próxima camada é a vez */
+  /** O envio vai até o fim da camada (tudo, a última parte ou uma retomada): ao terminar, a próxima camada é a vez */
   readonly wholeLayer: boolean;
+  /** Último traço em que a máquina esteve (índice em plan.strokes), para saber de onde retomar */
+  lastStroke: number;
 }
 
 const RESULT_TEXT: Record<RunRecord["result"], string> = { finished: "concluído", stopped: "parado", failed: "falhou" };
+
+interface ResumePoint {
+  readonly sig: string;
+  readonly descent: number;
+}
+const RESUME_KEY = "plotter-studio.resume.v1";
+
+function loadResume(): ResumePoint | undefined {
+  try {
+    const r = JSON.parse(localStorage.getItem(RESUME_KEY) ?? "null") as ResumePoint | null;
+    return r && typeof r.sig === "string" && Number.isInteger(r.descent) && r.descent >= 0 ? r : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveResume(r: ResumePoint | undefined): void {
+  try {
+    if (r) localStorage.setItem(RESUME_KEY, JSON.stringify(r));
+    else localStorage.removeItem(RESUME_KEY);
+  } catch {
+    /* sem armazenamento: a retomada só vale até fechar a página */
+  }
+}
 
 /** Retângulo do desenho em mm da máquina (para o contorno). */
 export function planBBox(plan: JobPlan) {
@@ -50,6 +77,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   let wake: WakeLockSentinel | undefined;
   let lastState: JobState = "none";
   let lastErrKey = "";
+  let resumePoint = loadResume();
 
   const frameBtn = h("button", { title: "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." }, "▭ Contorno");
   const sendBtn = h("button", { class: "primary" }, "▶ Enviar desenho");
@@ -68,6 +96,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   );
   const partSelect = h("select", { "aria-label": "O que enviar" });
   const partRow = h("label", { class: "field" }, "O que enviar", partSelect);
+  const resumeHint = h("p", { class: "hint", hidden: true });
   const reasons = h("ul", { class: "reasons" });
   const bar = h("div", { class: "progress-fill" });
   const progress = h("div", { class: "progress" }, bar);
@@ -86,6 +115,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     layerPicker,
     nextBox,
     partRow,
+    resumeHint,
     h("div", { class: "row" }, frameBtn, sendBtn, pauseBtn, stopBtn),
     reasons,
     progress,
@@ -121,27 +151,51 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     void machineAction(() => c.frame(planBBox(plan)));
   });
 
-  /** Início e fim (s, no tempo do plano inteiro) do que vai ser enviado: tudo, ou uma parte. */
-  function span(plan: JobPlan, part: number | undefined): { t0: number; t1: number } {
-    const total = plan.stats.estimate.totalS;
-    if (part === undefined) return { t0: 0, t1: total };
-    const first = plan.descents.find((d) => d.part === part);
-    const next = plan.descents.find((d) => d.part === part + 1);
-    return { t0: first?.tDownS ?? 0, t1: next?.tDownS ?? total };
-  }
+  /** O ponto de retomada guardado, se ele ainda vale para este plano. */
+  const resumeFor = (plan: JobPlan | undefined) => (plan && resumePoint && resumePoint.sig === planSignature(plan) && resumePoint.descent < plan.descents.length ? resumePoint : undefined);
 
-  function renderParts(plan: JobPlan | undefined) {
+  function renderParts(plan: JobPlan | undefined, select?: string) {
     const total = plan?.stats.parts ?? 1;
-    partRow.hidden = total <= 1;
-    const prev = partSelect.value;
+    const checkpoints = plan ? plan.descents.map((d, i) => ({ d, i })).filter((x) => x.d.checkpoint !== undefined) : [];
+    const rp = resumeFor(plan);
+    partRow.hidden = total <= 1 && checkpoints.length === 0 && !rp;
+    const prev = select ?? partSelect.value;
+    const dur = (what: SendWhat) => {
+      const s = sendSpan(plan!, what);
+      return fmtDuration(s.t1 - s.t0);
+    };
     clear(partSelect);
-    partSelect.append(h("option", { value: "" }, `Desenho inteiro (~${fmtDuration(plan?.stats.estimate.totalS ?? 0)})`));
-    for (let p = 0; plan && p < total; p++) {
-      const s = span(plan, p);
-      partSelect.append(h("option", { value: String(p) }, `Parte ${p + 1} de ${total} (~${fmtDuration(s.t1 - s.t0)})`));
+    const whole = (plan?.layer?.count ?? 1) > 1 ? "Camada inteira" : "Desenho inteiro";
+    partSelect.append(h("option", { value: "" }, `${whole} (~${fmtDuration(plan?.stats.estimate.totalS ?? 0)})`));
+    if (plan && rp) {
+      partSelect.append(h("option", { value: `r${rp.descent}` }, `Retomar de onde parou: descida ${rp.descent + 1} de ${plan.descents.length} (~${dur({ kind: "resume", from: rp.descent })})`));
+    }
+    if (plan && total > 1) {
+      const g = h("optgroup", { label: "Uma parte de cada vez" });
+      for (let p = 0; p < total; p++) g.append(h("option", { value: `p${p}` }, `Parte ${p + 1} de ${total} (~${dur({ kind: "part", part: p })})`));
+      partSelect.append(g);
+    }
+    if (plan && checkpoints.length) {
+      const g = h("optgroup", { label: "Retomar de um checkpoint até o fim" });
+      for (const { d, i } of checkpoints) {
+        if (rp?.descent === i) continue;
+        g.append(h("option", { value: `r${i}` }, `Do checkpoint ${d.checkpoint} (~${d.checkpointMin ?? 0} min) em diante (~${dur({ kind: "resume", from: i })})`));
+      }
+      partSelect.append(g);
     }
     partSelect.value = [...partSelect.options].some((o) => o.value === prev) ? prev : "";
+    renderResumeHint();
   }
+
+  function renderResumeHint() {
+    const what = parseWhat(partSelect.value);
+    resumeHint.hidden = what.kind !== "resume" || partRow.hidden;
+    resumeHint.textContent =
+      "A retomada refaz o aquecimento do servo" +
+      (planner.plan?.layer?.registration ? ", desenha de novo a cruz de registro (tem que cair em cima da que já está no papel: se não cair, pare)" : "") +
+      " e continua daí até o fim. Não mexa no papel. Se a máquina perdeu a posição, faça o Home antes.";
+  }
+  partSelect.addEventListener("change", renderResumeHint);
 
   sendBtn.addEventListener("click", () => {
     const c = session.controller;
@@ -151,17 +205,20 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     // arquivo que quebra regra não vai para a máquina (docs/REGRAS_GCODE.md)
     const review = planner.review();
     if (!review?.audit?.ok) return toast("A conferência reprovou este G-code. Veja o passo 2.", "error", 9000);
-    const part = partSelect.value === "" ? undefined : Number(partSelect.value);
+    const what = parseWhat(partSelect.value);
     let program: GcodeProgram;
     try {
-      program = part === undefined ? review.program! : planner.program(part)!;
+      program = what.kind === "all" ? review.program! : planner.program(what.kind === "part" ? { part: what.part } : { fromDescent: what.from }, plan)!;
+      // uma parte ou uma retomada é outro arquivo: passa pela mesma conferência antes de ir
+      if (what.kind !== "all" && !planner.audit(program, plan).ok) return toast("A conferência reprovou este arquivo. Envie a camada inteira ou escolha outro ponto.", "error", 9000);
       c.startJob(program);
     } catch (e) {
       return toast(e instanceof Error ? e.message : String(e), "error", 10000);
     }
     const layer = plan.layer;
     const name = (planner.jobName(plan) || "desenho") + (layer && layer.count > 1 ? ` [${layer.index + 1}/${layer.count} ${layer.penName}]` : "");
-    job = { plan, program, name: part === undefined ? name : `${name} (parte ${part + 1})`, ...span(plan, part), estAt: 0, recorded: false, wholeLayer: part === undefined || part === plan.stats.parts - 1 };
+    const label = what.kind === "part" ? `${name} (parte ${what.part + 1})` : what.kind === "resume" ? `${name} (retomada)` : name;
+    job = { plan, program, name: label, ...sendSpan(plan, what), estAt: 0, recorded: false, wholeLayer: what.kind !== "part" || what.part === plan.stats.parts - 1, lastStroke: -1 };
     nextBox.hidden = true;
     if (player.playing) player.stop();
     overlay.setPlan(plan, store.state.job.speedMode === "fixed");
@@ -218,7 +275,9 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     if (!showing || !job) return;
     const total = job.t1 - job.t0;
     if (isJobActive(j.state)) {
-      const t = overlay.setProgress(progressPoint(job.program, j.currentLine));
+      const at = progressPoint(job.program, j.currentLine);
+      if (at && at.strokeIndex > job.lastStroke) job.lastStroke = at.strokeIndex;
+      const t = overlay.setProgress(at);
       if (t !== undefined) job.estAt = Math.max(job.estAt, Math.min(total, t - job.t0));
     }
     const now = performance.now();
@@ -246,6 +305,18 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     addRun({ at: new Date().toISOString(), name: job.name, estimatedS: est, realS, result: j.state, lines: j.total });
     renderRuns();
     overlay.setProgress(undefined);
+    // parou no meio: guarda de onde retomar (vale enquanto o desenho e os ajustes forem os mesmos)
+    const sig = planSignature(job.plan);
+    if (j.state === "finished") {
+      if (job.wholeLayer && resumePoint?.sig === sig) saveResume((resumePoint = undefined));
+    } else {
+      const from = resumeDescent(job.plan, job.lastStroke);
+      if (from !== undefined) {
+        resumePoint = { sig, descent: from };
+        saveResume(resumePoint);
+        if (planner.plan === job.plan) renderParts(job.plan, `r${from}`);
+      }
+    }
     if (j.state === "finished") {
       const diff = est > 0 ? Math.round(((realS - est) / est) * 100) : 0;
       const done = job.plan.layer;

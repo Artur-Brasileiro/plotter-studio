@@ -17,11 +17,16 @@ const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "_").trim();
  * Nome do arquivo: o do primeiro desenho, sem extensão (ou "plotter"). Com mais de uma caneta, o número
  * da camada e a caneta entram no nome ("senna_1_Fina 0,03.gcode"), na ordem em que são plotadas.
  */
-export function exportFileName(names: readonly string[], part?: { index: number; total: number }, layer?: { index: number; count: number; penName: string }): string {
+export function exportFileName(
+  names: readonly string[],
+  part?: { index: number; total: number },
+  layer?: { index: number; count: number; penName: string },
+  resumeCheckpoint?: number,
+): string {
   const base = safeName((names[0] ?? "plotter").replace(/\.[^.]+$/, "")) || "plotter";
   const more = names.length > 1 ? `_e_mais_${names.length - 1}` : "";
   const pen = layer && layer.count > 1 ? `_${layer.index + 1}_${safeName(layer.penName)}` : "";
-  const suffix = part ? `_parte${part.index + 1}de${part.total}` : "";
+  const suffix = resumeCheckpoint !== undefined ? `_RETOMAR_checkpoint${resumeCheckpoint}` : part ? `_parte${part.index + 1}de${part.total}` : "";
   return `${base}${more}${pen}${suffix}.gcode`;
 }
 
@@ -237,6 +242,25 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
         list,
       );
     }
+    // parou no meio (caneta falhou, faltou luz): continuar do último checkpoint que a máquina completou
+    const cps = plan.descents.map((d, i) => ({ d, i })).filter((x) => x.d.checkpoint !== undefined);
+    if (cps.length) {
+      const sel = h("select", { "aria-label": "Retomar a partir do checkpoint" }, ...cps.map(({ d, i }) => h("option", { value: String(i) }, `Checkpoint ${d.checkpoint} (~${d.checkpointMin ?? 0} min)`)));
+      files.append(
+        h(
+          "details",
+          { class: "resume" },
+          h("summary", null, "Parou no meio? Baixar a retomada"),
+          h(
+            "p",
+            { class: "hint" },
+            `O arquivo de retomada refaz o aquecimento do servo${plan.layer?.registration ? ", desenha de novo a cruz de registro (tem que cair em cima da que já está no papel)" : ""} e continua do checkpoint escolhido até o fim. ` +
+              "Os checkpoints estão no G-code como “; CHECKPOINT n”: escolha o último que a máquina completou. Não mexa no papel.",
+          ),
+          h("div", { class: "row center" }, h("label", { class: "field", style: "flex:1" }, "A partir do", sel), h("button", { onclick: () => doExport(undefined, Number(sel.value)) }, "Baixar")),
+        ),
+      );
+    }
   }
 
   function render(plan: JobPlan | undefined) {
@@ -289,14 +313,17 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     renderFiles(plan, errors.length === 0);
   }
 
-  function doExport(part?: number) {
+  function doExport(part?: number, fromDescent?: number) {
     const plan = planner.fresh();
     const review = planner.review();
     if (!plan || !review?.audit?.ok) return render(plan);
     const names = planner.drawingNames(plan);
     const total = plan.stats.parts;
-    const fileName = exportFileName(names, part === undefined ? undefined : { index: part, total }, plan.layer);
-    const program = part === undefined ? review.program! : planner.program(part)!;
+    const checkpoint = fromDescent === undefined ? undefined : plan.descents[fromDescent]?.checkpoint;
+    const fileName = exportFileName(names, part === undefined ? undefined : { index: part, total }, plan.layer, checkpoint);
+    const program = fromDescent !== undefined ? planner.program({ fromDescent }, plan)! : part === undefined ? review.program! : planner.program(part, plan)!;
+    // uma parte ou uma retomada é outro arquivo: passa pela mesma conferência antes de sair
+    if (program !== review.program && !planner.audit(program, plan).ok) return toast("A conferência reprovou este arquivo. Baixe o G-code inteiro.", "error", 9000);
     download(fileName, program.toText());
     toast(`${fileName} baixado (${program.lines.length.toLocaleString("pt-BR")} linhas).`);
   }

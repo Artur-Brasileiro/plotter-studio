@@ -14,6 +14,13 @@ export interface GcodeMeta {
 export interface GcodeOptions {
   /** Só esta parte (0, 1, 2...) do trabalho, com cabeçalho, aquecimento e rodapé próprios */
   readonly part?: number;
+  /**
+   * RETOMADA: continua desta descida (índice em `plan.descents`) até o fim, depois de uma parada no
+   * meio. Como nos arquivos de retomada que já rodaram na máquina: aquecimento do servo, a cruz de
+   * registro de novo (tem que cair em cima da que já está no papel) e então o desenho continua.
+   * Ignora `part`.
+   */
+  readonly fromDescent?: number;
 }
 
 export interface GcodeLine {
@@ -97,8 +104,15 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   const up = toAsciiComment(pen.upCmd);
   const down = toAsciiComment(pen.downCmd);
   const dynamic = meta.job.speedMode === "dynamic";
-  const descents = opts.part === undefined ? plan.descents : plan.descents.filter((d) => d.part === opts.part);
   const parts = plan.stats.parts;
+  const resume = opts.fromDescent !== undefined && plan.descents.length > 0;
+  const from = resume ? Math.min(Math.max(Math.trunc(opts.fromDescent!), 0), plan.descents.length - 1) : 0;
+  // na retomada, a 1ª cruz de registro é refeita antes de continuar
+  const redoCross = resume && from > 0 && plan.strokes[plan.descents[0].first]?.drawingId === REGISTRATION_ID;
+  const part = resume ? undefined : opts.part;
+  const descents = resume ? [...(redoCross ? [plan.descents[0]] : []), ...plan.descents.slice(from)] : part === undefined ? plan.descents : plan.descents.filter((d) => d.part === part);
+  /** Descidas, no começo do arquivo, que vêm logo depois do aquecimento: sem descanso nem checkpoint */
+  const lead = redoCross ? 2 : 1;
 
   const lift = () => {
     const n = shield.enabled && shield.doubleLift ? 2 : 1;
@@ -112,6 +126,12 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   const mode = dynamic
     ? `dinamico - reta F${profile.feed.straight} / curva F${profile.feed.curve} / fechada F${profile.feed.tightCurve}`
     : `fixo F${meta.job.fixedFeed}`;
+  if (resume) {
+    const at = plan.strokes[plan.descents[from].first]?.points[0];
+    push(`; RETOMADA: continua da descida ${from + 1} de ${plan.descents.length}`);
+    push(`; 1o: aquecimento do servo${redoCross ? "; 2o: cruz EM CIMA da ja feita" : ""}`);
+    if (at) push(`; ${redoCross ? "3o" : "2o"}: continua do traco que comeca em ${xy(at)}`);
+  }
   push(`; Plotter Studio - ${toAsciiComment(meta.fileName).slice(0, 28)} - ${fmtDate(meta.date)}`);
   push(`; modo: ${mode}`);
   const layer = plan.layer;
@@ -127,7 +147,7 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
       push(`; 1o traco: cruz em ${at(r.x1)} - ultimo: cruz em ${at(r.x2)}`);
     }
   }
-  if (opts.part !== undefined) push(`; parte ${opts.part + 1} de ${parts}`);
+  if (part !== undefined) push(`; parte ${part + 1} de ${parts}`);
   push("G21");
   push("G90");
   push(up);
@@ -150,7 +170,8 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   descents.forEach((d, di) => {
     // numa parte avulsa, a 1ª descida vem logo depois do aquecimento: sem descanso nem checkpoint
     const firstOfFile = di === 0;
-    if (!firstOfFile || opts.part === undefined) {
+    const afterWarmup = di < lead && (part !== undefined || resume);
+    if (!afterWarmup) {
       if (d.waitS > 0.05) {
         push("; descanso do servo");
         push(dwell(Math.round(d.waitS * 10) / 10));

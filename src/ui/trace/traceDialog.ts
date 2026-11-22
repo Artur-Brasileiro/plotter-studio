@@ -52,7 +52,7 @@ export function openTraceDialog(store: Store, file: File): void {
   const profile = store.state.profile;
   const zone = profile.drawZone;
   // a caneta dos desenhos novos: é ela que decide o que é "fino" e o que é "área cheia"
-  const pen = penOf(profile, undefined);
+  let pen = penOf(profile, undefined);
   const s: Settings = { ...DEFAULT_TRACE, ...loadPrefs(), penMm: pen.widthMm };
   let img: LoadedImage | undefined;
   let result: TraceResult | undefined;
@@ -287,6 +287,18 @@ export function openTraceDialog(store: Store, file: File): void {
   sizeInput.addEventListener("change", commitSize);
   sizeInput.addEventListener("keydown", (e) => e.key === "Enter" && commitSize());
 
+  const penSelect = h(
+    "select",
+    { "aria-label": "Caneta deste desenho" },
+    ...profile.pens.map((p) => h("option", { value: p.id, selected: p.id === pen.id }, `${p.name} (${p.widthMm.toLocaleString("pt-BR")} mm)`)),
+  );
+  penSelect.addEventListener("change", () => {
+    pen = penOf(profile, penSelect.value);
+    s.penMm = pen.widthMm;
+    renderSize();
+    schedule(150);
+  });
+
   function renderMode() {
     modeHint.textContent =
       s.mode === "line"
@@ -337,6 +349,7 @@ export function openTraceDialog(store: Store, file: File): void {
     h("h3", null, "Tamanho no papel"),
     orient.el,
     h("label", { class: "field" }, "Lado maior (mm)", sizeInput),
+    h("label", { class: "field", title: "É a largura da caneta que decide o que vira linha única e o que vira área com hachura. Dá para trocar depois, no passo 1." }, "Caneta", penSelect),
     sizeNote,
     fillBox,
     photoBox,
@@ -418,7 +431,7 @@ export function openTraceDialog(store: Store, file: File): void {
     // deitado = girado 90° no sentido horário: o topo da imagem vai para o lado X+ (REGRAS_GCODE.md, seção 8)
     const m: Mat2D = turned ? [0, k, -k, 0, cx + hh / 2, cy - w / 2] : [k, 0, 0, k, cx - w / 2, cy - hh / 2];
     const name = img.name.replace(/\.[^.]+$/, "") + (s.mode === "line" ? " (traço)" : s.mode === "ink" ? " (preto e branco)" : " (foto)");
-    const d = createDrawing(crypto.randomUUID(), name, result.geometry, m);
+    const d = createDrawing(crypto.randomUUID(), name, result.geometry, m, pen.id === penOf(profile, undefined).id ? undefined : pen.id);
     store.commit("Vetorizar imagem", (doc) => addDrawing(doc, d));
     store.setSelection([d.id]);
     toast(`"${name}" está na mesa. Posicione no passo 1 e confira no passo 2.`);

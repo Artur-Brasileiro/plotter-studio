@@ -92,7 +92,29 @@ export interface JobStats {
   readonly parts: number;
 }
 
+/** A camada (caneta) que um plano desenha. */
+export interface PlanLayer {
+  readonly penId: string;
+  readonly penName: string;
+  readonly penWidthMm: number;
+  /** Cor da caneta na tela (#rrggbb) */
+  readonly color: string;
+  /** Posição na ordem de plotagem (0 = a primeira) */
+  readonly index: number;
+  /** Quantas camadas o trabalho tem */
+  readonly count: number;
+  /**
+   * Desvio da ponta desta caneta (mm). Os pontos do plano já estão corrigidos (ponto no papel − desvio);
+   * quem confere a zona de desenho soma o desvio de volta.
+   */
+  readonly offset: Vec;
+  /** A camada começa e termina com uma cruz de registro */
+  readonly registration: boolean;
+}
+
 export interface JobPlan {
+  /** Ausente em planos montados à mão (testes): uma camada só, sem correção nem cruzes */
+  readonly layer?: PlanLayer;
   readonly strokes: readonly PlannedStroke[];
   readonly descents: readonly Descent[];
   /** mm da máquina */

@@ -1,5 +1,7 @@
 import type { MachineProfile } from "../machine";
 import { MAX_LINE_LENGTH } from "./gcode";
+import { registrationBoxes } from "./layers";
+import type { JobPlan } from "./types";
 
 /**
  * Auditoria de um G-code (REGRAS_GCODE.md, seção 10). Lê o TEXTO final, linha a linha, como a
@@ -58,10 +60,35 @@ export interface AuditReport {
 
 const WORD = /([A-Z])\s*(-?\d*\.?\d+)/g;
 
-export function auditGcode(text: string | readonly string[], profile: MachineProfile): AuditReport {
+export interface AuditOptions {
+  /**
+   * Desvio da ponta da caneta desta camada (mm). O arquivo traz os pontos já corrigidos; a zona de
+   * desenho é conferida onde a tinta cai de verdade (ponto do arquivo + desvio).
+   */
+  readonly penOffset?: { x: number; y: number };
+  /** O arquivo tem cruzes de registro: elas ficam fora da zona de propósito (REGRAS_GCODE.md, 2.2) */
+  readonly registration?: boolean;
+}
+
+/** As cruzes do plano: o que a auditoria precisa saber de uma camada. */
+export function auditOptionsOf(plan: Pick<JobPlan, "layer">): AuditOptions {
+  return plan.layer ? { penOffset: plan.layer.offset, registration: plan.layer.registration } : {};
+}
+
+export function auditGcode(text: string | readonly string[], profile: MachineProfile, opts: AuditOptions = {}): AuditReport {
   const rawLines = typeof text === "string" ? text.split(/\r?\n/) : text;
   const { drawZone: z, workArea, shield, servo } = profile;
   const eps = 0.006; // meia unidade da 2ª casa decimal
+  const offX = opts.penOffset?.x ?? 0;
+  const offY = opts.penOffset?.y ?? 0;
+  const crosses = opts.registration ? registrationBoxes(profile) : [];
+  /** O ponto do arquivo risca o papel fora da zona de desenho (e não é uma cruz de registro)? */
+  const offZone = (fx: number, fy: number): boolean => {
+    const px = fx + offX;
+    const py = fy + offY;
+    if (!(px < z.minX - eps || py < z.minY - eps || px > z.maxX + eps || py > z.maxY + eps)) return false;
+    return !crosses.some((b) => px >= b.minX - eps && px <= b.maxX + eps && py >= b.minY - eps && py <= b.maxY + eps);
+  };
 
   let maxLineLength = 0;
   let nonAscii = 0;
@@ -162,7 +189,7 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
         curMoved = false;
         curIsWarmup = shield.enabled && atSafe();
         // onde a caneta encosta também é traço (o aquecimento, no ponto seguro, é a exceção)
-        if (!curIsWarmup && !Number.isNaN(x) && (x < z.minX - eps || y < z.minY - eps || x > z.maxX + eps || y > z.maxY + eps)) outOfZone++;
+        if (!curIsWarmup && !Number.isNaN(x) && offZone(x, y)) outOfZone++;
       }
       pendingPen = true;
     } else if (penCmd === "up") {
@@ -193,7 +220,7 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
           curDownS += dt;
           curDrawMm += len;
           if (len > eps) curMoved = true;
-          if (nx < z.minX - eps || ny < z.minY - eps || nx > z.maxX + eps || ny > z.maxY + eps) outOfZone++;
+          if (offZone(nx, ny)) outOfZone++;
         } else {
           travelMm += len;
           travelS += dt;

@@ -86,9 +86,10 @@ describe("G-code golden", () => {
   it("teste_quadrado_circulo, dinâmico, sem otimização: quadrado exato, círculo com 56 pontos a 30 mm do centro", async () => {
     const { text, lines } = golden(quadradoCirculo, "teste_quadrado_circulo.svg", DYN);
     checkRules(text, lines);
-    expect(lines.slice(0, 6)).toEqual([
+    expect(lines.slice(0, 7)).toEqual([
       "; Plotter Studio - teste_quadrado_circulo.svg - 2026-11-14 12:00",
       "; modo: dinamico - reta F2000 / curva F1200 / fechada F600",
+      "; caneta Preta 0,4 - 0.4 mm",
       "G21",
       "G90",
       "M5",

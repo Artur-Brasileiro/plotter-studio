@@ -1,6 +1,7 @@
 import type { Vec } from "../geometry/vec";
 import type { MachineProfile } from "../machine";
 import type { JobSettings } from "../store";
+import { REGISTRATION_ID } from "./layers";
 import { CHECKPOINT_DWELLS_S, FOOTER_SETTLE_S, HEADER_SETTLE_S, WARMUP_FINAL_S, WARMUP_SETTLE_S } from "./schedule";
 import type { JobPlan } from "./types";
 
@@ -113,6 +114,19 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     : `fixo F${meta.job.fixedFeed}`;
   push(`; Plotter Studio - ${toAsciiComment(meta.fileName).slice(0, 28)} - ${fmtDate(meta.date)}`);
   push(`; modo: ${mode}`);
+  const layer = plan.layer;
+  if (layer) {
+    const which = layer.count > 1 ? `camada ${layer.index + 1} de ${layer.count} - ` : "";
+    push(`; ${which}caneta ${toAsciiComment(layer.penName).slice(0, 24)} - ${fmtSeconds(layer.penWidthMm)} mm`);
+    if (layer.count > 1 && layer.index > 0) push("; rodar DEPOIS da camada anterior, sem mexer no papel");
+    const off = [layer.offset.x ? `${formatCoord(-layer.offset.x)} mm em X` : "", layer.offset.y ? `${formatCoord(-layer.offset.y)} mm em Y` : ""].filter(Boolean);
+    if (off.length) push(`; ponta corrigida: camada deslocada ${off.join(" e ")}`);
+    if (layer.registration) {
+      const r = profile.registration;
+      const at = (x: number) => `X${fmtSeconds(x - layer.offset.x)} Y${fmtSeconds(r.y - layer.offset.y)}`;
+      push(`; 1o traco: cruz em ${at(r.x1)} - ultimo: cruz em ${at(r.x2)}`);
+    }
+  }
   if (opts.part !== undefined) push(`; parte ${opts.part + 1} de ${parts}`);
   push("G21");
   push("G90");
@@ -154,6 +168,7 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     // de descida longa ele repete o ponto atual (mantém todo bloco com a mesma forma)
     const startPoint = d.relift && d.first > 0 ? lastPointBefore(plan, d.first) : s0.points[0];
     let pos = xy(startPoint);
+    if (s0.drawingId === REGISTRATION_ID) push("; cruz de registro em ida e volta");
     push(`G0 ${pos}`);
     push(down, d.first, 0);
     push(dwell(firstOfFile && shield.enabled ? shield.firstSettleSeconds : pen.settleSeconds), d.first, 0);

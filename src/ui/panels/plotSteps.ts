@@ -18,6 +18,7 @@ export function createPlotSteps(session: MachineSession, planner: Planner, goToS
     const plan = planner.plan;
     const audit = plan && plan.violations.length === 0 ? planner.review()?.audit : undefined;
     const checked = !!audit?.ok;
+    const layer = plan?.layer;
 
     type Item = { done: boolean; label: string; note?: string; action?: HTMLElement };
     const items: Item[] = [
@@ -47,8 +48,10 @@ export function createPlotSteps(session: MachineSession, planner: Planner, goToS
       },
       {
         done: false,
-        label: "Papel no lugar e caneta no suporte",
-        note: "Com o servo embaixo a ponta só encosta no papel, sem zumbir. O Contorno, logo abaixo, mostra onde o desenho vai cair.",
+        label: layer && layer.count > 1 ? `Caneta ${layer.penName} no suporte (camada ${layer.index + 1} de ${layer.count})` : "Papel no lugar e caneta no suporte",
+        note:
+          (layer && layer.index > 0 ? "Não mexa no papel: só a caneta muda entre as camadas. " : "") +
+          "Com o servo embaixo a ponta só encosta no papel, sem zumbir. O Contorno, logo abaixo, mostra onde o desenho vai cair.",
       },
     ];
     clear(list);

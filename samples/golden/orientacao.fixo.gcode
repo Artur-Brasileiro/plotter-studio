@@ -1,5 +1,6 @@
 ; Plotter Studio - orientacao.svg - 2026-11-14 12:00
 ; modo: fixo F1000
+; caneta Preta 0,4 - 0.4 mm
 G21
 G90
 M5

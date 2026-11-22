@@ -1,5 +1,6 @@
 ; Plotter Studio - curvas.svg - 2026-11-14 12:00
 ; modo: dinamico - reta F2000 / curva F1200 / fechada F600
+; caneta Preta 0,4 - 0.4 mm
 G21
 G90
 M5

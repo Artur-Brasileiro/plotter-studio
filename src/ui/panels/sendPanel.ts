@@ -10,6 +10,7 @@ import { clear, h, toast } from "../dom";
 import type { MachineSession } from "../machine/session";
 import type { Overlay, Player } from "../overlay";
 import { fmtDuration, type Planner } from "../planner";
+import { createLayerPicker } from "./layerPicker";
 import { machineAction } from "./machinePanel";
 
 interface ActiveJob {
@@ -22,6 +23,8 @@ interface ActiveJob {
   /** tempo estimado (s) da posição atual, para a barra e o "restante" */
   estAt: number;
   recorded: boolean;
+  /** O envio vai até o fim da camada (tudo, ou a última parte): ao terminar, a próxima camada é a vez */
+  readonly wholeLayer: boolean;
 }
 
 const RESULT_TEXT: Record<RunRecord["result"], string> = { finished: "concluído", stopped: "parado", failed: "falhou" };
@@ -70,6 +73,9 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   const progress = h("div", { class: "progress" }, bar);
   const progressText = h("div", { class: "progress-text" });
   const resultBox = h("div", { class: "notice" });
+  /** Depois de uma camada: qual é a próxima e o que trocar */
+  const nextBox = h("div", { class: "notice next-layer", hidden: true });
+  const layerPicker = createLayerPicker(planner, { title: "Camada a enviar", disabled: () => session.jobActive });
   const runsList = h("table", { class: "runs" });
   const runsDetails = h("details", null, h("summary", null, "Últimos trabalhos (real × estimado)"), runsList);
 
@@ -77,6 +83,8 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     "div",
     { class: "panel-section" },
     h("h3", null, "Enviar"),
+    layerPicker,
+    nextBox,
     partRow,
     h("div", { class: "row" }, frameBtn, sendBtn, pauseBtn, stopBtn),
     reasons,
@@ -151,8 +159,10 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     } catch (e) {
       return toast(e instanceof Error ? e.message : String(e), "error", 10000);
     }
-    const name = planner.jobName() || "desenho";
-    job = { plan, program, name: part === undefined ? name : `${name} (parte ${part + 1})`, ...span(plan, part), estAt: 0, recorded: false };
+    const layer = plan.layer;
+    const name = (planner.jobName(plan) || "desenho") + (layer && layer.count > 1 ? ` [${layer.index + 1}/${layer.count} ${layer.penName}]` : "");
+    job = { plan, program, name: part === undefined ? name : `${name} (parte ${part + 1})`, ...span(plan, part), estAt: 0, recorded: false, wholeLayer: part === undefined || part === plan.stats.parts - 1 };
+    nextBox.hidden = true;
     if (player.playing) player.stop();
     overlay.setPlan(plan, store.state.job.speedMode === "fixed");
     overlay.setVisible(true);
@@ -236,11 +246,28 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     addRun({ at: new Date().toISOString(), name: job.name, estimatedS: est, realS, result: j.state, lines: j.total });
     renderRuns();
     overlay.setProgress(undefined);
-    overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
     if (j.state === "finished") {
       const diff = est > 0 ? Math.round(((realS - est) / est) * 100) : 0;
-      toast(`Desenho concluído em ${fmtDuration(realS)} (estimado ${fmtDuration(est)}, ${diff >= 0 ? "+" : ""}${diff}%).`, "info", 12000);
+      const done = job.plan.layer;
+      const what = done && done.count > 1 ? `Camada ${done.index + 1} (${done.penName}) concluída` : "Desenho concluído";
+      toast(`${what} em ${fmtDuration(realS)} (estimado ${fmtDuration(est)}, ${diff >= 0 ? "+" : ""}${diff}%).`, "info", 12000);
+      // a vez da próxima caneta: a lista já aponta para ela
+      const next = done && job.wholeLayer ? planner.layers.find((p) => p.layer?.index === done.index + 1) : undefined;
+      if (done && next?.layer) {
+        planner.setLayer(next.layer.penId);
+        clear(nextBox);
+        nextBox.append(
+          h("strong", null, `Agora a camada ${next.layer.index + 1}: ${next.layer.penName}`),
+          h("span", null, ` Troque a caneta sem mexer no papel e envie. A primeira coisa que ela desenha é a cruz de registro: se não cair em cima da cruz da camada anterior, pare e ajuste o desvio dessa caneta em Configurações → Canetas.`),
+        );
+        nextBox.hidden = false;
+      } else if (done && done.count > 1 && job.wholeLayer) {
+        clear(nextBox);
+        nextBox.append(h("strong", null, "Todas as camadas foram plotadas."));
+        nextBox.hidden = false;
+      }
     }
+    overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
   }
 
   function renderRuns() {

@@ -1,20 +1,28 @@
 import type { AuditReport } from "../../core/job/audit";
 import { MAX_LINE_LENGTH } from "../../core/job/gcode";
+import { REGISTRATION_ID } from "../../core/job/layers";
 import type { JobPlan } from "../../core/job/types";
 import type { Store } from "../../core/store";
 import { append, clear, h, toast } from "../dom";
 import { fmtDuration, fmtLength, type Planner } from "../planner";
+import { createLayerPicker } from "./layerPicker";
 import { parseNum } from "./propertiesPanel";
 import type { StepFlag } from "./sidePanel";
 
 const QUICK_FEEDS = [500, 1000, 1500];
 
-/** Nome do arquivo: o do primeiro desenho, sem extensão (ou "plotter"). */
-export function exportFileName(names: readonly string[], part?: { index: number; total: number }): string {
-  const base = (names[0] ?? "plotter").replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "_").trim() || "plotter";
+const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "_").trim();
+
+/**
+ * Nome do arquivo: o do primeiro desenho, sem extensão (ou "plotter"). Com mais de uma caneta, o número
+ * da camada e a caneta entram no nome ("senna_1_Fina 0,03.gcode"), na ordem em que são plotadas.
+ */
+export function exportFileName(names: readonly string[], part?: { index: number; total: number }, layer?: { index: number; count: number; penName: string }): string {
+  const base = safeName((names[0] ?? "plotter").replace(/\.[^.]+$/, "")) || "plotter";
   const more = names.length > 1 ? `_e_mais_${names.length - 1}` : "";
+  const pen = layer && layer.count > 1 ? `_${layer.index + 1}_${safeName(layer.penName)}` : "";
   const suffix = part ? `_parte${part.index + 1}de${part.total}` : "";
-  return `${base}${more}${suffix}.gcode`;
+  return `${base}${more}${pen}${suffix}.gcode`;
 }
 
 function download(name: string, text: string): void {
@@ -53,6 +61,8 @@ function gauge(label: string, value: number, limit: number, unit: string, digits
 export function createJobPanel(store: Store, planner: Planner, preview?: HTMLElement, onVerdict: (flag: StepFlag, title: string) => void = () => {}): HTMLElement {
   const root = h("div", { class: "panel" });
 
+  const layerPicker = createLayerPicker(planner, { title: "Camadas (uma por caneta)" });
+  const layerTitle = h("p", { class: "layer-title" });
   const verdict = h("div", { class: "verdict" });
   const problems = h("div");
   const time = h("dl", { class: "stats" });
@@ -89,6 +99,8 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
   const content = h(
     "div",
     { class: "panel-section" },
+    layerPicker,
+    layerTitle,
     verdict,
     problems,
     h("h3", null, "Tempo"),
@@ -130,7 +142,10 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     verdict.className = `verdict ${kind}`;
     clear(verdict);
     verdict.append(h("span", { class: "verdict-mark", "aria-hidden": "true" }, kind === "ok" ? "✓" : kind === "warn" ? "!" : "✕"), h("div", null, title, h("small", null, detail)));
-    onVerdict(kind, `${title}: ${detail}`);
+    // a bolinha do passo fala do trabalho inteiro: basta uma camada reprovada para não estar pronto
+    const all = planner.layers.map((p) => planner.status(p));
+    const worst = all.includes("bad") ? "bad" : all.includes("warn") ? "warn" : kind;
+    onVerdict(worst, worst === kind ? `${title}: ${detail}` : "Há camada que não passou na conferência.");
   }
 
   function renderTime(plan: JobPlan) {
@@ -197,14 +212,15 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
 
   function renderFiles(plan: JobPlan, canExport: boolean) {
     clear(files);
-    const names = store.doc.drawings.map((d) => d.name);
-    const full = h("button", { class: "primary big", disabled: !canExport, onclick: () => doExport() }, "Baixar o G-code");
+    const names = planner.drawingNames(plan);
+    const many = (plan.layer?.count ?? 1) > 1;
+    const full = h("button", { class: "primary big", disabled: !canExport, onclick: () => doExport() }, many ? `Baixar o G-code da camada ${plan.layer!.index + 1}` : "Baixar o G-code");
     files.append(full);
     if (!canExport) {
       files.append(h("p", { class: "hint" }, "Bloqueado: corrija o que está em vermelho acima. Arquivo que quebra regra não vai para a máquina."));
       return;
     }
-    files.append(h("p", { class: "hint" }, `${exportFileName(names)}. Para mandar direto, sem arquivo, use o passo 3.`));
+    files.append(h("p", { class: "hint" }, `${exportFileName(names, undefined, plan.layer)}. ${many ? "Cada camada é um arquivo: escolha a camada na lista lá em cima. " : ""}Para mandar direto, sem arquivo, use o passo 3.`));
     const total = plan.stats.parts;
     if (total > 1) {
       const list = h("div", { class: "parts" });
@@ -230,6 +246,10 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     if (!plan) return onVerdict(undefined, "");
     renderTime(plan);
     const names = new Map(store.doc.drawings.map((d) => [d.id, d.name]));
+    names.set(REGISTRATION_ID, "Cruz de registro");
+    const layer = plan.layer;
+    layerTitle.hidden = !layer || layer.count <= 1;
+    if (layer) layerTitle.textContent = `Camada ${layer.index + 1} de ${layer.count}: ${layer.penName}`;
 
     if (plan.violations.length) {
       const zone = plan.violations.every((v) => v.kind === "zone");
@@ -273,9 +293,9 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     const plan = planner.fresh();
     const review = planner.review();
     if (!plan || !review?.audit?.ok) return render(plan);
-    const names = store.doc.drawings.map((d) => d.name);
+    const names = planner.drawingNames(plan);
     const total = plan.stats.parts;
-    const fileName = exportFileName(names, part === undefined ? undefined : { index: part, total });
+    const fileName = exportFileName(names, part === undefined ? undefined : { index: part, total }, plan.layer);
     const program = part === undefined ? review.program! : planner.program(part)!;
     download(fileName, program.toText());
     toast(`${fileName} baixado (${program.lines.length.toLocaleString("pt-BR")} linhas).`);

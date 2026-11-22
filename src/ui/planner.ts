@@ -1,7 +1,8 @@
-import { auditGcode, type AuditReport } from "../core/job/audit";
+import { auditGcode, auditOptionsOf, type AuditReport } from "../core/job/audit";
 import { generateGcode, type GcodeProgram } from "../core/job/gcode";
-import { planJob } from "../core/job/pipeline";
+import { planLayers } from "../core/job/pipeline";
 import type { JobPlan } from "../core/job/types";
+import { penOf } from "../core/machine";
 import type { Store } from "../core/store";
 
 /** O plano, o G-code que sai dele e a conferência desse G-code. */
@@ -12,14 +13,20 @@ export interface Review {
   readonly audit?: AuditReport;
 }
 
+export type LayerStatus = "ok" | "warn" | "bad";
+
 /**
- * Recalcula o plano (traços, ordem, velocidades, agenda do servo) 300 ms depois da última mudança
+ * Recalcula os planos (traços, ordem, velocidades, agenda do servo) 300 ms depois da última mudança
  * no documento, no trabalho ou no perfil, e avisa quem estiver ouvindo (painéis, pré-visualização, rodapé).
+ *
+ * Um plano por CAMADA (caneta), na ordem de plotagem. Quase todo desenho tem uma camada só; quando há
+ * mais, uma delas é a "ativa": é a que os painéis conferem, mostram na pré-visualização e enviam.
  * A conferência (gerar o G-code e auditá-lo) é feita só quando alguém pede, uma vez por plano.
  */
 export class Planner {
-  private current: JobPlan | undefined;
-  private reviewed: Review | undefined;
+  private plans: readonly JobPlan[] = [];
+  private activePen: string | undefined;
+  private reviews = new WeakMap<JobPlan, Review>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly listeners = new Set<(plan: JobPlan | undefined) => void>();
 
@@ -33,8 +40,21 @@ export class Planner {
     this.recompute();
   }
 
+  /** O plano da camada ativa. */
   get plan(): JobPlan | undefined {
-    return this.current;
+    return this.plans.find((p) => p.layer?.penId === this.activePen) ?? this.plans[0];
+  }
+
+  /** Todos os planos, na ordem de plotagem (cor → fina → grossa). */
+  get layers(): readonly JobPlan[] {
+    return this.plans;
+  }
+
+  /** Escolhe a camada que os painéis mostram e enviam. */
+  setLayer(penId: string): void {
+    if (!this.plans.some((p) => p.layer?.penId === penId) || this.plan?.layer?.penId === penId) return;
+    this.activePen = penId;
+    this.notify();
   }
 
   /** Plano atualizado na hora (para exportar sem esperar o debounce). */
@@ -44,38 +64,55 @@ export class Planner {
       this.timer = undefined;
       this.recompute();
     }
-    return this.current;
+    return this.plan;
   }
 
-  /** Nome dos desenhos, para o cabeçalho do G-code. */
-  jobName(): string {
-    return this.store.doc.drawings.map((d) => d.name).join(" + ");
+  /** Nomes dos desenhos de uma camada (padrão: a ativa). */
+  drawingNames(plan: JobPlan | undefined = this.plan): string[] {
+    const { profile } = this.store.state;
+    const all = this.store.doc.drawings;
+    const layer = plan?.layer;
+    const mine = layer && layer.count > 1 ? all.filter((d) => penOf(profile, d.penId).id === layer.penId) : all;
+    return mine.map((d) => d.name);
   }
 
-  /** Gera o G-code do plano atual (inteiro ou uma parte). Lança se houver desenho fora da área. */
-  program(part?: number): GcodeProgram | undefined {
-    const plan = this.current;
+  /** Nome do trabalho, para o cabeçalho do G-code e o histórico. */
+  jobName(plan: JobPlan | undefined = this.plan): string {
+    return this.drawingNames(plan).join(" + ");
+  }
+
+  /** Gera o G-code de um plano (inteiro ou uma parte). Lança se houver desenho fora da área. */
+  program(part?: number, plan: JobPlan | undefined = this.plan): GcodeProgram | undefined {
     if (!plan) return undefined;
-    return generateGcode(plan, this.store.state.profile, { fileName: this.jobName(), date: new Date(), job: this.store.state.job }, { part });
+    return generateGcode(plan, this.store.state.profile, { fileName: this.jobName(plan), date: new Date(), job: this.store.state.job }, { part });
   }
 
-  /** Plano + G-code + auditoria do plano atual. */
-  review(): Review | undefined {
-    const plan = this.current;
+  /** Plano + G-code + auditoria (padrão: da camada ativa). */
+  review(plan: JobPlan | undefined = this.plan): Review | undefined {
     if (!plan) return undefined;
-    if (this.reviewed?.plan === plan) return this.reviewed;
+    const hit = this.reviews.get(plan);
+    if (hit) return hit;
     let program: GcodeProgram | undefined;
     let audit: AuditReport | undefined;
     if (plan.violations.length === 0) {
       try {
-        program = this.program();
-        if (program) audit = auditGcode(program.lines.map((l) => l.text), this.store.state.profile);
+        program = this.program(undefined, plan);
+        if (program) audit = auditGcode(program.lines.map((l) => l.text), this.store.state.profile, auditOptionsOf(plan));
       } catch (e) {
         console.error("conferência falhou", e);
       }
     }
-    this.reviewed = { plan, program, audit };
-    return this.reviewed;
+    const review = { plan, program, audit };
+    this.reviews.set(plan, review);
+    return review;
+  }
+
+  /** Pode ir para a máquina? ok, com atenção, ou não. */
+  status(plan: JobPlan | undefined = this.plan): LayerStatus | undefined {
+    if (!plan) return undefined;
+    const audit = this.review(plan)?.audit;
+    if (!audit || !audit.ok) return "bad";
+    return audit.problems.length ? "warn" : "ok";
   }
 
   subscribe(l: (plan: JobPlan | undefined) => void): () => void {
@@ -83,18 +120,22 @@ export class Planner {
     return () => this.listeners.delete(l);
   }
 
+  private notify(): void {
+    const plan = this.plan;
+    for (const l of [...this.listeners]) l(plan);
+  }
+
   private recompute(): void {
     this.timer = undefined;
     const { profile, job } = this.store.state;
     const doc = this.store.doc;
     try {
-      this.current = doc.drawings.length ? planJob(doc, profile, job) : undefined;
+      this.plans = planLayers(doc, profile, job);
     } catch (e) {
       console.error("planJob falhou", e);
-      this.current = undefined;
+      this.plans = [];
     }
-    this.reviewed = undefined;
-    for (const l of [...this.listeners]) l(this.current);
+    this.notify();
   }
 }
 

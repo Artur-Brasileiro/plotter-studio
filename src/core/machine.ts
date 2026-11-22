@@ -308,8 +308,9 @@ export function validateProfile(p: MachineProfile): string[] {
     else if (/[;()]/.test(cmd)) e.push(`${label} não pode ter comentários.`);
     else if (/[!?~]/.test(cmd)) e.push(`${label} não pode ter "!", "?" nem "~" (para o GRBL são pausa, relatório e continuar).`);
   }
-  range(p.pen.settleSeconds, 0, 5, "Pausa depois de descer (s)");
-  range(p.pen.settleUpSeconds, 0, 5, "Pausa depois de subir (s)");
+  // sem pausa a máquina anda antes de o servo chegar (regra 9): "G4 P0" não espera nada
+  range(p.pen.settleSeconds, 0.05, 5, "Pausa depois de descer (s)");
+  range(p.pen.settleUpSeconds, 0.05, 5, "Pausa depois de subir (s)");
   range(p.pen.widthMm, 0.01, 10, "Largura da caneta (mm)");
 
   const z = p.drawZone;
@@ -344,11 +345,12 @@ export function validateProfile(p: MachineProfile): string[] {
   }
 
   const sh = p.shield;
-  range(sh.warmupCycles, 0, 50, "Ciclos de aquecimento");
+  // o aquecimento também são ciclos do servo, um a cada 0,8 s: muitos seguidos estouram o próprio limite
+  range(sh.warmupCycles, 0, 20, "Ciclos de aquecimento");
   if (!(sh.safeX >= 0 && sh.safeX <= p.workArea.width && sh.safeY >= 0 && sh.safeY <= p.workArea.height)) {
     e.push("O ponto seguro do aquecimento tem que ficar dentro do curso da máquina.");
   }
-  range(sh.firstSettleSeconds, 0, 5, "Pausa da 1ª descida (s)");
+  range(sh.firstSettleSeconds, 0.05, 5, "Pausa da 1ª descida (s)");
   range(sh.resyncMinutes, 0, 120, "Minutos entre checkpoints");
   range(sh.partMinutes, 0, 600, "Duração de cada parte (min)");
 

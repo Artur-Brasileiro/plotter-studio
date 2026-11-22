@@ -50,6 +50,58 @@ Para ensaiar antes, sem a máquina: acrescente `?sim=1` na URL (um GRBL falso). 
 
 **Decisão do teste 9:** `pen.pauseLift` = "spindleStop" (padrão, a caneta sobe na hora) ou "endOfStroke" (termina o traço e para). Anote aqui: ______
 
+## Roteiro da v3 (regras de G-code, imagem vira traço, várias canetas)
+
+Feito na noite de 21 para 22/11/2026. **Nada disto rodou na máquina ainda**: passou em testes automáticos, no simulador (`?sim=1`) e num Chrome dirigido por script. A ordem abaixo vai do mais seguro para o mais arriscado. Pare no primeiro que der errado e anote.
+
+Para ensaiar cada passo antes, sem a máquina: `npm run dev` e abra `http://localhost:5173/?sim=1&simSpeed=20`.
+
+### A. Controle da máquina, SEM caneta e com a mão no botão da fonte
+
+| # | Teste | Como | Esperado | Resultado |
+|---|---|---|---|---|
+| A1 | Conectar | Passo **3 Plotar** → **Conectar** | Banner do GRBL em ~2 s, estado **Alarm**, nenhum aviso amarelo. No Console, digite `$I`: tem que aparecer `[OPT:V,15,128]`. Copie a lista do `$$` para cá (anote o `$1`) | |
+| A2 | Parar o Home | **Fazer o Home** e, 1 s depois, **Esc**. Depois de novo, e use **■ Parar** no meio | Para **na hora** nas duas vezes, com `ALARM:6`. (Antes da revisão o Esc não fazia nada durante o Home.) | |
+| A3 | Home inteiro | **Fazer o Home** até o fim | O estado mostra "Home" o tempo todo, sem "sem resposta" nem "placa travada" | |
+| A4 | Caneta | **Caneta ↓** / **Caneta ↑** | O servo desce e sobe; escute se ele **zumbe** parado em cima | |
+| A5 | Jog | Passo 10 nas quatro direções; depois "contínuo": vários toques rápidos, depois segurar e soltar | Cada toque para; ao soltar, para na hora. Sem Home o contínuo é recusado com uma mensagem | |
+| A6 | Reset no meio de uma pausa | Console: `G4 P5` e clique **Reset** durante | Um `ok` solto, depois o banner; estado Idle, posição igual | |
+| A7 | Fora do curso | Depois do Home, Console: `G0 X820` | `ALARM:2`, estado Alarm, **sem** "placa travada". O Home funciona em seguida | |
+
+### B. O G-code novo, ainda SEM caneta (a máquina desenha no ar)
+
+Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pronto para plotar**.
+
+| # | Teste | Como | Esperado | Resultado |
+|---|---|---|---|---|
+| B1 | Aquecimento | **Enviar desenho** | Antes de tudo a máquina vai a X0 Y0 e o servo bate **8 vezes** no ar. Só depois vai para o desenho | |
+| B2 | Subida dupla | Olhe o Console durante um traço | Depois de cada traço saem dois `M5` seguidos; o servo só se mexe no primeiro | |
+| B3 | Pausar | **⏸ Pausar** no meio de um traço, esperar, **▶ Continuar** | O servo **sobe** na pausa e **desce ~0,5 s antes** de andar. Se não subir: Configurações → Caneta → Pausa = "no fim do traço" | |
+| B4 | Pausar no aquecimento e num descanso | Pausar durante as 8 batidas; depois durante um "descanso do servo" (use um desenho com muitos tracinhos) | Pausa e continua sem perder nada | |
+| B5 | Parar e voltar | **■ Parar** no meio de um traço; depois **Ir para a origem** | Sem alarme. A máquina volta exatamente para uma marca feita antes na origem. Repita 3 vezes | |
+| B6 | Retomar | Depois de parar, em "O que enviar" já vem **Retomar de onde parou**. **Enviar** | Aquecimento de novo e o desenho continua do traço anterior ao que parou | |
+| B7 | Emergência | **Esc** no meio de um movimento | `ALARM:3`, Home "falta", Enviar bloqueado até o Home | |
+| B8 | Descanso do servo | Vetorize uma imagem com muitos tracinhos (passo 2 mostra "a máquina vai esperar…") e envie | Nos descansos a caneta fica **em cima e parada**, e o servo em silêncio. Ponha a mão: ele esfria? | |
+| B9 | Aba escondida | Trabalho de 15 min no ar, com a aba minimizada por 10 min (desligue a suspensão do Windows) | Termina. No Console não pode haver "Erro de leitura na serial" (se houver, é ruído no cabo: anote quantos) | |
+| B10 | Cabo | Puxar o USB no meio; reconectar | Aviso em ~1 s; depois de reconectar e do Home, "Retomar de onde parou" continua o desenho | |
+
+### C. Com a caneta
+
+| # | Teste | Como | Esperado | Resultado |
+|---|---|---|---|---|
+| C1 | Escala e posição | `samples/teste_quadrado_circulo.svg`, sem mexer (cai em X30 Y25) | Quadrado 100,0 ± 0,3 mm; círculo Ø 60 ± 0,3 mm; canto do quadrado em X40 Y35 | |
+| C2 | Orientação | `samples/orientacao.svg` | "F" legível e seta para cima/direita, igual à tela | |
+| C3 | 1º traço | Olhe o primeiro traço de C1 e C2 | Sai com tinta desde o começo (a 1ª descida espera 0,6 s) | |
+| C4 | Imagem vira traço | **Trazer desenho → Imagem**, uma imagem de linha pequena (~15 min), tipo **Traço** | O desenho sai igual à prévia da tela de vetorizar. Compare o tempo real com o estimado em "Últimos trabalhos" | |
+| C5 | Preto e branco com hachura | Uma imagem de nanquim pequena, tipo **Preto e branco** | Áreas cheias com contorno e hachura a 45°; traços finos em linha única | |
+| C6 | Duas canetas | Dois desenhos na mesa, um com a caneta **Fina 0,03** (passo 1 → Caneta). Plote a camada 1, troque a caneta **sem mexer no papel**, plote a camada 2 | Cada camada começa com uma cruz em X20 Y12 e termina com outra em X580 Y12. As cruzes das duas canetas têm que cair uma em cima da outra. Se não caírem, meça a diferença (o braço da cruz tem 6 mm) e ajuste o desvio em Configurações → Canetas | |
+| C7 | Aceite | Um desenho real de 1 h ou mais, em partes ou inteiro | Termina com o servo frio e sem falha de caneta | |
+
+**O que anotar aqui depois dos testes:** `pen.pauseLift` (B3): ______ · desvio medido da caneta fina (C6): X ______ Y ______ · limite do servo que ficou (média/pico): ______ / ______
+
+### O que mudou nos arquivos de referência (goldens)
+
+Os quatro G-codes de `samples/golden/` mudaram para o formato de `docs/REGRAS_GCODE.md` (aquecimento, `G1 F500` modal, subida dupla, `M2`, desenho dentro da folha a partir de X30 Y25, linha "; caneta …" no cabeçalho). **Nenhum deles rodou na máquina ainda**: os testes C1 e C2 são os que os aprovam.
 ## Valores calibrados
 
 Preencher depois dos testes da T17 (velocidade dinâmica, `minSegmentTimeMs`, gabaritos).
@@ -83,3 +135,6 @@ Um G-code de `samples/golden/` só vale depois de rodar na máquina e sair certo
 | 14/11/2026 | T17 | Desempenho com `estresse.svg` (20 mil traços, 351 mil pontos) | Passou | `planJob` 337 ms; arrastar mediana 16,7 ms/quadro (p90 33 ms); pan ~36 fps. Medido sem GPU: no Chrome normal deve ser melhor. Confirme no seu notebook (F12 → Performance). |
 | 14/11/2026 | T18–T20 | 89 testes do protocolo, da fila contada, do simulador e do controlador (no controlador: os 14 cenários da seção 4.3 do PLAN e mais 7) | Passou | Tudo em tempo virtual (`ManualClock`) |
 | 14/11/2026 | T21–T26 | Interface com `?sim=1` no Chrome headless: conectar/desconectar/reconectar, Home, caneta, ir para a origem, jog (passo, teclado, contínuo, diagonal na borda), console (bloqueio e confirmação), contorno, envio completo de `curvas.svg`, pausa (com e sem 0x9E), pausa no fim do traço, error:20 no meio, parar, Esc, cabo puxado | Passou | Nada disso substitui o roteiro da v2 na máquina |
+| 22/11/2026 | v3 | 1.250+ testes automáticos; navegador dirigido por script com `?sim=1`: SVG → Conferir, imagem → traço (linha, preto e branco, foto) → mesa → Conferir, Plotar inteiro no simulador, duas canetas (camada 1 → aviso → camada 2), parar → recarregar a página → retomar | Passou | Nada disso substitui o roteiro da v3 na máquina |
+| 22/11/2026 | v3 | Auditoria nova nos G-codes reais de `D:\CNC Plotter - Desenhos` | Passou | Mesmos números do histórico de `REGRAS_GCODE.md` (senna fina 20,5/36/15%/89%; senna grossa 14,2/30/25%/93%) |
+| 22/11/2026 | v3 | Traçador TypeScript × laboratório Python nas imagens reais (castelo, F16) | Passou | Mesmos traços e pontos, mesmas coordenadas |

@@ -1,6 +1,7 @@
 import type { DrawingId } from "../document";
 import type { BBox } from "../geometry/path";
 import type { Vec } from "../geometry/vec";
+import type { JobSettings } from "../store";
 
 export interface Stroke {
   /** mm da MÁQUINA; 1 ponto = "ponto" (desce e sobe a caneta) */
@@ -69,6 +70,12 @@ export interface Descent {
   readonly lengthMm: number;
   /** Sobe e desce no mesmo ponto (corte de descida longa): não há deslocamento antes */
   readonly relift: boolean;
+  /**
+   * Fichas que a agenda contava ter no balde do servo logo antes desta descida. Um arquivo que COMEÇA
+   * aqui (uma parte, uma retomada) não herdou essa folga: ele descansa o que falta depois do aquecimento.
+   * Ausente em planos antigos ou montados à mão: vale como "balde cheio" (o caso mais cauteloso).
+   */
+  readonly bucket?: number;
 }
 
 export interface JobStats {
@@ -115,6 +122,11 @@ export interface PlanLayer {
 export interface JobPlan {
   /** Ausente em planos montados à mão (testes): uma camada só, sem correção nem cruzes */
   readonly layer?: PlanLayer;
+  /**
+   * O trabalho (velocidade fixa ou dinâmica, F) com que este plano foi feito. O G-code sai com ESTE
+   * trabalho, e não com o que estiver na tela na hora de gerar: as esperas do servo foram calculadas para ele.
+   */
+  readonly job?: JobSettings;
   readonly strokes: readonly PlannedStroke[];
   readonly descents: readonly Descent[];
   /** mm da máquina */

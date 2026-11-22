@@ -6,7 +6,7 @@ import { auditGcode, auditOptionsOf } from "./audit";
 import { generateGcode } from "./gcode";
 import { planJob } from "./pipeline";
 import { parseWhat, planSignature, resumeDescent, sendSpan } from "./resume";
-import { machineDrawing } from "./testPlan";
+import { machineDrawing, makePlan, stroke } from "./testPlan";
 import type { JobPlan } from "./types";
 
 const P = DEFAULT_PROFILE;
@@ -177,5 +177,60 @@ describe("retomada de um desenho pesado para o servo", () => {
       const a = auditGcode(text(plan, { part }), P, auditOptionsOf(plan));
       expect(a.problems.filter((p) => p.level === "error"), `parte ${part + 1}`).toEqual([]);
     }
+  });
+});
+
+describe("servo no começo de uma parte ou de uma retomada", () => {
+  // 14 traços longos (o balde do servo enche) e depois 300 pontos seguidos
+  const long = Array.from({ length: 14 }, (_, i) => stroke([[40, 40 + i * 3], [440, 40 + i * 3], [40, 41 + i * 3]]));
+  const dots = Array.from({ length: 300 }, (_, i) => stroke([[45 + (i % 100), 30 + Math.floor(i / 100)]]));
+  const plan = makePlan([...long, ...dots]);
+  const lines = (opts: object) => generateGcode(plan, P, META, opts).lines.map((l) => l.text);
+
+  it("o plano corta a parte 2 exatamente onde os pontos começam", () => {
+    expect(plan.stats.parts).toBe(2);
+    expect(plan.descents.find((d) => d.part === 1)!.first).toBe(14);
+  });
+  it("uma PARTE começa a desenhar logo depois do aquecimento: a agenda já zerou a folga na fronteira", () => {
+    const g = lines({ part: 1 });
+    expect(g.join("\n")).not.toMatch(/servo descansa|reaquece/);
+    const a = auditGcode(g, P);
+    expect(a.warmupCycles).toBe(8);
+    expect(a.peakCyclesPer60s).toBeLessThanOrEqual(P.servo.peakPer60s);
+    expect(a.problems.filter((p) => p.level === "error")).toEqual([]);
+  });
+  it("uma RETOMADA no meio de uma rajada descansa o que falta e reaquece o servo antes do 1º traço", () => {
+    // a descida 13 é o último traço longo: a agenda contava com o balde cheio ali
+    const g = lines({ fromDescent: 13 });
+    const i = g.indexOf("; servo descansa antes de recomecar");
+    expect(i).toBeGreaterThan(0);
+    expect(g[i + 1]).toMatch(/^G4 P\d+(\.\d)?$/);
+    expect(Number(g[i + 1].slice(4))).toBeGreaterThan(3);
+    expect(g.slice(i + 2, i + 11)).toEqual(["; reaquece o servo", "M3 S220", "G4 P0.4", "M5", "G4 P0.4", "M3 S220", "G4 P0.4", "M5", "G4 P0.4"]);
+    // e o desenho vem em seguida, com a pausa longa da 1ª descida
+    expect(g[i + 11]).toMatch(/^G0 X/);
+    expect(g.slice(i + 12, i + 14)).toEqual(["M3 S220", "G4 P0.6"]);
+    const a = auditGcode(g, P);
+    expect(a.warmupCycles).toBe(10); // 8 do aquecimento + 2 do reaquecimento
+    expect(a.peakCyclesPer60s).toBeLessThanOrEqual(P.servo.peakPer60s);
+    expect(a.problems.filter((p) => p.level === "error")).toEqual([]);
+  });
+  it("retomada no meio de uma rajada de pontos (balde vazio: cada ponto já esperava a sua ficha) não descansa", () => {
+    const busy = makePlan(dots);
+    const g = generateGcode(busy, P, META, { fromDescent: 150 }).lines.map((l) => l.text);
+    expect(g.join("\n")).not.toMatch(/servo descansa|reaquece/);
+    expect(auditGcode(g, P).problems.filter((p) => p.level === "error")).toEqual([]);
+  });
+});
+
+describe("o G-code sai com o trabalho do PLANO", () => {
+  it("plano feito a F500 fixo continua F500 mesmo se a tela já estiver em velocidade dinâmica", () => {
+    const d = doc(machineDrawing("a", dashes(4, 2)));
+    const plan = planJob(d, P, JOB);
+    expect(plan.job).toEqual(JOB);
+    const g = generateGcode(plan, P, { ...META, job: { ...JOB, speedMode: "dynamic" } }).lines.map((l) => l.text);
+    expect(g).toContain("; modo: fixo F500");
+    expect(g.filter((l) => /^G1 F/.test(l)).every((l) => l === "G1 F500")).toBe(true);
+    expect(g.some((l) => /^X.* F\d/.test(l))).toBe(false);
   });
 });

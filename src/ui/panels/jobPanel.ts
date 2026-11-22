@@ -209,6 +209,7 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     item(a.outOfArea === 0, "Tudo dentro do curso da máquina", a.outOfArea ? `${num(a.outOfArea)} ponto(s) fora` : "ok");
     item(a.maxLineLength <= MAX_LINE_LENGTH, "Linhas curtas para o buffer do GRBL", `maior: ${a.maxLineLength}`);
     item(a.nonAsciiLines === 0, "Só caracteres que o GRBL entende", a.nonAsciiLines ? `${num(a.nonAsciiLines)} linha(s)` : "ok");
+    item(a.unknownLines + a.configLines === 0, "Só comandos conhecidos, nenhum de configuração", a.unknownLines + a.configLines ? `${num(a.unknownLines + a.configLines)} linha(s)` : "ok");
     const sh = store.state.profile.shield;
     item(sh.enabled, "Blindagem: aquecimento, subida dupla e checkpoints", sh.enabled ? `${a.warmupCycles} + ${a.checkpoints} checkpoint(s)` : "desligada", true);
     const capOk = a.longestDescentMm <= store.state.profile.servo.maxDescentMm * 1.01 + 1;

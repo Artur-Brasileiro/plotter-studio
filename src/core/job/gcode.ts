@@ -2,7 +2,7 @@ import type { Vec } from "../geometry/vec";
 import type { MachineProfile } from "../machine";
 import type { JobSettings } from "../store";
 import { REGISTRATION_ID } from "./layers";
-import { CHECKPOINT_DWELLS_S, FOOTER_SETTLE_S, HEADER_SETTLE_S, WARMUP_FINAL_S, WARMUP_SETTLE_S } from "./schedule";
+import { CHECKPOINT_DWELLS_S, FOOTER_SETTLE_S, HEADER_SETTLE_S, tokensAfterWarmup, WARMUP_FINAL_S, WARMUP_SETTLE_S } from "./schedule";
 import type { JobPlan } from "./types";
 
 export interface GcodeMeta {
@@ -72,9 +72,14 @@ export function toAsciiComment(s: string): string {
 /** Nenhuma linha passa disto: o buffer de linha do GRBL é de 80 caracteres (REGRAS_GCODE.md, regra 15). */
 export const MAX_LINE_LENGTH = 69;
 
+/** Descanso (s) no começo de uma retomada a partir do qual o servo é reaquecido antes do 1º traço. */
+const REWARM_AFTER_REST_S = 3;
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const fmtDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const fmtSeconds = (s: number) => String(Math.round(s * 1000) / 1000);
+/** Velocidade em mm/min inteiros: "F1833.3333" só gasta caracteres da linha, e o GRBL não ganha nada com as casas. */
+const fmtFeed = (f: number) => String(Math.max(1, Math.round(f)));
 
 /**
  * JobPlan → G-code no formato de docs/REGRAS_GCODE.md (copiado de um arquivo blindado que já rodou
@@ -95,15 +100,22 @@ const fmtSeconds = (s: number) => String(Math.round(s * 1000) / 1000);
  */
 export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: GcodeMeta, opts: GcodeOptions = {}): GcodeProgram {
   if (plan.violations.length) throw new Error("Há desenho fora da área: corrija antes de gerar o G-code.");
+  for (const s of plan.strokes) {
+    for (const p of s.points) if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("O desenho tem uma coordenada que não é número: não dá para gerar o G-code.");
+  }
   const { width: W, height: H } = profile.workArea;
   const { pen, shield } = profile;
   const lines: GcodeLine[] = [];
-  const push = (text: string, strokeIndex = -1, pointIndex?: number) => lines.push({ text, strokeIndex, pointIndex });
+  // comentário nunca passa do limite da linha, seja qual for o nome do arquivo, da caneta ou o número
+  const push = (text: string, strokeIndex = -1, pointIndex?: number) =>
+    lines.push({ text: text.charCodeAt(0) === 59 && text.length > MAX_LINE_LENGTH ? text.slice(0, MAX_LINE_LENGTH) : text, strokeIndex, pointIndex });
+  // o trabalho é o do PLANO (as esperas do servo foram calculadas para ele); `meta.job` só vale para planos antigos
+  const job = plan.job ?? meta.job;
   const xy = (p: Vec) => `X${formatCoord(Math.min(Math.max(p.x, 0), W))} Y${formatCoord(Math.min(Math.max(p.y, 0), H))}`;
   const dwell = (s: number) => `G4 P${fmtSeconds(s)}`;
   const up = toAsciiComment(pen.upCmd);
   const down = toAsciiComment(pen.downCmd);
-  const dynamic = meta.job.speedMode === "dynamic";
+  const dynamic = job.speedMode === "dynamic";
   const parts = plan.stats.parts;
   const resume = opts.fromDescent !== undefined && plan.descents.length > 0;
   const from = resume ? Math.min(Math.max(Math.trunc(opts.fromDescent!), 0), plan.descents.length - 1) : 0;
@@ -124,8 +136,8 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
 
   // ------------------------------------------------------------ cabeçalho
   const mode = dynamic
-    ? `dinamico - reta F${profile.feed.straight} / curva F${profile.feed.curve} / fechada F${profile.feed.tightCurve}`
-    : `fixo F${meta.job.fixedFeed}`;
+    ? `dinamico - reta F${fmtFeed(profile.feed.straight)} / curva F${fmtFeed(profile.feed.curve)} / fechada F${fmtFeed(profile.feed.tightCurve)}`
+    : `fixo F${fmtFeed(job.fixedFeed)}`;
   if (resume) {
     const at = plan.strokes[plan.descents[from].first]?.points[0];
     push(`; RETOMADA: continua da descida ${from + 1} de ${plan.descents.length}`);
@@ -143,8 +155,10 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     if (off.length) push(`; ponta corrigida: camada deslocada ${off.join(" e ")}`);
     if (layer.registration) {
       const r = profile.registration;
-      const at = (x: number) => `X${fmtSeconds(x - layer.offset.x)} Y${fmtSeconds(r.y - layer.offset.y)}`;
-      push(`; 1o traco: cruz em ${at(r.x1)} - ultimo: cruz em ${at(r.x2)}`);
+      // 2 casas no máximo (como as coordenadas do arquivo): com 3 a linha passava de 69 caracteres
+      const c = (v: number) => String(Math.round(v * 100) / 100);
+      const at = (x: number) => `X${c(x - layer.offset.x)} Y${c(r.y - layer.offset.y)}`;
+      push(`; 1o traco: cruz em ${at(r.x1)} - ultimo: ${at(r.x2)}`);
     }
   }
   if (part !== undefined) push(`; parte ${part + 1} de ${parts}`);
@@ -164,6 +178,34 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
       push(dwell(WARMUP_SETTLE_S));
     }
     push(dwell(WARMUP_FINAL_S));
+  }
+  // Arquivo que começa no meio do trabalho (uma parte, uma retomada): a agenda contava com a folga
+  // do servo acumulada até ali, e este arquivo começa do zero, logo depois do aquecimento. Descansa
+  // o que falta para a conta do servo (regra 3) continuar valendo daqui para a frente.
+  if ((part !== undefined || resume) && descents.length && profile.servo.onOverload === "wait") {
+    const { avgPerMin, peakPer60s } = profile.servo;
+    const full = Math.max(1, peakPer60s - avgPerMin - 1);
+    const need = (descents[redoCross ? 1 : 0] ?? descents[0]).bucket ?? full;
+    const have = tokensAfterWarmup(profile) - (redoCross ? 1 : 0);
+    const rate = avgPerMin / 60;
+    const restFor = (tokens: number) => Math.ceil(((tokens - have) / rate) * 10 - 1e-9) / 10;
+    // Um descanso longo esfria o que o aquecimento acabou de fazer (regra 10: o 1º traço saía sem
+    // tinta). Então, depois dele, o servo bate mais duas vezes no ar, e o descanso paga essas duas.
+    const rewarm = restFor(need) > REWARM_AFTER_REST_S && shield.enabled && shield.warmupCycles > 0;
+    const rest = restFor(need + (rewarm ? 2 : 0));
+    if (rest > 0.05) {
+      push("; servo descansa antes de recomecar");
+      push(dwell(rest));
+      if (rewarm) {
+        push("; reaquece o servo");
+        for (let i = 0; i < 2; i++) {
+          push(down);
+          push(dwell(WARMUP_SETTLE_S));
+          push(up);
+          push(dwell(WARMUP_SETTLE_S));
+        }
+      }
+    }
   }
 
   // ------------------------------------------------------------ descidas
@@ -194,11 +236,12 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     push(down, d.first, 0);
     push(dwell(firstOfFile && shield.enabled ? shield.firstSettleSeconds : pen.settleSeconds), d.first, 0);
 
-    let lastF = dynamic ? (s0.feeds[0] ?? profile.feed.straight) : meta.job.fixedFeed;
+    let lastF = fmtFeed(dynamic ? (s0.feeds[0] ?? profile.feed.straight) : job.fixedFeed);
     push(`G1 F${lastF}`, d.first, 0);
-    const move = (p: Vec, f: number, si: number, pi: number) => {
+    const move = (p: Vec, speed: number, si: number, pi: number) => {
       const t = xy(p);
       if (t === pos) return; // repetido depois de arredondar
+      const f = fmtFeed(speed);
       const feed = dynamic && f !== lastF ? ` F${f}` : "";
       if (feed) lastF = f;
       push(`${t}${feed}`, si, pi);
@@ -209,7 +252,7 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
       const pts = s.points;
       if (pts.length === 0) continue;
       // ligação da emenda: desenhada, com a caneta embaixo
-      move(pts[0], s.feeds[0] ?? lastF, si, 0);
+      move(pts[0], s.feeds[0] ?? Number(lastF), si, 0);
       for (let j = 1; j < pts.length; j++) move(pts[j], s.feeds[j - 1], si, j);
     }
     lift();

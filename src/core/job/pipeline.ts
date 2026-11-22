@@ -4,7 +4,7 @@ import { dist, type Vec } from "../geometry/vec";
 import { penOf, type MachineProfile, type Pen } from "../machine";
 import type { JobSettings } from "../store";
 import { checkBounds, checkZone } from "./bounds";
-import { bridgeIsHidden, buildInkMap, coveredByOthers } from "./inkmap";
+import { bridgeIsHidden, createInkMap, stampStroke, strokeCovered } from "./inkmap";
 import { layersOf, registrationCrosses, usesRegistration, type Layer } from "./layers";
 import { capDescents, keepOrder, orderStrokes, travelLength } from "./optimize";
 import { scheduleJob } from "./schedule";
@@ -83,12 +83,24 @@ function planLayer(
   let hiddenDropped = 0;
   let ordered = unoptimized;
   if (job.optimize) {
-    const ink = profile.join.overInk ? buildInkMap(mine, pen) : undefined;
+    const ink = profile.join.overInk ? createInkMap(mine, pen) : undefined;
     if (ink) {
-      // o índice no mapa é o do traço em `mine`, então a decisão vem antes de filtrar
-      const keep = mine.filter((s, i) => !(polylineLength(s.points) < HIDDEN_MAX_PEN_WIDTHS * pen && coveredByOthers(ink, i, s.points)));
-      hiddenDropped = mine.length - keep.length;
-      strokes = keep;
+      // Regra 4, um traço de cada vez: o mapa só recebe a tinta do que FICA. Assim dois tracinhos que
+      // se cobrem um ao outro não somem os dois, e nenhuma emenda passa por cima de tinta retirada.
+      const lengths = mine.map((s) => polylineLength(s.points));
+      const short = (i: number) => lengths[i] < HIDDEN_MAX_PEN_WIDTHS * pen;
+      mine.forEach((s, i) => {
+        if (!short(i)) stampStroke(ink, s.points);
+      });
+      // dos curtos, os maiores primeiro: o que já está coberto pelo que ficou, sai
+      const dropped = new Set<number>();
+      const candidates = mine.map((_, i) => i).filter(short).sort((a, b) => lengths[b] - lengths[a] || a - b);
+      for (const i of candidates) {
+        if (strokeCovered(ink, mine[i].points)) dropped.add(i);
+        else stampStroke(ink, mine[i].points);
+      }
+      hiddenDropped = dropped.size;
+      if (dropped.size) strokes = mine.filter((_, i) => !dropped.has(i));
     }
     ordered = wrap(
       orderStrokes(strokes, {
@@ -106,7 +118,7 @@ function planLayer(
   const shifted = offset.x === 0 && offset.y === 0 ? (s: OrderedStroke) => s : (s: OrderedStroke) => ({ ...s, points: s.points.map((p) => ({ x: p.x - offset.x, y: p.y - offset.y })) });
   const capped = capDescents(ordered, profile.servo.maxDescentMm).map(shifted);
   const planned = capped.map((s) => assignFeeds(s, job, profile));
-  const sched = scheduleJob(planned, start, end, profile);
+  const sched = scheduleJob(planned, start, end, profile, job.speedMode === "fixed" ? job.fixedFeed : undefined);
 
   // com a correção, um desenho colado na borda do curso pode passar dela
   const violations = [...docViolations];
@@ -145,6 +157,7 @@ function planLayer(
     end,
     violations,
     layer: planLayerInfo,
+    job,
     stats: {
       drawMm: drawMm + joinInkMm,
       travelMm: travelLength(capped, start, end),

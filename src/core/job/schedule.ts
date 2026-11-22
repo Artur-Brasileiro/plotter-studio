@@ -13,7 +13,27 @@ import type { Descent, PlannedStroke, TimeEstimate } from "./types";
  * Balde de fichas: entram `avgPerMin` fichas por minuto, cabem `peakPer60s − avgPerMin`, e cada
  * descida gasta uma. Faltou ficha: a caneta espera em cima. Isso garante média <= avgPerMin e
  * no máximo peakPer60s descidas em qualquer janela de 60 s.
+ *
+ * Dois relógios. O tempo mostrado ao Artur (e o dos checkpoints e das partes) considera a aceleração
+ * da máquina. Já o balde enche pelo MENOR entre esse tempo e o da auditoria (a conta do script de
+ * blindagem: traço a F, G0 a 3000 mm/min, sem aceleração). Um dos dois sempre anda mais depressa que
+ * o outro (o da auditoria nos saltos curtos, o da máquina nos longos), e o limite tem que valer pelos
+ * dois: senão o arquivo sairia do gerador e seria reprovado pela própria conferência.
  */
+
+/** Deslocamento na conta do script de blindagem e da auditoria (mm/min). Igual a AUDIT_TRAVEL_FEED. */
+const SCRIPT_TRAVEL_FEED = 3000;
+
+/** Fichas do balde logo depois do aquecimento, no começo de um arquivo. */
+export function tokensAfterWarmup(profile: MachineProfile): number {
+  const { servo, shield } = profile;
+  const capacity = Math.max(1, servo.peakPer60s - servo.avgPerMin - 1);
+  const warm = shield.enabled ? shield.warmupCycles : 0;
+  // O aquecimento também são ciclos do servo. O arquivo começa com o balde no ponto em que, pagos os
+  // ciclos do aquecimento, sobra uma ficha (com os 8 ciclos de sempre); com um aquecimento maior que
+  // o balde, o desenho começa devendo e espera.
+  return Math.min(capacity, warm + 1) - warm;
+}
 export interface Schedule {
   readonly descents: Descent[];
   readonly estimate: TimeEstimate;
@@ -43,13 +63,19 @@ export function groupDescents(strokes: readonly PlannedStroke[]): [number, numbe
   return out;
 }
 
-export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: Vec, profile: MachineProfile): Schedule {
+/**
+ * `textFeed`: no modo de velocidade fixa, o F único que vai escrito no arquivo (o `G1 F500` de cada
+ * descida). Sem ele (modo dinâmico) o arquivo traz o F de cada segmento do plano.
+ */
+export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: Vec, profile: MachineProfile, textFeed?: number): Schedule {
   const { pen, servo, shield } = profile;
   const lifts = shield.enabled && shield.doubleLift ? 2 : 1;
   const startTimes = new Array<number>(strokes.length).fill(0);
   const descents: Descent[] = [];
   let penS = 0, drawS = 0, travelS = 0, waitS = 0;
   let t = 0;
+  /** Relógio do balde: o mais apressado dos dois modelos de tempo, trecho a trecho */
+  let tb = 0;
   let cur = start;
 
   const travel = (to: Vec) => {
@@ -58,12 +84,14 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
       const dt = chainTimes([b], profile)[0];
       travelS += dt;
       t += dt;
+      tb += Math.min(dt, dist(cur, to) / (SCRIPT_TRAVEL_FEED / 60));
     }
     cur = to;
   };
   const dwell = (s: number) => {
     penS += s;
     t += s;
+    tb += s;
   };
 
   dwell(HEADER_SETTLE_S); // cabeçalho: M5 + G4
@@ -80,12 +108,14 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
   const capacity = Math.max(1, servo.peakPer60s - servo.avgPerMin - 1);
   // Começa com uma ficha só (não com o balde cheio): assim a média do trabalho INTEIRO nunca passa
   // de avgPerMin. As rajadas até o pico são pagas com a folga acumulada nos traços longos.
-  let tokens = 1;
-  let lastRefill = t;
+  let tokens = tokensAfterWarmup(profile);
+  let lastRefill = tb;
   let overloads = 0;
+  /** Fichas no balde logo antes do último gasto (depois da espera, se houve) */
+  let bucketBefore = tokens;
   const spend = (n: number): number => {
-    tokens = Math.min(capacity, tokens + (t - lastRefill) * rate);
-    lastRefill = t;
+    tokens = Math.min(capacity, tokens + (tb - lastRefill) * rate);
+    lastRefill = tb;
     let wait = 0;
     if (tokens < n) {
       overloads++;
@@ -93,10 +123,12 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
         wait = Math.ceil(((n - tokens) / rate) * 10 - 1e-9) / 10;
         waitS += wait;
         t += wait;
+        tb += wait;
         tokens = n;
-        lastRefill = t;
+        lastRefill = tb;
       }
     }
+    bucketBefore = tokens;
     tokens -= n;
     return wait;
   };
@@ -116,6 +148,7 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
     // Os 2 ciclos dele gastam fichas junto com a descida: a espera (se houver) vem antes de tudo.
     const hasCheckpoint = resyncS > 0 && gi > 0 && t - lastCheckpointT >= resyncS;
     const wait = spend(hasCheckpoint ? 1 + CHECKPOINT_DWELLS_S.length / 2 : 1);
+    let bucket0 = bucketBefore;
     if (hasCheckpoint) {
       checkpoints++;
       checkpoint = checkpoints;
@@ -124,6 +157,12 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
       if (partS > 0 && t - partStartT >= partS - resyncS / 2) {
         part++;
         partStartT = t;
+        // O arquivo desta parte começa do zero, logo depois do próprio aquecimento: daqui em diante a
+        // agenda não conta com mais folga do que esse arquivo terá. (No arquivo inteiro isso custa, no
+        // máximo, alguns segundos de espera a mais por parte.)
+        const fresh = tokensAfterWarmup(profile);
+        bucket0 = Math.min(bucket0, fresh);
+        tokens = Math.min(tokens, fresh - 1);
       }
       lastCheckpointT = t;
       dwell(CHECKPOINT_DWELLS_S.reduce((a, b) => a + b, 0));
@@ -136,23 +175,35 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
     const chain: Block[] = [];
     const marks: { stroke: number; block: number }[] = [];
     let lengthMm = 0;
+    // pela conta do script cada segmento leva comprimento ÷ F, com o F que vai ESCRITO no arquivo
+    // (o gerador segue a mesma regra: F modal, e a ligação de uma emenda usa o F do traço que começa)
+    let scriptDraw = 0;
+    let lastF = textFeed ?? s0.feeds[0] ?? profile.feed.straight;
     for (let i = first; i <= last; i++) {
       const s = strokes[i];
       if (s.points.length === 0) continue;
       marks.push({ stroke: i, block: chain.length });
       if (i > first || s.relift) {
         // ligação da emenda (com `relift` no primeiro, a caneta re-desceu no fim do traço anterior)
-        const gap = makeBlock(cur, s.points[0], s.feeds[0] ?? profile.feed.fixed, profile);
+        const f = s.feeds[0] ?? lastF;
+        const gap = makeBlock(cur, s.points[0], f, profile);
         if (gap) {
           chain.push(gap);
-          lengthMm += dist(cur, s.points[0]);
+          lengthMm += gap.len;
+          lastF = textFeed ?? f;
+          scriptDraw += gap.len / (lastF / 60);
         }
       }
       cur = s.points[0];
       for (let j = 0; j + 1 < s.points.length; j++) {
         const b = makeBlock(s.points[j], s.points[j + 1], s.feeds[j], profile);
-        if (b) chain.push(b);
-        lengthMm += dist(s.points[j], s.points[j + 1]);
+        const len = dist(s.points[j], s.points[j + 1]);
+        if (b) {
+          chain.push(b);
+          lastF = textFeed ?? s.feeds[j];
+          scriptDraw += len / (lastF / 60);
+        }
+        lengthMm += len;
       }
       cur = s.points[s.points.length - 1];
     }
@@ -163,8 +214,9 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
     const dDraw = cum[cum.length - 1];
     drawS += dDraw;
     t += dDraw;
+    tb += Math.min(dDraw, scriptDraw);
     dwell(pen.settleUpSeconds * lifts);
-    descents.push({ first, last, waitS: wait, checkpoint, checkpointMin, part, tDownS: tDown, drawS: dDraw, lengthMm, relift: !!s0.relift });
+    descents.push({ first, last, waitS: wait, checkpoint, checkpointMin, part, tDownS: tDown, drawS: dDraw, lengthMm, relift: !!s0.relift, bucket: bucket0 });
   });
 
   dwell(shield.enabled ? 2 * FOOTER_SETTLE_S : 0);

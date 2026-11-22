@@ -1,4 +1,4 @@
-import { auditGcode, auditOptionsOf, type AuditReport } from "../core/job/audit";
+import { auditGcode, auditOptionsOf, checkAgainstPlan, type AuditReport } from "../core/job/audit";
 import { generateGcode, type GcodeOptions, type GcodeProgram } from "../core/job/gcode";
 import { planLayers } from "../core/job/pipeline";
 import type { JobPlan } from "../core/job/types";
@@ -106,7 +106,8 @@ export class Planner {
     if (plan.violations.length === 0) {
       try {
         program = this.program(undefined, plan);
-        if (program) audit = auditGcode(program.lines.map((l) => l.text), this.store.state.profile, auditOptionsOf(plan));
+        // o arquivo inteiro também é conferido contra o plano: nenhum traço perdido nem criado
+        if (program) audit = checkAgainstPlan(plan, auditGcode(program.lines.map((l) => l.text), this.store.state.profile, auditOptionsOf(plan)));
       } catch (e) {
         console.error("conferência falhou", e);
       }

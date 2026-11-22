@@ -191,8 +191,11 @@ export function orderStrokes(strokes: readonly Stroke[], opts: OrderOptions): Or
   return out;
 }
 
+/** Menor resto de descida (mm) que justifica levantar e descer a caneta de novo no corte da regra 5. */
+export const MIN_TAIL_MM = 0.5;
+
 /**
- * REGRAS_GCODE.md, regra 5: uma descida não desenha mais que `maxMm`. Ao atingir o limite a caneta
+ * REGRAS_GCODE.md, regra 5: uma descida não desenha mais que `maxMm` (pode passar até MIN_TAIL_MM). Ao atingir o limite a caneta
  * sobe e desce no mesmo ponto (`relift`), o que não deixa marca. Vem DEPOIS das emendas, porque
  * são elas que juntam traços em cadeias longas. Corta no meio de um segmento se for preciso.
  */
@@ -201,14 +204,29 @@ export function capDescents(strokes: readonly OrderedStroke[], maxMm: number): O
   const out: OrderedStroke[] = [];
   let acc = 0; // mm desenhados desde a última descida
   let prevEnd: Vec | undefined;
-  for (const s of strokes) {
+  // comprimento de cada traço e do que ainda vem depois dele NA MESMA descida (emendas incluídas)
+  const lens = strokes.map((s) => {
+    let l = 0;
+    for (let j = 1; j < s.points.length; j++) l += dist(s.points[j - 1], s.points[j]);
+    return l;
+  });
+  const after = new Array<number>(strokes.length).fill(0);
+  for (let i = strokes.length - 2; i >= 0; i--) {
+    const a = strokes[i].points, nx = strokes[i + 1];
+    if (a.length && nx.points.length && nx.joinedToPrevious) after[i] = dist(a[a.length - 1], nx.points[0]) + lens[i + 1] + after[i + 1];
+  }
+  for (let si = 0; si < strokes.length; si++) {
+    const s = strokes[si];
     const pts = s.points;
     if (pts.length === 0) continue;
     let relift = false;
+    /** Quanto deste traço ainda falta desenhar, a partir do ponto atual */
+    let left = lens[si];
     if (!s.joinedToPrevious || !prevEnd) acc = 0;
     else {
       const gap = dist(prevEnd, pts[0]);
-      if (acc > 0 && acc + gap > maxMm) {
+      // (se o que falta da descida é um restinho, não vale levantar a caneta por ele)
+      if (acc > 0 && acc + gap > maxMm && gap + left + after[si] >= MIN_TAIL_MM) {
         relift = true;
         acc = gap;
       } else acc += gap;
@@ -224,12 +242,16 @@ export function capDescents(strokes: readonly OrderedStroke[], maxMm: number): O
       const b = pts[j];
       let len = dist(a, b);
       while (acc + len > maxMm + 1e-9 && len > 1e-9) {
-        const room = maxMm - acc;
+        const room = Math.max(0, maxMm - acc);
+        // Sobra menor que isto depois do corte: não corta. Um ciclo do servo para riscar meio milímetro
+        // (ou 0,004 mm, que no G-code nem vira movimento) é pior que passar meio milímetro do limite.
+        if (left - room + after[si] < MIN_TAIL_MM) break;
         if (room > 1e-6) {
           const t = room / len;
           a = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
           cur.push(a);
           len -= room;
+          left -= room;
         }
         if (cur.length > 1) {
           flush(false);
@@ -241,6 +263,7 @@ export function capDescents(strokes: readonly OrderedStroke[], maxMm: number): O
       }
       cur.push(b);
       acc += len;
+      left -= len;
     }
     // sem corte, o traço sai inteiro (e continua fechado se era)
     flush(first ? s.closed : false);

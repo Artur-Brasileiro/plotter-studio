@@ -4,7 +4,7 @@ import { IDENTITY } from "../geometry/mat2d";
 import type { Geometry } from "../geometry/path";
 import { DEFAULT_PROFILE, type MachineProfile } from "../machine";
 import { DEFAULT_JOB_SETTINGS } from "../store";
-import { auditGcode, auditOptionsOf } from "./audit";
+import { auditGcode, auditOptionsOf, checkAgainstPlan } from "./audit";
 import { generateGcode } from "./gcode";
 import { crossStroke, layersOf, REGISTRATION_ID, registrationBoxes, usesRegistration } from "./layers";
 import { planJob, planLayers } from "./pipeline";
@@ -148,7 +148,7 @@ describe("planLayers com duas canetas (fina + preta)", () => {
     const g = text(fina);
     expect(g).toContain("; camada 1 de 2 - caneta Fina 0,03 - 0.1 mm");
     expect(g).toContain("; ponta corrigida: camada deslocada -1.00 mm em X");
-    expect(g).toContain("; 1o traco: cruz em X19 Y12 - ultimo: cruz em X579 Y12");
+    expect(g).toContain("; 1o traco: cruz em X19 Y12 - ultimo: X579 Y12");
     const i = g.indexOf("; cruz de registro em ida e volta");
     expect(g.slice(i, i + 13)).toEqual([
       "; cruz de registro em ida e volta",
@@ -254,5 +254,26 @@ describe("cruzes ligadas sempre", () => {
     expect(plan.strokes.filter((s) => s.drawingId === REGISTRATION_ID)).toHaveLength(2);
     const g = text(plan, always);
     expect(auditGcode(g, always, auditOptionsOf(plan)).ok).toBe(true);
+  });
+});
+
+describe("o arquivo risca exatamente o que o plano mandou (seção 10 das regras)", () => {
+  const d = doc(drawing("grosso", [LINE_A, LINE_B, [[300, 100], [300, 100.3]]], "preta"), drawing("fino", [LINE_C], "fina"));
+  it("G-code gerado do plano: descidas e comprimento batem, em cada camada", () => {
+    for (const plan of planLayers(d, P, JOB)) {
+      const a = auditGcode(text(plan), P, auditOptionsOf(plan));
+      expect(checkAgainstPlan(plan, a)).toBe(a); // nada a acrescentar
+    }
+  });
+  it("bloco apagado do arquivo: a conferência acusa a descida e os milímetros que faltam", () => {
+    const plan = planJob(d, P, JOB, { penId: "preta" });
+    const g = text(plan);
+    const i = g.indexOf("G0 X100.00 Y150.00");
+    const j = g.indexOf("M5", i);
+    const cut = [...g.slice(0, i), ...g.slice(j + 4)]; // tira o bloco inteiro, com a subida dupla
+    const a = checkAgainstPlan(plan, auditGcode(cut, P, auditOptionsOf(plan)));
+    expect(a.ok).toBe(false);
+    expect(a.problems.map((p) => p.message).join(" ")).toMatch(/descidas.*perdido ou criado/);
+    expect(a.problems.map((p) => p.message).join(" ")).toMatch(/não saiu inteiro/);
   });
 });

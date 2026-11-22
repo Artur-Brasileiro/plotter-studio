@@ -23,7 +23,16 @@ function boxes(strokes: readonly Stroke[]): Map<DrawingId, BBox> {
  */
 export function checkBounds(strokes: readonly Stroke[], area: { width: number; height: number }, epsMm = 0.005): BoundsViolation[] {
   const out: BoundsViolation[] = [];
+  // Coordenada que não é número (NaN, infinito) escapa de qualquer comparação: é erro por si só.
+  const broken = new Set<DrawingId>();
+  for (const s of strokes) {
+    if (!broken.has(s.drawingId) && s.points.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.y))) broken.add(s.drawingId);
+  }
+  for (const drawingId of broken) {
+    out.push({ drawingId, bbox: { minX: 0, minY: 0, maxX: 0, maxY: 0 }, message: "tem uma coordenada que não é número e não pode ser desenhado: fica fora", kind: "area" });
+  }
   for (const [drawingId, b] of boxes(strokes)) {
+    if (broken.has(drawingId)) continue;
     const parts: string[] = [];
     if (b.minX < -epsMm) parts.push(`${fmt(-b.minX)} mm à esquerda`);
     if (b.maxX > area.width + epsMm) parts.push(`${fmt(b.maxX - area.width)} mm à direita`);

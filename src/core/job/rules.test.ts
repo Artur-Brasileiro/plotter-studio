@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Vec } from "../geometry/vec";
 import { DEFAULT_PROFILE, type MachineProfile } from "../machine";
-import { bridgeIsHidden, buildInkMap, coveredByOthers, isInked } from "./inkmap";
+import { bridgeIsHidden, buildInkMap, isInked, strokeCovered } from "./inkmap";
 import { capDescents, orderStrokes } from "./optimize";
 import { groupDescents, scheduleJob } from "./schedule";
 import { stroke } from "./testPlan";
@@ -16,17 +16,40 @@ describe("mapa de tinta", () => {
   const strokes = [line([10, 10], [30, 10]), line([20, 10], [21, 10]), line([10, 20], [30, 20])];
   const ink = buildInkMap(strokes, 0.4)!;
 
-  it("há tinta sobre o traço e até meia largura da caneta ao lado, e não além", () => {
+  it("há tinta sobre o traço e perto dele, e nunca além de meia largura da caneta", () => {
     expect(isInked(ink, V(15, 10))).toBe(true);
-    expect(isInked(ink, V(15, 10.15))).toBe(true);
+    expect(isInked(ink, V(15, 10.1))).toBe(true);
+    // o mapa é conservador: na dúvida (a célula não cabe inteira no risco), diz que é papel
+    expect(isInked(ink, V(15, 10.21))).toBe(false);
     expect(isInked(ink, V(15, 10.5))).toBe(false);
     expect(isInked(ink, V(15, 15))).toBe(false);
   });
 
+  it("o mapa nunca vê tinta onde há papel: nenhuma célula marcada fica a mais de meia caneta de um traço", () => {
+    for (let k = 0; k < 400; k++) {
+      const p = V(9.5 + (k % 20) * 0.031, 9.6 + Math.floor(k / 20) * 0.041);
+      const d = p.x < 10 ? Math.hypot(p.x - 10, p.y - 10) : Math.abs(p.y - 10);
+      if (isInked(ink, p)) expect(d).toBeLessThanOrEqual(0.2 + 1e-9);
+      if (d < 0.09) expect(isInked(ink, p)).toBe(true);
+    }
+  });
+
   it("tracinho em cima de outro traço está coberto; traço sozinho não", () => {
-    expect(coveredByOthers(ink, 1, strokes[1].points)).toBe(true);
-    expect(coveredByOthers(ink, 0, strokes[0].points)).toBe(false);
-    expect(coveredByOthers(ink, 2, strokes[2].points)).toBe(false);
+    // o mapa de quem FICA não tem o próprio tracinho
+    const others = buildInkMap([strokes[0], strokes[2]], 0.4)!;
+    expect(strokeCovered(others, strokes[1].points)).toBe(true);
+    expect(strokeCovered(buildInkMap([strokes[1], strokes[2]], 0.4)!, strokes[0].points)).toBe(false);
+    expect(strokeCovered(buildInkMap([strokes[0], strokes[1]], 0.4)!, strokes[2].points)).toBe(false);
+  });
+
+  it("coberto é o risco inteiro: tracinho com metade da largura para fora engrossa a linha, não está escondido", () => {
+    const others = buildInkMap([strokes[0], strokes[2]], 0.4)!;
+    expect(strokeCovered(others, line([20, 10.2], [21, 10.2]).points)).toBe(false);
+    // passando da ponta do traço também não
+    expect(strokeCovered(others, line([29.5, 10], [30.3, 10]).points)).toBe(false);
+    // um ponto solto em cima da linha está coberto; ao lado dela, não
+    expect(strokeCovered(others, [V(20, 10)])).toBe(true);
+    expect(strokeCovered(others, [V(20, 10.25)])).toBe(false);
   });
 
   it("ligação por cima de um traço fica escondida; atravessando papel em branco, não", () => {

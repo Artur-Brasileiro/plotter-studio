@@ -177,6 +177,43 @@ O que ainda falta:
   sempre do grosso.
 - **Nada disso rodou na máquina.**
 
+## Acrescentado em 23/11/2026, mais tarde: o programa indica o tipo, tira a grade, e a "precisão"
+
+O Artur vetorizou uma planta azul nítida (traço branco, textos, grade no fundo) e o texto saiu como borrão
+contornado. Perguntou se a vetorização não podia "dar zoom" para pegar os detalhes mínimos.
+
+**O que era.** Ele tinha escolhido o tipo Ilustração (a imagem é colorida). Esse tipo reduz a imagem até 1 pixel
+valer 1 largura de caneta e alisa a textura: serve para pintura, e destrói texto e linha fina. No tipo Preto e
+branco a mesma imagem sai com todos os textos legíveis. O zoom não era o problema: medi a ampliação interna em 2×,
+3× e 4× (7 s, 12 s e 19 s de cálculo) e o desenho é praticamente o mesmo, porque quem limita o detalhe é a largura
+da caneta no papel, não a leitura da imagem.
+
+O que mudou no programa:
+
+- **O programa indica o tipo.** Ao abrir a imagem, ele mede se ela é um desenho de linhas (quase tudo fundo liso, e
+  o que não é fundo é fino). Se for, o cartão do tipo certo vem marcado "parece ser este": Traço, ou Preto e branco
+  quando há área cheia (um letreiro). Nas dez imagens de teste, os quatro desenhos de linhas foram reconhecidos e
+  as outras seis ficaram sem sugestão. Quem mesmo assim escolher Ilustração ou Foto vê um aviso com o botão "Trocar
+  para…".
+- **A grade do fundo sai sozinha.** Numa planta com grade (linhas fracas que atravessam a folha de lado a lado, nas
+  duas direções), "Linhas claras" desce até a grade ficar de fora, e a tela avisa. Na planta do reator: de 60% para
+  25%, e as centenas de tracinhos e pontos da grade somem. As linhas fracas do próprio desenho não são confundidas
+  com grade (conferido no desenho de linhas que o Artur já tinha aprovado: fica igual).
+- **"Precisão" (em Mais ajustes do Traço):** Normal ou Alta. A Alta amplia um degrau a mais por dentro. Fica à
+  disposição, mas o ganho é pequeno.
+- Os textos dos quatro cartões dizem com mais clareza o que cada tipo faz ("planta, mesmo de fundo azul" no Traço;
+  "texto e linha fina se perdem" na Ilustração).
+
+A planta do reator, na folha inteira (471 × 335 mm), Preto e branco, caneta 0,4: 3 h 45 min, 5.762 descidas. Com
+"Traço mínimo" em 1,5 mm: 2 h 45 min.
+
+O que ainda falta:
+
+- **A indicação só existe para desenho de linhas.** Entre Ilustração e Foto o programa não opina.
+- **A grade só é reconhecida se estiver reta** (linhas na horizontal e na vertical). Numa planta fotografada torta,
+  o jeito é baixar "Linhas claras" à mão.
+- **Nada disso rodou na máquina.**
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -200,8 +237,9 @@ O que ainda falta:
 | 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
 | 8. Cores em camadas, papel e caneta, apagar traços, tempo de máquina na tela de vetorizar | pronto em 22/11, à noite (ver acima) |
 | 9. Traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas | pronto em 23/11 (ver acima) |
+| 10. Tipo indicado para desenho de linhas, grade do fundo retirada, precisão | pronto em 23/11 (ver acima) |
 
-Testes automáticos: 1.596 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.613 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

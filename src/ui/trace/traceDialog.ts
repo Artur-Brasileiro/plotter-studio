@@ -7,8 +7,9 @@ import { penOf, type MachineProfile, type Pen } from "../../core/machine";
 import type { Store } from "../../core/store";
 import { backgroundRgb, colorLayers, findPalette, lightOnDark, paperClass, strokeColors, type ColorLayer, type Palette } from "../../core/trace/colors";
 import { borderMedian, colorfulness, DARK_BACKGROUND } from "../../core/trace/illus";
+import { analyzeImage, faintForPattern, suggestedMode, type ImageKind } from "../../core/trace/kind";
 import { strokeParts } from "../../core/trace/parts";
-import { DEFAULT_TRACE, STROKE_KIND, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
+import { autoScale, DEFAULT_TRACE, STROKE_KIND, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
 import type { GrayImage } from "../../core/trace/types";
 import { saveProfile } from "../../storage/profileStore";
 import { CancelledError, loadImage, PlanEstimator, Tracer, type LoadedImage } from "../../trace/client";
@@ -31,6 +32,8 @@ const COLORFUL = 0.03;
 const MOSTLY_DARK = 0.75;
 /** docs/REGRAS_GCODE.md, seção 9: acima de 2-3 h o risco de falha da caneta aumenta. */
 const LONG_JOB_S = 3 * 3600;
+/** "Precisão alta" amplia a imagem um degrau a mais por dentro, até este tamanho (px): acima disso falta memória. */
+const PRECISE_MAX_PX = 45_000_000;
 /** Ajustes que são de cada imagem: não são lembrados de uma para a outra. */
 const PER_IMAGE: readonly (keyof TraceOptions)[] = ["mmPerPx", "penMm", "scale", "invert", "minLineMm", "fillBackground"];
 
@@ -38,9 +41,9 @@ const PER_IMAGE: readonly (keyof TraceOptions)[] = ["mmPerPx", "penMm", "scale",
 const MODE_NAME: Record<TraceMode, string> = { line: "Traço", ink: "Preto e branco", illus: "Ilustração", photo: "Foto" };
 /** Para que serve cada tipo, em uma linha: é o que a pessoa lê para escolher, antes de qualquer cálculo. */
 const MODE_FOR: Record<TraceMode, string> = {
-  line: "Desenho que já é de linhas: contorno, planta, lápis. Cada linha vira um traço da caneta.",
-  ink: "Nanquim, gravura, mangá, logotipo cheio. Traço fino em linha única; área preta com contorno e hachura.",
-  illus: "Pintura, desenho colorido, imagem com textura. Ficam os contornos das formas; o escuro pode ganhar hachura.",
+  line: "Desenho de linhas: contorno, planta (mesmo de fundo azul), lápis, texto. Cada linha vira um traço da caneta.",
+  ink: "Desenho de linhas com partes cheias: nanquim, mangá, logotipo, planta com letreiro. A área cheia ganha contorno e hachura.",
+  illus: "Pintura, render, desenho pintado. Ficam só os contornos das formas: texto e linha fina se perdem.",
   photo: "Fotografia. Não tem linhas: o claro e o escuro viram hachura cruzada.",
 };
 const MODES: readonly TraceMode[] = ["line", "ink", "illus", "photo"];
@@ -128,6 +131,14 @@ export function openTraceDialog(store: Store, file: File): void {
   let layers: ColorLayer[] = [];
   let layerOf: Uint8Array = new Uint8Array(0);
   const layerPen = new Map<string, string>();
+  // o que a imagem é (desenho de linhas? tem grade no fundo?), medido uma vez ao abrir
+  let kind: ImageKind | undefined;
+  let suggested: TraceMode | undefined;
+  /** "Linhas claras" como a pessoa deixou: é este valor que fica lembrado, não o que a grade obrigou */
+  const ownFaint = s.faint;
+  let faintTouched = false;
+  let gridRemoved = false;
+  let precise = false;
   let splitOn = false;
   let thinMm = 0.5;
   let thinTouched = false;
@@ -298,6 +309,9 @@ export function openTraceDialog(store: Store, file: File): void {
   let invertTouched = false;
   const darkNote = h("p", { class: "hint", hidden: true });
   const penNote = h("div", { class: "notice", hidden: true });
+  // desenho de linhas num tipo que apaga texto e linha fina: avisa e oferece a troca
+  const lineNote = h("div", { class: "notice", hidden: true });
+  const gridNote = h("p", { class: "hint", hidden: true }, "Tirei a grade do fundo. Para trazê-la de volta, leve “Linhas claras” para a direita.");
   /** Tudo o que precisa reler o valor quando um ajuste muda por fora do próprio controle. */
   const refreshers: (() => void)[] = [];
 
@@ -371,10 +385,25 @@ export function openTraceDialog(store: Store, file: File): void {
     (v) => {
       s.mode = v;
       defaultInvert();
+      dropGrid();
       renderMode();
       schedule(150);
     },
   );
+  /**
+   * Planta com grade no fundo: nos tipos de traço, "Linhas claras" desce até a grade ficar de fora, senão ela
+   * entra como centenas de tracinhos e pontos. Só enquanto a pessoa não mexeu nesse controle.
+   */
+  function dropGrid() {
+    if (faintTouched || !kind || kind.faintLevel <= 0 || (s.mode !== "line" && s.mode !== "ink")) return;
+    const lower = faintForPattern(kind.faintLevel, ownFaint);
+    gridRemoved = lower < ownFaint;
+    if (gridRemoved) s.faint = lower;
+    refreshers.forEach((f) => f());
+  }
+  /** A ampliação interna do traçado: a de sempre, ou um degrau a mais ("Precisão alta"), se couber na memória. */
+  const baseScale = () => autoScale(img!.gray.width, img!.gray.height);
+  const canBePrecise = () => !!img && baseScale() < 8 && img.gray.width * img.gray.height * (baseScale() + 1) ** 2 <= PRECISE_MAX_PX;
 
   // --- papel e caneta
   const paperDark = () => isDark(paperColor());
@@ -423,10 +452,21 @@ export function openTraceDialog(store: Store, file: File): void {
     s.mode = m;
     mode.sync();
     defaultInvert();
+    dropGrid();
     renderMode();
     schedule(0);
   };
   const choices = MODES.map((m) => h("button", { class: "choice", disabled: true, onclick: () => choose(m) }, h("strong", null, MODE_NAME[m]), h("span", null, MODE_FOR[m])));
+  /** Marca o cartão do tipo que combina com a imagem (só quando ela é claramente um desenho de linhas). */
+  const markSuggested = () => {
+    choices.forEach((b, i) => {
+      const on = MODES[i] === suggested;
+      b.classList.toggle("suggested", on);
+      b.querySelector(".tag")?.remove();
+      if (on) b.querySelector("strong")!.append(h("em", { class: "tag" }, "parece ser este"));
+    });
+    if (suggested && !started) choices[MODES.indexOf(suggested)].focus();
+  };
   const chooser = h("div", { class: "panel-section" }, h("h3", null, "Que tipo de imagem é esta?"), ...choices, h("p", { class: "hint" }, "Dá para trocar depois."));
 
   const orient = seg<boolean>(
@@ -539,10 +579,29 @@ export function openTraceDialog(store: Store, file: File): void {
       ]);
     }
 
-    // uma planta azul também é "colorida", mas é desenho de linhas: o aviso só vale para fundo claro
-    const wrongType = started && colorful && !darkBackground && (s.mode === "line" || s.mode === "ink");
+    // uma planta azul também é "colorida", mas é desenho de linhas: o aviso só vale para fundo claro,
+    // e nunca para uma imagem que foi reconhecida como desenho de linhas
+    const wrongType = started && colorful && !darkBackground && !suggested && (s.mode === "line" || s.mode === "ink");
     colorNote.hidden = !wrongType;
     if (wrongType) colorNote.textContent = `Imagem colorida: o tipo ${MODE_NAME.illus} costuma ficar melhor.`;
+    // o contrário: desenho de linhas na Ilustração ou na Foto, que reduzem e alisam a imagem
+    const better = suggested;
+    lineNote.hidden = !started || !better || s.mode === "line" || s.mode === "ink";
+    if (!lineNote.hidden && better) {
+      clear(lineNote);
+      append(lineNote, [
+        `Esta imagem é um desenho de linhas. No tipo ${MODE_NAME[better]}, o texto e os detalhes finos saem inteiros. `,
+        h("button", { onclick: () => {
+          s.mode = better;
+          mode.sync();
+          defaultInvert();
+          dropGrid();
+          renderMode();
+          schedule(150);
+        } }, `Trocar para ${MODE_NAME[better]}`),
+      ]);
+    }
+    gridNote.hidden = !gridRemoved || faintTouched || (s.mode !== "line" && s.mode !== "ink");
   }
 
   function renderSize() {
@@ -568,12 +627,39 @@ export function openTraceDialog(store: Store, file: File): void {
       check("Hachura cruzada", () => s.hatchCross, (v) => (s.hatchCross = v), "Uma segunda hachura, a 90° da primeira"),
     ),
   ]);
+  const preciseSeg = seg<boolean>(
+    [
+      [false, "Normal"],
+      [true, "Alta", "Lê a imagem com mais ampliação: ajuda em letra muito miúda. Demora mais e quase nunca muda o desenho, porque o limite costuma ser a largura da caneta."],
+    ],
+    () => precise,
+    (v) => {
+      if (v && !canBePrecise()) return toast("Esta imagem já está na ampliação máxima que cabe na memória.", "info");
+      precise = v;
+      schedule(150);
+    },
+  );
   append(strokeBox, [
     h("h3", null, "Traço"),
     range("Traço mínimo", 0, 10, 0.5, () => s.minLineMm, (v) => (s.minLineMm = v), minFmt, "Traços mais curtos que isto somem. Os tracinhos de 1 ou 2 mm são metade das descidas da caneta e quase nada da tinta: tirar encurta muito o tempo."),
     range("Tinta", -100, 100, 5, () => s.ink, (v) => (s.ink = v), signed, "Para a direita, mais coisa vira traço"),
-    range("Linhas claras", 0, 1, 0.05, () => s.faint, (v) => (s.faint = v), pct, "Quanto das linhas apagadas entra no traçado"),
+    range(
+      "Linhas claras",
+      0,
+      1,
+      0.05,
+      () => s.faint,
+      (v) => {
+        s.faint = v;
+        faintTouched = true;
+        gridNote.hidden = true;
+      },
+      pct,
+      "Quanto das linhas apagadas entra no traçado. Para a esquerda, some a grade do fundo de uma planta",
+    ),
+    gridNote,
     more(
+      h("label", { class: "field" }, "Precisão", preciseSeg.el),
       range("Nitidez", 0, 1.5, 0.1, () => s.sharpen, (v) => (s.sharpen = v), pct, "Separa linhas que estão quase encostadas"),
       range("Limpar sujeira", 0, 12, 0.5, () => s.speckPx, (v) => (s.speckPx = v), px, "Manchas menores que isto somem"),
       range("Tirar rebarbas", 0, 4, 0.25, () => s.spurPx, (v) => (s.spurPx = v), px, "Fiapos mais curtos que isto somem"),
@@ -627,6 +713,7 @@ export function openTraceDialog(store: Store, file: File): void {
     h("h3", null, "Tipo"),
     mode.el,
     colorNote,
+    lineNote,
     h("h3", null, "Papel e caneta"),
     paperPicker.el,
     h("label", { class: "field" }, "Caneta", penSelect),
@@ -876,14 +963,15 @@ export function openTraceDialog(store: Store, file: File): void {
     busyFill.style.width = "2%";
     busyLabel.textContent = "Começando…";
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(s));
+      // fica lembrado o "Linhas claras" da pessoa, não o que a grade desta imagem obrigou
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ ...s, faint: faintTouched ? s.faint : ownFaint }));
     } catch {
       /* sem armazenamento: só não lembra */
     }
     try {
       const { result: r } = await tracer.run(
         grayFor(),
-        { ...s },
+        { ...s, scale: precise && canBePrecise() ? baseScale() + 1 : undefined },
         (f, label) => {
           busyFill.style.width = `${Math.round(f * 100)}%`;
           busyLabel.textContent = label;
@@ -986,6 +1074,21 @@ export function openTraceDialog(store: Store, file: File): void {
       fit();
       draw();
       choices[0].focus();
+      // depois de a imagem aparecer: é um desenho de linhas? tem grade no fundo? (a conta leva até um segundo)
+      setTimeout(() => {
+        if (img !== loaded) return;
+        kind = analyzeImage(loaded.rgba, loaded.gray.width, loaded.gray.height);
+        const better = suggestedMode(kind);
+        suggested = better;
+        markSuggested();
+        if (started) {
+          // a pessoa já escolheu o tipo antes de a conta terminar
+          const before = s.faint;
+          dropGrid();
+          renderMode();
+          if (s.faint !== before) schedule(150);
+        }
+      }, 60);
     })
     .catch((e: Error) => {
       toast(e.message, "error", 9000);

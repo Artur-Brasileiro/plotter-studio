@@ -375,6 +375,10 @@ dialog.settings:not([open]), dialog.sheet:not([open]) { display: none; }
 .time-box { padding: 10px 12px; border-radius: var(--radius); background: var(--plan-wash); border: 1px solid #b6c8ea; font-size: 13.5px; line-height: 1.4; }
 .time-box b { display: block; font-size: 22px; font-weight: 600; }
 .time-box .line { display: block; margin-top: 5px; }
+/* o tipo que combina com a imagem, na escolha inicial */
+.choice.suggested { border-color: var(--plan); box-shadow: inset 3px 0 0 var(--plan); background: var(--plan-wash); }
+.choice .tag { font-style: normal; font-size: 12px; font-weight: 600; color: #fff; background: var(--plan); border-radius: 999px; padding: 1px 8px; margin-left: 8px; vertical-align: 2px; }
+.notice button { margin-top: 6px; }
 /* tela de vetorizar: o tamanho numa linha só, e os ajustes raros recolhidos */
 .trace-sections { display: flex; flex-direction: column; gap: 10px; }
 .trace-sections[hidden] { display: none; }

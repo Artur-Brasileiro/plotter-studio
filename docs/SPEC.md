@@ -21,7 +21,7 @@ Nesta fase o envio continua pelo LaserGRBL (que já funciona). Só uma coisa mud
   - Respeitar as unidades do SVG (`mm`, `px` a 96 dpi, `viewBox`). Um SVG de 100 mm do Inkscape tem que entrar com 100 mm. SVG com tamanho em px gera aviso (o Illustrator usa 72 dpi).
   - Ignorar preenchimento (fill): a plotter só desenha contornos. Forma só com `fill` também é desenhada (o contorno dela). Texto e imagens são ignorados com aviso ("converta o texto em curvas no Inkscape").
   - Ao importar, o canto inferior esquerdo da **página** do SVG vai para o (0,0) da máquina.
-- Selecionar, **arrastar, girar e redimensionar** com o mouse (alças do Fabric). Shift mantém a proporção. Arrastar uma alça não espelha o desenho.
+- Selecionar, **arrastar, girar e redimensionar** com o mouse (alças do Fabric). Arrastar uma alça não espelha o desenho. **Desde 22/11/2026 a proporção fica travada** ("Travar proporção", ligada ao abrir): os cantos aumentam e diminuem por igual e as alças dos lados somem; destravando, elas voltam e o Shift mantém a proporção. Ao girar, o desenho encaixa nos múltiplos de 45° (a 4° deles) e uma etiqueta mostra o ângulo. Regras em `src/ui/gestures.ts`.
 - Painel de propriedades com campos numéricos: X, Y (canto inferior esquerdo da caixa do desenho, em mm da máquina), largura, altura (da caixa, em mm), rotação (graus, anti-horária como o operador vê), travar proporção. Com rotação fora de múltiplos de 90°, a proporção fica sempre travada. Com vários desenhos selecionados, só X e Y.
 - Atalhos: Delete apaga, Ctrl+D duplica, setas movem 1 mm (Shift = 10 mm), Ctrl+Z / Ctrl+Y desfazer/refazer.
 - Alinhar: centralizar na mesa, no A4 ou no A3.

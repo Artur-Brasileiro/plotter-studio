@@ -17,6 +17,7 @@ import type { BBox } from "../../core/geometry/path";
 import { penOf } from "../../core/machine";
 import type { Store } from "../../core/store";
 import { append, clear, h, toast } from "../dom";
+import { isRightAngle, onRatioLockChange, onTurning, ratioLocked, setRatioLocked } from "../gestures";
 
 /** Lê número digitado com vírgula ou ponto. */
 export function parseNum(s: string): number | undefined {
@@ -27,12 +28,6 @@ export function parseNum(s: string): number | undefined {
 const fmt = (v: number, d = 2) => (Math.round(v * 10 ** d) / 10 ** d).toLocaleString("pt-BR", { maximumFractionDigits: d });
 /** Folga de "Encaixar na folha" (mm de cada lado). */
 const FIT_MARGIN = 5;
-
-/** Rotação é "reta" (0/90/180/270)? Aí dá para escalar largura e altura separadamente sem distorcer. */
-function isRightAngle(deg: number): boolean {
-  const r = ((deg % 90) + 90) % 90;
-  return r < 1e-6 || 90 - r < 1e-6;
-}
 
 /** A seleção, sempre com os conjuntos inteiros (as camadas de uma imagem andam juntas). */
 function selectedIds(store: Store): DrawingId[] {
@@ -91,13 +86,18 @@ export interface BringActions {
  *
  * X/Y = canto inferior esquerdo da caixa na máquina; largura/altura da caixa; rotação vista pelo operador.
  * Cada edição é um commit (Enter ou sair do campo); editar o mesmo campo seguidamente vira uma entrada só.
+ *
+ * "Travar proporção" é a mesma trava das alças da mesa (`gestures.ts`): ligada, o desenho cresce e
+ * diminui por igual, digitando ou arrastando. O campo "Ângulo" acompanha o giro feito com o mouse.
  */
 export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLElement {
   const listBox = h("div", { class: "panel-section" });
   const detailBox = h("div", { class: "panel-section" });
   const root = h("div", { class: "panel" }, listBox, detailBox);
-  let keepRatio = true;
   const fields = new Map<string, HTMLInputElement>();
+  // o que depende do giro atual e precisa acompanhar o desenho mesmo sem refazer o painel (ver `fill`)
+  let ratioBox: HTMLInputElement | undefined;
+  let straighten: HTMLButtonElement | undefined;
 
   const H = () => store.state.profile.workArea.height;
   const tol = () => store.state.profile.tolerance.chordMm;
@@ -220,6 +220,8 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
     if (!force && detailBox.contains(document.activeElement) && document.activeElement instanceof HTMLInputElement) return fill(ids);
     clear(detailBox);
     fields.clear();
+    ratioBox = undefined;
+    straighten = undefined;
     const doc = store.doc;
     if (!doc.drawings.length) return;
     if (!ids.length) {
@@ -229,8 +231,10 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
     const members = doc.drawings.filter((d) => ids.includes(d.id));
     const items = groupsOf(doc).filter((item) => item.some((id) => ids.includes(id)));
     const one = items.length === 1;
-    const rot = machineRotationDeg(members[0].transform);
-    const free = one && isRightAngle(rot);
+    // lidos na hora de agir, não na hora de montar o painel: quem acabou de digitar um ângulo continua com o
+    // foco no campo, e o painel não é refeito enquanto isso
+    const rotNow = () => rotationOf(ids);
+    const lockNow = () => ratioLocked() || !isRightAngle(rotNow());
     const commit = store.commit.bind(store);
 
     detailBox.append(
@@ -255,29 +259,33 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
       field("x", "X", "X (mm)", (v) => commit("Mover", (d) => setSelectionBox(d, ids, { x: v, keepRatio: true }, H(), tol()), { coalesceKey: "field:x" })),
       field("y", "Y", "Y (mm)", (v) => commit("Mover", (d) => setSelectionBox(d, ids, { y: v, keepRatio: true }, H(), tol()), { coalesceKey: "field:y" })),
     );
+    let ratioRow: HTMLElement | null = null;
     let turnRow: HTMLElement | null = null;
     if (one) {
       grid.append(
         field("w", "Largura", "Largura (mm)", (v) => {
           if (v <= 0) return renderDetail(true);
-          commit("Redimensionar", (d) => setSelectionBox(d, ids, { width: v, keepRatio: keepRatio || !free }, H(), tol()), { coalesceKey: "field:w" });
+          commit("Redimensionar", (d) => setSelectionBox(d, ids, { width: v, keepRatio: lockNow() }, H(), tol()), { coalesceKey: "field:w" });
         }),
         field("h", "Altura", "Altura (mm)", (v) => {
           if (v <= 0) return renderDetail(true);
-          commit("Redimensionar", (d) => setSelectionBox(d, ids, { height: v, keepRatio: keepRatio || !free }, H(), tol()), { coalesceKey: "field:h" });
+          commit("Redimensionar", (d) => setSelectionBox(d, ids, { height: v, keepRatio: lockNow() }, H(), tol()), { coalesceKey: "field:h" });
         }),
       );
-      const cb = h("input", { type: "checkbox", checked: keepRatio || !free, disabled: !free });
-      cb.addEventListener("change", () => (keepRatio = cb.checked));
+      const cb = h("input", { type: "checkbox" });
+      cb.addEventListener("change", () => setRatioLocked(cb.checked));
+      ratioBox = cb;
+      ratioRow = h("label", { class: "check ratio" }, cb, "Travar proporção");
+      straighten = h("button", { title: "Volta o desenho para o ângulo 0", onclick: () => commit("Endireitar", (d) => setSelectionRotation(d, ids, 0, H(), tol())) }, "Endireitar");
       turnRow = h(
         "div",
         { class: "turn-row" },
-        field("r", "Giro (°)", "Rotação (°)", (v) => commit("Girar", (d) => setSelectionRotation(d, ids, v, H(), tol()), { coalesceKey: "field:r" })),
-        h("button", { title: "Gira 90° no sentido anti-horário", onclick: () => commit("Girar 90°", (d) => setSelectionRotation(d, ids, rot + 90, H(), tol())) }, "Girar 90°"),
-        h("label", { class: "check ratio", title: free ? "Largura e altura mudam juntas" : "Com o desenho girado em ângulo não reto, a proporção fica sempre travada (senão ele distorce)." }, cb, "Travar proporção"),
+        field("r", "Ângulo (°)", "Ângulo do giro (°): positivo gira para a esquerda", (v) => commit("Girar", (d) => setSelectionRotation(d, ids, v, H(), tol()), { coalesceKey: "field:r" })),
+        h("button", { title: "Gira 90° no sentido anti-horário", onclick: () => commit("Girar 90°", (d) => setSelectionRotation(d, ids, rotNow() + 90, H(), tol())) }, "Girar 90°"),
+        straighten,
       );
     }
-    append(detailBox, [h("h3", { class: "sub" }, one ? "Posição e tamanho (mm)" : "Posição (mm)"), grid, turnRow]);
+    append(detailBox, [h("h3", { class: "sub" }, one ? "Posição e tamanho (mm)" : "Posição (mm)"), grid, ratioRow, turnRow]);
 
     const { drawZone, paperTemplates } = store.state.profile;
     const zoneBox: BBox = { minX: drawZone.minX, minY: drawZone.minY, maxX: drawZone.maxX, maxY: drawZone.maxY };
@@ -303,19 +311,40 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
     fill(ids);
   }
 
-  /** Preenche os campos com a caixa atual (menos o que está com foco). */
+  /** O giro do que está selecionado (o do primeiro desenho; as camadas de um conjunto giram juntas). */
+  function rotationOf(ids: readonly DrawingId[]): number {
+    const first = store.doc.drawings.find((d) => ids.includes(d.id));
+    return first ? machineRotationDeg(first.transform) : 0;
+  }
+
+  /** Preenche os campos com a caixa atual (menos o que está com foco), e acerta a trava e o "Endireitar". */
   function fill(ids: readonly DrawingId[]) {
     if (!ids.length || !fields.size) return;
     const b = boxOf(ids);
-    const first = store.doc.drawings.find((d) => ids.includes(d.id));
+    const rot = rotationOf(ids);
     const values: Record<string, string> = {
       x: fmt(b.minX),
       y: fmt(b.minY),
       w: fmt(b.maxX - b.minX),
       h: fmt(b.maxY - b.minY),
-      r: first ? fmt(machineRotationDeg(first.transform), 2) : "",
+      r: fmt(rot, 2),
     };
     for (const [k, input] of fields) if (input !== document.activeElement) input.value = values[k] ?? "";
+    if (ratioBox) {
+      // girado em ângulo não reto, a proporção fica sempre travada (esticar ali entortaria o traço)
+      const free = isRightAngle(rot);
+      ratioBox.checked = ratioLocked() || !free;
+      ratioBox.disabled = !free;
+      const label = ratioBox.parentElement;
+      if (label) {
+        label.title = !free
+          ? "Com o desenho girado em ângulo não reto, a proporção fica sempre travada (senão ele deforma)."
+          : ratioBox.checked
+            ? "Ligado: o desenho aumenta e diminui por igual, na mesa e nos campos. Desligue para esticar só a largura ou só a altura."
+            : "Desligado: dá para esticar só a largura ou só a altura. Na mesa, o Shift mantém a proporção enquanto estiver apertado.";
+      }
+    }
+    if (straighten) straighten.disabled = rot === 0;
   }
 
   const render = (force: boolean) => {
@@ -329,6 +358,13 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
   store.subscribe((s, prev) => {
     if (s.selection !== prev.selection) render(true);
     else if (s.history !== prev.history || s.profile !== prev.profile) render(false);
+  });
+  onRatioLockChange(() => fill(sel()));
+  // girando com o mouse na mesa: o campo "Ângulo" mostra o valor ao vivo; quando o giro termina, vale o que ficou gravado
+  onTurning((t) => {
+    const input = fields.get("r");
+    if (!t) return fill(sel());
+    if (input && input !== document.activeElement) input.value = fmt(t.deg, 2);
   });
   render(true);
   return root;

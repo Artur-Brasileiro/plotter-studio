@@ -269,6 +269,25 @@ Dois ajustes pedidos pelo Artur antes do primeiro teste na máquina.
   `index.html` traz o tamanho do ícone (e o esqueleto do topo) embutido: medido com o programa atrasado de
   propósito, o ícone tinha 1424 × 1424 px e agora tem 22 × 22 px desde o primeiro quadro.
 
+## Acrescentado em 22/11/2026, à noite: o desenho não estica mais na mesa, e o giro encaixa
+
+O Artur notou que, ao aumentar ou diminuir um desenho com o mouse, ele ficava "espichado"; e que depois de girar
+um pouco era quase impossível voltar a deixá-lo reto. Pediu uma trava de proporção e um jeito de escrever o ângulo.
+
+- **A causa do esticado.** A caixinha "Travar proporção" já existia, mas só valia para os números digitados. Na
+  mesa, os cantos esticavam livremente (era preciso segurar Shift) e as alças do meio de cada lado esticavam uma
+  direção só. Agora a mesma trava vale para o mouse: travada (é como o programa abre, sempre), puxar um canto
+  aumenta e diminui por igual, as alças dos lados somem, e o Shift não destrava. Desmarcando, as alças dos lados
+  voltam. Vários desenhos juntos, ou um desenho girado em ângulo não reto, ficam sempre travados.
+- **O giro.** Ao girar com o mouse, o desenho encaixa nos múltiplos de 45° quando chega a 4° deles. Uma etiqueta
+  ao lado do mouse mostra o ângulo, e fica azul cheia quando encaixou. O campo de digitar já existia com o nome
+  "Giro (°)", meio escondido: agora chama "Ângulo (°)", acompanha o mouse ao vivo, e ganhou o botão "Endireitar"
+  (volta a 0).
+- **Um erro antigo corrigido de passagem:** digitar um ângulo e clicar em "Girar 90°" logo em seguida girava a
+  partir do ângulo antigo (30 + 90 dava 90). Agora dá 120.
+- Conferido no navegador com o mouse de verdade (roteiro de teste automático): canto puxado torto mantém a
+  proporção (1,2632 antes e depois), com e sem Shift; 87,5° encaixa em 90 exatos; −3° encaixa em 0.
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -295,8 +314,9 @@ Dois ajustes pedidos pelo Artur antes do primeiro teste na máquina.
 | 10. Tipo indicado para desenho de linhas, grade do fundo retirada, precisão | pronto em 22/11 (ver acima) |
 | 11. Traço alisado na escala da caneta; Preto e branco sem furinho nas letras | pronto em 22/11, à noite (ver acima) |
 | 12. Curso de 810 × 390; ícone gigante ao recarregar | pronto em 22/11, no fim do dia (ver acima) |
+| 13. Proporção travada na mesa; giro com encaixe, etiqueta do ângulo e "Endireitar" | pronto em 22/11, à noite (ver acima) |
 
-Testes automáticos: 1.632 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.650 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

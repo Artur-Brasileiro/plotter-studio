@@ -188,10 +188,15 @@ button.big { padding: 9px 14px; font-size: 15px; }
 .layer-row .acts button.quiet { color: var(--ink-2); }
 .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 8px; }
 .grid4 .field input, .turn-row .field input { padding: 6px 7px; }
-.turn-row { display: grid; grid-template-columns: 74px auto 1fr; gap: 8px; align-items: end; }
+.turn-row { display: grid; grid-template-columns: 84px auto auto; justify-content: start; gap: 8px; align-items: end; }
 .turn-row button { padding: 6px 10px; }
-.check.ratio { align-items: center; padding-bottom: 6px; font-size: 13px; white-space: nowrap; }
+.check.ratio { align-items: center; font-size: 13px; white-space: nowrap; width: fit-content; }
 .check.ratio input { margin-top: 0; }
+.check.ratio:has(input:disabled) { color: var(--ink-3); }
+/* o ângulo ao lado do mouse enquanto se gira um desenho na mesa; cheia quando encaixou num ângulo redondo */
+.turn-badge { position: absolute; z-index: 15; pointer-events: none; padding: 3px 8px; border-radius: var(--radius); background: var(--panel); color: var(--ink); border: 1px solid var(--rule-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; box-shadow: 0 4px 12px #14213d2e; }
+.turn-badge.snapped { background: var(--plan); border-color: var(--plan); color: #fff; }
+.turn-badge[hidden] { display: none; }
 
 .sel-actions { margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--rule); }
 

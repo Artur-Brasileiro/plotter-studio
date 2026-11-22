@@ -1,10 +1,11 @@
 import { ActiveSelection, type Canvas, type FabricObject } from "fabric";
-import { modelMatrixFromFabric, sceneToMachineMatrix } from "../core/coords";
+import { machineRotationDeg, modelMatrixFromFabric, sceneToMachineMatrix } from "../core/coords";
 import { expandToGroups, machineBBox, setTransforms, tableItems, type Drawing, type DrawingId, type PlotDocument } from "../core/document";
 import { apply, multiply, type Mat2D } from "../core/geometry/mat2d";
 import type { BBox } from "../core/geometry/path";
 import type { Store } from "../core/store";
-import { DrawingObject } from "./drawingObject";
+import { applyHandlePolicy, DrawingObject } from "./drawingObject";
+import { handlePolicy, onRatioLockChange, proportionLocked, publishTurning, ratioLocked, shownTurn } from "./gestures";
 
 const ACTION_LABEL: Record<string, string> = {
   drag: "Mover",
@@ -43,17 +44,34 @@ export class CanvasView {
     private readonly onOutOfArea: (count: number) => void = () => {},
   ) {
     canvas.on("object:modified", (e) => this.onModified(e.action));
-    const push = () => this.pushSelection();
+    const push = () => {
+      // as alças valem para o que acabou de ser selecionado (inclusive a seleção que o próprio Fabric monta ao arrastar)
+      this.applyHandles();
+      this.pushSelection();
+    };
     canvas.on("selection:created", push);
     canvas.on("selection:updated", push);
     canvas.on("selection:cleared", push);
     const live = () => this.liveAreaCheck();
     canvas.on("object:moving", live);
     canvas.on("object:scaling", live);
-    canvas.on("object:rotating", live);
+    canvas.on("object:rotating", (e) => {
+      live();
+      this.tellAngle(e.target, e.e);
+    });
     // durante um gesto, cada quadro redesenha tudo: com cache, desenhos grandes viram uma cópia de bitmap
-    canvas.on("before:transform", () => this.setCaching(true));
-    canvas.on("mouse:up", () => this.setCaching(false));
+    canvas.on("before:transform", () => {
+      this.applyHandles();
+      this.setCaching(true);
+    });
+    canvas.on("mouse:up", () => {
+      this.setCaching(false);
+      publishTurning(undefined);
+    });
+    onRatioLockChange(() => {
+      this.applyHandles();
+      this.canvas.requestRenderAll();
+    });
     store.subscribe((s, prev) => {
       if (s.history !== prev.history || s.selection !== prev.selection || s.profile !== prev.profile) this.sync();
     });
@@ -128,6 +146,7 @@ export class CanvasView {
       });
 
       this.applySelection(this.store.state.selection);
+      this.applyHandles();
       this.updateArea();
       this.canvas.requestRenderAll();
     } finally {
@@ -148,6 +167,30 @@ export class CanvasView {
     this.canvas.discardActiveObject();
     if (wanted.length === 1) this.canvas.setActiveObject(wanted[0]);
     else if (wanted.length > 1) this.canvas.setActiveObject(new ActiveSelection(wanted, { canvas: this.canvas }));
+  }
+
+  /**
+   * Proporção travada ou solta (ver `gestures.ts`): com ela travada os cantos aumentam e diminuem o desenho
+   * por igual e as alças que esticam um lado só somem. Vale para o que está selecionado agora.
+   */
+  private applyHandles(): void {
+    const active = this.activeDrawings();
+    const rot = active.length === 1 ? machineRotationDeg(active[0].modelTransform) : undefined;
+    const policy = handlePolicy(proportionLocked(ratioLocked(), rot, active.length));
+    this.canvas.uniformScaling = policy.uniform;
+    this.canvas.uniScaleKey = policy.toggleKey;
+    const target = this.canvas.getActiveObject();
+    if (target) applyHandlePolicy(target, policy);
+  }
+
+  /** Durante o giro: o ângulo, como o painel mostra, para a etiqueta ao lado do mouse e o campo "Ângulo". */
+  private tellAngle(target: FabricObject, ev: Event): void {
+    const deg =
+      target instanceof DrawingObject
+        ? machineRotationDeg(modelMatrixFromFabric(target.calcTransformMatrix() as unknown as Mat2D, target.localBBox))
+        : shownTurn(target.angle); // vários juntos: quanto o conjunto girou
+    const p = "clientX" in ev ? (ev as MouseEvent) : (ev as TouchEvent).touches?.[0];
+    publishTurning({ deg, clientX: p?.clientX ?? 0, clientY: p?.clientY ?? 0 });
   }
 
   private pushSelection(): void {

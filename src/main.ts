@@ -23,6 +23,7 @@ import { createPreviewControls } from "./ui/panels/previewControls";
 import { SidePanel } from "./ui/panels/sidePanel";
 import { installShortcuts } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusBar";
+import { installTurnBadge } from "./ui/turnBadge";
 import { fitToScreen, installZoomPan } from "./ui/viewport";
 import { createConnectControls, installEmergencyKey } from "./ui/machine/connectControls";
 import { createMachinePanel } from "./ui/panels/machinePanel";
@@ -44,8 +45,9 @@ const canvas = new Canvas(layout.canvasEl, {
   preserveObjectStacking: true,
   fireMiddleClick: true,
   stopContextMenu: true,
-  uniformScaling: false, // Shift mantém a proporção (SPEC)
+  uniformScaling: true, // proporção travada; quem decide a cada seleção é o CanvasView (ver ui/gestures.ts)
 });
+installTurnBadge(layout.canvasWrap);
 // as cruzes de registro aparecem na mesa quando o trabalho tem mais de uma caneta (ligado mais abaixo, com o planejador)
 let showCrosses = false;
 installBoard(canvas, profile, () => showCrosses);

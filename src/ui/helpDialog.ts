@@ -28,6 +28,7 @@ export function createHelpDialog(): { open(): void } {
           "Imagem com mais de uma cor: na mesma tela, “Cores da imagem” mostra as cores que o programa achou, e você escolhe a caneta de cada uma. O tempo de máquina aparece no rodapé, e muda a cada ajuste.",
           "A parte clara da mesa é a sua folha. O desenho já cai dentro dela. Papel preto ou colorido? Escolha em “Papel”, na barra de cima: a tela mostra o desenho como vai ficar.",
           "Tudo o que está na mesa aparece na lista “Na mesa”. Clique numa linha da lista, ou no próprio desenho, para mover, girar ou mudar o tamanho; “Soltar” deixa de selecionar. “Encaixar na folha” faz ele ocupar o máximo possível.",
+          "Puxar um canto aumenta ou diminui o desenho por igual, sem deformar. Ao girar, ele encaixa sozinho quando chega perto de ficar reto; para um ângulo exato, digite em “Ângulo”. “Endireitar” volta ao ângulo 0.",
           "Uma imagem com várias canetas é um desenho só, com uma camada por caneta: as camadas andam sempre juntas. Em “Camadas” você troca a caneta de cada uma, apaga traços dela ou tira a camada inteira.",
           "Sobrou um traço que você não quer? Use “Apagar traços” na camada (ou dê dois cliques no desenho), clique nos traços para marcar e aperte Delete.",
         ),

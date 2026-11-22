@@ -4,18 +4,22 @@ import { fabricMatrixFromModel } from "../core/coords";
 import type { Drawing, DrawingId } from "../core/document";
 import type { Mat2D } from "../core/geometry/mat2d";
 import { bboxCenter, emptyBBox, unionBBox, type BBox, type Geometry } from "../core/geometry/path";
+import { ROTATE_SNAP, type HandlePolicy } from "./gestures";
 import { paperColor } from "./paper";
 
 const ACCENT = "#1b4fa8"; // azul de planta (--plan em style.css)
 
 /**
  * Padrões de todos os objetos interativos (inclusive a seleção múltipla):
- * arrastar uma alça nunca espelha (lockScalingFlip) nem distorce (skew).
+ * arrastar uma alça nunca espelha (lockScalingFlip) nem distorce (skew), e ao girar o objeto gruda nos
+ * ângulos redondos (ROTATE_SNAP).
  */
 const SAFE_DEFAULTS = {
   lockScalingFlip: true,
   lockSkewingX: true,
   lockSkewingY: true,
+  snapAngle: ROTATE_SNAP.step,
+  snapThreshold: ROTATE_SNAP.within,
   borderColor: ACCENT,
   cornerColor: ACCENT,
   cornerStrokeColor: "#fff",
@@ -24,6 +28,11 @@ const SAFE_DEFAULTS = {
 };
 InteractiveFabricObject.ownDefaults = { ...InteractiveFabricObject.ownDefaults, ...SAFE_DEFAULTS };
 ActiveSelection.ownDefaults = { ...ActiveSelection.ownDefaults, ...SAFE_DEFAULTS };
+
+/** Mostra ou esconde, no objeto selecionado, as alças do meio de cada lado (as que esticam numa direção só). */
+export function applyHandlePolicy(target: FabricObject, policy: HandlePolicy): void {
+  target.setControlsVisibility({ ml: policy.sideHandles, mr: policy.sideHandles, mt: policy.sideHandles, mb: policy.sideHandles });
+}
 
 /** Uma linha vertical tem largura 0; as alças do Fabric dividiriam por zero. */
 const MIN_SIZE = 0.5;

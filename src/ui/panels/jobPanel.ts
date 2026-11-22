@@ -10,6 +10,8 @@ import { parseNum } from "./propertiesPanel";
 import type { StepFlag } from "./sidePanel";
 
 const QUICK_FEEDS = [500, 1000, 1500];
+/** Trabalho "longo" (s): daqui para cima o passo Conferir avisa (REGRAS_GCODE.md, seção 9) */
+const LONG_JOB_S = 3 * 3600;
 
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "_").trim();
 
@@ -184,7 +186,8 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
       ),
     );
     const waits = plan.stats.estimate.waitS;
-    if (waits > 0.5) {
+    // (uns segundos de espera num desenho de horas não merecem um aviso amarelo)
+    if (waits > 20) {
       servo.append(
         h(
           "p",
@@ -302,6 +305,16 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     renderChecks(a);
     const errors = a.problems.filter((p) => p.level === "error");
     const warns = a.problems.filter((p) => p.level === "warn");
+    // REGRAS_GCODE.md, seção 9: acima de 2 a 3 horas o risco de a caneta falhar aumenta
+    const totalS = plan.stats.estimate.totalS;
+    if (totalS > LONG_JOB_S) {
+      warns.push({
+        level: "warn",
+        message:
+          `São ${fmtDuration(totalS)} de máquina. Acima de ~3 horas o risco de a caneta falhar no meio aumenta: ` +
+          (plan.stats.parts > 1 ? `plote em partes (são ${plan.stats.parts}, mais abaixo), ou diminua o desenho.` : "diminua o desenho ou o preenchimento."),
+      });
+    }
     if (errors.length) {
       setVerdict("bad", "Não pode ir para a máquina", `${errors.length} regra(s) quebrada(s).`);
       problems.append(h("ul", { class: "problems" }, ...errors.map((p) => h("li", null, p.message))));

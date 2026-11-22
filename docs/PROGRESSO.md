@@ -41,6 +41,8 @@ Testes automáticos: 1.291 passando (eram 304 no começo da noite). `npm run bui
 3. **Plotar.** Lista o que falta antes de enviar (conectar, Home, caneta), envia, mostra o progresso, pausa, para, e
    retoma de onde parou. Com mais de uma caneta, mostra as camadas na ordem e avisa a hora de trocar.
 
+No alto da tela, **Como usar** explica os três passos, a parada de emergência e os atalhos, sem termos técnicos.
+
 ## O que foi medido
 
 - **Auditoria × histórico do README.** Rodada nos 29 arquivos reais de `D:\CNC Plotter - Desenhos\G-codes - Desenhos`,

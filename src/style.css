@@ -371,3 +371,17 @@ dialog.sheet.trace { width: min(1280px, 96vw); height: min(860px, 94vh); }
 .trace-side textarea { font: inherit; color: var(--ink); width: 100%; padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--field); resize: vertical; min-height: 84px; line-height: 1.35; }
 .trace-side textarea:focus-visible { outline: 2px solid var(--plan); outline-offset: 1px; }
 
+
+/* ------------------------------------------------------------------ como usar */
+dialog.sheet.help { width: min(720px, 94vw); max-height: min(820px, 92vh); }
+.help-body { overflow-y: auto; padding: 16px 22px 22px; display: flex; flex-direction: column; gap: 16px; line-height: 1.45; }
+.help-body .lead { margin: 0; color: var(--ink-2); }
+.help-body h4 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.help-body p { margin: 0 0 6px; max-width: 64ch; }
+.help-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; max-width: 64ch; }
+.help-step { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: start; }
+.help-step > .step-n { width: 26px; height: 26px; font-size: 14px; background: var(--plan); color: #fff; margin-top: 1px; }
+.help-extra { border-top: 1px solid var(--rule); padding-top: 14px; display: flex; flex-direction: column; gap: 4px; }
+.help-extra h4 { margin-top: 8px; }
+.help-keys { list-style: none; padding-left: 0 !important; }
+kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px solid var(--rule-strong); border-bottom-width: 2px; border-radius: 4px; background: var(--bench); font: inherit; font-size: 12.5px; text-align: center; }

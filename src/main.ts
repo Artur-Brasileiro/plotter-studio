@@ -9,6 +9,7 @@ import { installBoard } from "./ui/board";
 import { CanvasView } from "./ui/canvasView";
 import { DrawingObject } from "./ui/drawingObject";
 import { h, toast } from "./ui/dom";
+import { createHelpDialog } from "./ui/helpDialog";
 import { createMenu, installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
 import { createJobPanel } from "./ui/panels/jobPanel";
@@ -96,6 +97,7 @@ const bringMenu = createMenu("Trazer desenho", [
 const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
 const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
 const settings = createSettingsDialog(store);
+const help = createHelpDialog();
 // v2: máquina pela Web Serial (ou o simulador com ?sim=1)
 const session = new MachineSession(store, simSettingsFromUrl(location.search));
 import.meta.hot?.dispose(() => session.dispose());
@@ -108,6 +110,7 @@ layout.toolbar.append(
   h("span", { class: "spacer" }),
   createConnectControls(session),
   h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações"),
+  h("button", { title: "Os três passos, do desenho ao papel", onclick: () => help.open() }, "Como usar"),
 );
 const updateUndo = () => {
   const hist = store.state.history;

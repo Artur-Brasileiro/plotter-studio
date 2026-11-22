@@ -277,7 +277,7 @@ export class FakeGrbl implements Transport {
     this.outbox = [];
   }
 
-  /** Liga do zero (energia ou DTR): a RAM zera, então a posição de máquina volta a (0,0) = WPos (810,385). */
+  /** Liga do zero (energia ou DTR): a RAM zera, então a posição de máquina volta a (0,0) = WPos (largura, altura do curso). */
   private powerUp() {
     this.reinit("Alarm");
     this.w = { x: this.o.workArea.width, y: this.o.workArea.height };

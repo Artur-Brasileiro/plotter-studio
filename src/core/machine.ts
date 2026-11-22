@@ -26,7 +26,8 @@ export interface Pen {
 }
 
 export interface MachineProfile {
-  readonly version: 2;
+  /** 3 = com o curso em Y corrigido para 390 mm (ver `mergeProfile`) */
+  readonly version: 3;
   /** Curso da máquina em mm (= $130 / $131 do GRBL). Limite duro: fora dele o GRBL dá ALARM:2. */
   workArea: { width: number; height: number };
   /**
@@ -152,9 +153,14 @@ export interface MachineProfile {
   paperTemplates: { name: string; x: number; y: number; width: number; height: number }[];
 }
 
+/** O curso em Y que o projeto usou até 22/11/2026. O da máquina é 390 (corrigido pelo dono dela). */
+const OLD_DEFAULT_HEIGHT = 385;
+
 export const DEFAULT_PROFILE: MachineProfile = {
-  version: 2,
-  workArea: { width: 810, height: 385 },
+  version: 3,
+  // O programa só deixa enviar se a origem gravada na máquina (G54) for (−largura, −altura): se o G54 dela
+  // estiver em outro valor, a tela avisa ao conectar e o número certo é o da máquina.
+  workArea: { width: 810, height: 390 },
   drawZone: { minX: 30, minY: 25, maxX: 570, maxY: 370 },
   pen: {
     downCmd: "M3 S220",
@@ -266,11 +272,17 @@ export function mergeProfile(saved: unknown): MachineProfile {
   const defaultPen = pens.some((p) => p.id === merged.defaultPen) ? merged.defaultPen : pens[pens.length - 1].id;
   const regMode = merged.registration.mode === "always" || merged.registration.mode === "never" ? merged.registration.mode : "auto";
   const onOverload = merged.servo.onOverload === "warn" || merged.servo.onOverload === "block" ? merged.servo.onOverload : "wait";
-  const old = isObj(saved) && saved.version !== 2;
+  const version = isObj(saved) ? saved.version : undefined;
+  const old = isObj(saved) && version !== 2 && version !== 3;
   const feed = old ? { ...merged.feed, fixed: DEFAULT_PROFILE.feed.fixed } : merged.feed;
+  // Perfil salvo antes da versão 3 com o curso em Y antigo (385): era só o padrão daquela versão, e estava
+  // errado. Passa a 390 uma vez; quem salvar 385 de novo, já na versão 3, fica com 385.
+  const stale = isObj(saved) && version !== 3 && merged.workArea.height === OLD_DEFAULT_HEIGHT;
+  const workArea = stale ? { ...merged.workArea, height: DEFAULT_PROFILE.workArea.height } : merged.workArea;
   return {
     ...merged,
-    version: 2,
+    version: 3,
+    workArea,
     feed,
     pen: { ...merged.pen, pauseLift },
     servo: { ...merged.servo, onOverload },

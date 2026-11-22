@@ -33,6 +33,19 @@ describe("profileStore", () => {
     expect(loadProfileWithStatus(st).profile.feed.curve).toBe(900);
   });
 
+  it("perfil guardado no navegador antes da correção do curso (Y 385): abre com 390, sem aviso e sem perder as canetas", () => {
+    const old = { ...structuredClone(DEFAULT_PROFILE), version: 2, workArea: { width: 810, height: 385 } };
+    old.pens.push({ id: "branca", name: "Branca", widthMm: 0.5, color: "#ffffff", offsetX: 0, offsetY: 0 });
+    const st = memory({ "plotter-studio:profile": JSON.stringify({ version: 1, profile: old }) });
+    const r = loadProfileWithStatus(st);
+    expect(r.problem).toBeUndefined();
+    expect(r.profile.workArea).toEqual({ width: 810, height: 390 });
+    expect(r.profile.pens.map((p) => p.name)).toContain("Branca");
+    // gravado de novo e reaberto, continua 390 (a correção não desfaz nem repete nada)
+    saveProfile(r.profile, st);
+    expect(loadProfileWithStatus(st).profile.workArea.height).toBe(390);
+  });
+
   it("perfil corrompido volta ao padrão com aviso", () => {
     const r = loadProfileWithStatus(memory({ "plotter-studio:profile": "{quebrado" }));
     expect(r.profile).toEqual(DEFAULT_PROFILE);

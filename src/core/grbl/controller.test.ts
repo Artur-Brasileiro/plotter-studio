@@ -14,7 +14,8 @@ import { prepareLine } from "./streamer";
 import { inked, programOf, regrasProgram, taps } from "./testPrograms";
 import type { Transport } from "./transport";
 
-const AREA = { width: 810, height: 385 };
+// o simulador tem o mesmo curso do perfil padrão: é o que a máquina de verdade tem gravado
+const AREA = DEFAULT_PROFILE.workArea;
 /** F3000 no lugar do F500 padrão: o mesmo programa, em menos tempo virtual */
 const FAST: JobSettings = { ...DEFAULT_JOB_SETTINGS, speedMode: "fixed", fixedFeed: 3000 };
 const END_OF_STROKE: MachineProfile = { ...DEFAULT_PROFILE, pen: { ...DEFAULT_PROFILE.pen, pauseLift: "endOfStroke" } };
@@ -96,7 +97,7 @@ describe("GrblController com o FakeGrbl", () => {
     expect(snap.status?.state).toBe("Alarm");
     expect(snap.homed).toBe(false);
     expect(snap.settings.get(130)).toBe("810.000");
-    expect(snap.g54).toEqual({ x: -810, y: -385 });
+    expect(snap.g54).toEqual({ x: -810, y: -390 });
     expect(snap.settingsWarnings).toEqual([]);
     const { program } = programFor(orientacaoSvg);
     expect(() => s.ctrl.startJob(program)).toThrow(/Faça o Home/);
@@ -117,13 +118,13 @@ describe("GrblController com o FakeGrbl", () => {
     expect(s.ctrl.snapshot.link).toBe("disconnected");
   });
 
-  it("3. $H: homed, Idle, WPos perto de (810, 385)", async () => {
+  it("3. $H: homed, Idle, WPos perto de (810, 390)", async () => {
     const s = await homed();
     await s.clock.advance(300);
     const snap = s.ctrl.snapshot;
     expect(snap.homed).toBe(true);
     expect(snap.status?.state).toBe("Idle");
-    expect(snap.wpos).toEqual({ x: 809, y: 384 }); // pull-off de 1 mm ($27)
+    expect(snap.wpos).toEqual({ x: 809, y: 389 }); // pull-off de 1 mm ($27)
   });
 
   it("$H digitado no console (com comentário e minúsculas) também marca o Home", async () => {
@@ -149,8 +150,8 @@ describe("GrblController com o FakeGrbl", () => {
   it("relatórios em WPos ($10=0) dão a mesma posição e não impedem o trabalho", async () => {
     const s = await homed({ fake: { settings: { 10: "0" } } });
     await s.clock.advance(300);
-    expect(s.ctrl.snapshot.wpos).toEqual({ x: 809, y: 384 });
-    expect(s.ctrl.snapshot.wco).toEqual({ x: -810, y: -385 });
+    expect(s.ctrl.snapshot.wpos).toEqual({ x: 809, y: 389 });
+    expect(s.ctrl.snapshot.wco).toEqual({ x: -810, y: -390 });
     expect(s.ctrl.jobProblems()).toEqual([]);
   });
 });
@@ -868,7 +869,7 @@ describe("jog, overrides e ações manuais", () => {
     const before = s.written.length;
     s.ctrl.jogStop();
     await s.clock.advance(300);
-    expect(textOf(s.written.slice(0, before))).toContain("$J=G90 G21 X0.50 Y384.00 F3000");
+    expect(textOf(s.written.slice(0, before))).toContain("$J=G90 G21 X0.50 Y389.00 F3000");
     expect(s.written.slice(before)).toContain(RT.JOG_CANCEL);
     expect(s.fake.state).toBe("Idle");
     expect(s.fake.wpos.x).toBeLessThan(809);
@@ -888,7 +889,7 @@ describe("jog, overrides e ações manuais", () => {
     const j = s.ctrl.jogStep({ x: -10, y: 0 }, 3000);
     await s.clock.advance(1000);
     await j;
-    expect(s.fake.wpos).toEqual({ x: 800, y: 385 });
+    expect(s.fake.wpos).toEqual({ x: 800, y: 390 });
   });
 
   it("jog por passos: soma os destinos e não sai da área", async () => {
@@ -897,7 +898,7 @@ describe("jog, overrides e ações manuais", () => {
     await s.clock.advance(3000);
     await all;
     expect(s.fake.wpos.x).toBeCloseTo(794);
-    expect(s.fake.wpos.y).toBeCloseTo(384.5);
+    expect(s.fake.wpos.y).toBeCloseTo(389.5);
   });
 
   it("override de velocidade; override de spindle é recusado; não desconecta com trabalho rodando", async () => {
@@ -977,12 +978,12 @@ describe("jog, overrides e ações manuais", () => {
     s.ctrl.subscribe((snap) => {
       if (snap.status && !snap.wpos) missing++;
     });
-    void s.ctrl.send("G1 X0 Y384 F600"); // 80 s andando
+    void s.ctrl.send("G1 X0 Y389 F600"); // 80 s andando
     await s.clock.advance(20_000);
     expect(s.fake.state).toBe("Run");
     expect(missing).toBe(0);
     const w = s.ctrl.snapshot.wpos;
     expect(w && Math.abs(w.x - s.fake.wpos.x)).toBeLessThan(5);
-    expect(w?.y).toBe(384);
+    expect(w?.y).toBe(389);
   });
 });

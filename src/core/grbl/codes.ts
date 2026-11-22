@@ -60,7 +60,7 @@ const ALARMS: Record<number, AlarmInfo> = {
   },
   2: {
     title: "Destino fora da área (soft limit)",
-    action: "Um movimento sairia de 0–810 / 0–385 mm. Clique em Reset e refaça o Home para garantir a posição.",
+    action: "Um movimento sairia do curso da máquina (o tamanho dele está em Configurações). Clique em Reset e refaça o Home para garantir a posição.",
     needsHoming: true,
   },
   3: { title: "Reset com a máquina andando", action: "A posição pode ter se perdido (passos perdidos na parada brusca). Refaça o Home.", needsHoming: true },

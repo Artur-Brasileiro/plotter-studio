@@ -5,12 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Plotter Studio</title>
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <!-- O estilo completo chega junto com o programa (src/style.css). Estas poucas regras valem no instante
+         antes disso: sem elas, ao recarregar a pagina o logotipo aparecia do tamanho da tela inteira. -->
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { background: #f1f3f6; font-family: Bahnschrift, "DIN Alternate", "Segoe UI", system-ui, sans-serif; }
+      .topbar { display: flex; align-items: center; gap: 18px; min-height: 48px; padding: 0 14px; background: #14213d; color: #fff; }
+      .brand { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; white-space: nowrap; }
+      .brand-mark { width: 22px; height: 22px; flex: none; }
+    </style>
   </head>
   <body>
     <header class="topbar">
       <span class="brand">
         <!-- a ponta da caneta encostando numa linha -->
-        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg class="brand-mark" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 20c4-1 6-1 9 0s5 1 9 0" />
           <path d="M9 14l8-11 3 2-8 11-4 1z" />
         </svg>

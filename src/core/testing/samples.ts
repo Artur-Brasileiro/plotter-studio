@@ -1,6 +1,7 @@
 // Auxiliar de testes: os SVGs de samples/ montados como SvgNode (sem DOM), para os
 // testes do núcleo rodarem em Node puro. Os testes golden usam os arquivos de verdade.
 import { addDrawing, createDrawing, EMPTY_DOCUMENT, importPlacement, type PlotDocument } from "../document";
+import { DEFAULT_PROFILE } from "../machine";
 import { importSvgTree } from "../svg/importSvg";
 import { el, type SvgNode } from "../svg/node";
 
@@ -40,7 +41,7 @@ export const ZONE_CORNER = { x: 30, y: 25 } as const;
  * da zona de desenho (30, 25). Com `corner = {x: 0, y: 0}` fica na origem da máquina, que está FORA
  * da zona: o plano sai com violação e o G-code é recusado.
  */
-export function docFrom(svg: SvgNode, name = "sample.svg", workHeight = 385, corner: { x: number; y: number } = ZONE_CORNER): PlotDocument {
+export function docFrom(svg: SvgNode, name = "sample.svg", workHeight = DEFAULT_PROFILE.workArea.height, corner: { x: number; y: number } = ZONE_CORNER): PlotDocument {
   const r = importSvgTree(svg);
   return addDrawing(EMPTY_DOCUMENT, createDrawing("d1", name, r.geometry, importPlacement(r.pageMm, workHeight, corner)));
 }

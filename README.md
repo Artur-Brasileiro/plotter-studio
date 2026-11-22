@@ -1,6 +1,6 @@
 # Plotter Studio
 
-Software de G-code para a minha CNC Plotter de caneta (GRBL 1.1h + servo, área útil 810 × 385 mm).
+Software de G-code para a minha CNC Plotter de caneta (GRBL 1.1h + servo, área útil 810 × 390 mm).
 
 Roda no navegador (Chrome/Edge), em três passos:
 
@@ -44,7 +44,7 @@ Para ensaiar sem a máquina, acrescente `?sim=1` na URL: o app conversa com um G
 
 ## Status
 
-- [x] Esqueleto: mesa 810 × 385 mm com grade e gabaritos A4/A3
+- [x] Esqueleto: mesa 810 × 390 mm com grade e gabaritos A4/A3
 - [x] v1 — compor desenhos e exportar `.gcode` (software pronto em 14/11/2026; falta o roteiro de testes na máquina: [docs/TESTES.md](docs/TESTES.md))
 - [x] v2 — enviar direto para a máquina (software pronto em 14/11/2026, testado no simulador; falta o roteiro na máquina: [docs/TESTES.md](docs/TESTES.md))
 - [x] v3 — regras de G-code no gerador, auditoria, imagem → traço com hachura, várias canetas, retomada (software pronto em 22/11/2026 no ramo `v3-regras-e-vetorizador`, testado no simulador; **falta o roteiro na máquina**: [docs/TESTES.md](docs/TESTES.md))

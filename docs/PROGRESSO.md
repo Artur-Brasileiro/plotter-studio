@@ -142,7 +142,7 @@ O que ainda falta, e que esses testes mostraram:
   tempo, mas desenharia o contorno das manchas; não foi feito.
 - **Nada disso rodou na máquina.**
 
-## Acrescentado em 23/11/2026: traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas
+## Acrescentado em 22/11/2026: traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas
 
 O Artur testou as camadas e o apagar traços ("funcionou") e pediu duas coisas. Primeira: separar o detalhe fino do
 grosso, como nos G-codes da máscara que ele plotou antes (`mascara_2fina_003mm`, `mascara_3grossa_04mm`): lá, as
@@ -177,7 +177,7 @@ O que ainda falta:
   sempre do grosso.
 - **Nada disso rodou na máquina.**
 
-## Acrescentado em 23/11/2026, mais tarde: o programa indica o tipo, tira a grade, e a "precisão"
+## Acrescentado em 22/11/2026, mais tarde: o programa indica o tipo, tira a grade, e a "precisão"
 
 O Artur vetorizou uma planta azul nítida (traço branco, textos, grade no fundo) e o texto saiu como borrão
 contornado. Perguntou se a vetorização não podia "dar zoom" para pegar os detalhes mínimos.
@@ -214,7 +214,7 @@ O que ainda falta:
   o jeito é baixar "Linhas claras" à mão.
 - **Nada disso rodou na máquina.**
 
-## Acrescentado em 23/11/2026, à noite: traço alisado na escala da caneta, e letra sem furinho
+## Acrescentado em 22/11/2026, à noite: traço alisado na escala da caneta, e letra sem furinho
 
 No Preto e branco a planta do reator ficou legível, mas o Artur viu, com zoom, que as linhas saíam onduladas e que
 as letras tinham "micro-espaços em branco" por dentro: na máquina, um vai e vem desgastante. Pediu um
@@ -251,11 +251,29 @@ O que muda no visual, e o que falta:
 - **Emendar pontas próximas** continua sendo trabalho do planejador (passo Conferir), que já faz isso até 3 mm.
 - **Nada disso rodou na máquina.**
 
+## Acrescentado em 22/11/2026, no fim do dia: curso de 810 × 390, e o ícone gigante ao recarregar
+
+Dois ajustes pedidos pelo Artur antes do primeiro teste na máquina.
+
+- **O curso da máquina é 810 × 390 mm, não 385.** O padrão mudou (`DEFAULT_PROFILE.workArea`), e o perfil passou
+  para a versão 3: quem já tinha a configuração guardada no navegador com Y 385 (o padrão antigo) passa a 390
+  sozinho, uma vez, sem perder canetas nem velocidades; quem escolher 385 de novo em Configurações fica com 385.
+  Os G-codes antigos do Artur chegam a Y 389,88, o que combina com 390.
+- **Ainda não conferido na máquina.** O programa só envia se a origem gravada nela (G54) for (−810, −390). Se a
+  máquina estiver gravada com outro valor, o aviso aparece ao conectar e nada é enviado: aí o número certo é o da
+  máquina, e o ajuste é em Configurações → curso em Y. O programa nunca grava nada na memória do GRBL.
+- **O que já estava na mesa** (sessão ou projeto salvos com 385) aparece 5 mm mais para trás na máquina. O passo
+  Conferir barra o que sair do papel; "Centralizar" resolve.
+- **Ícone gigante ao recarregar a página.** O logotipo do topo é um SVG sem tamanho próprio; o tamanho vinha da
+  folha de estilo, que chega um instante depois do HTML. Nesse instante ele ocupava a tela inteira. Agora o
+  `index.html` traz o tamanho do ícone (e o esqueleto do topo) embutido: medido com o programa atrasado de
+  propósito, o ícone tinha 1424 × 1424 px e agora tem 22 × 22 px desde o primeiro quadro.
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
 - F500 fixo é o padrão; a velocidade dinâmica continua existindo, desligada.
-- Zona de desenho padrão X 30–570 / Y 25–370, ajustável. O curso de 810 × 385 é o limite duro.
+- Zona de desenho padrão X 30–570 / Y 25–370, ajustável. O curso de 810 × 390 é o limite duro.
 - Servo: média até 30 descidas/min, pico de 45 em 60 s. Passou do limite: a máquina espera com a caneta em cima.
   Tudo configurável em Configurações → Proteção do servo.
 - Hachura é o preenchimento preferido.
@@ -273,11 +291,12 @@ O que muda no visual, e o que falta:
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 | 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
 | 8. Cores em camadas, papel e caneta, apagar traços, tempo de máquina na tela de vetorizar | pronto em 22/11, à noite (ver acima) |
-| 9. Traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas | pronto em 23/11 (ver acima) |
-| 10. Tipo indicado para desenho de linhas, grade do fundo retirada, precisão | pronto em 23/11 (ver acima) |
-| 11. Traço alisado na escala da caneta; Preto e branco sem furinho nas letras | pronto em 23/11, à noite (ver acima) |
+| 9. Traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas | pronto em 22/11 (ver acima) |
+| 10. Tipo indicado para desenho de linhas, grade do fundo retirada, precisão | pronto em 22/11 (ver acima) |
+| 11. Traço alisado na escala da caneta; Preto e branco sem furinho nas letras | pronto em 22/11, à noite (ver acima) |
+| 12. Curso de 810 × 390; ícone gigante ao recarregar | pronto em 22/11, no fim do dia (ver acima) |
 
-Testes automáticos: 1.625 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.632 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

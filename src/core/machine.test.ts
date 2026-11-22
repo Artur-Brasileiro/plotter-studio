@@ -3,7 +3,7 @@ import { DEFAULT_PROFILE, mergeProfile, validateProfile } from "./machine";
 
 describe("DEFAULT_PROFILE", () => {
   it("bate com a configuração gravada no GRBL", () => {
-    expect(DEFAULT_PROFILE.workArea).toEqual({ width: 810, height: 385 });
+    expect(DEFAULT_PROFILE.workArea).toEqual({ width: 810, height: 390 });
     expect(DEFAULT_PROFILE.pen.upCmd).toBe("M5");
     expect(DEFAULT_PROFILE.pen.downCmd).toBe("M3 S220");
     expect(DEFAULT_PROFILE.motion.maxRateMmMin).toBe(12000);
@@ -70,5 +70,37 @@ describe("validateProfile", () => {
     const errs = validateProfile(p);
     expect(errs.some((e) => e.includes("raio de reta"))).toBe(true);
     expect(errs.some((e) => e.includes("grande"))).toBe(true);
+  });
+});
+
+describe("curso da máquina: 810 × 390 mm (corrigido pelo dono da máquina em 22/11/2026; o projeto dizia 385)", () => {
+  it("o padrão é 810 × 390, e a zona de desenho (o papel) continua dentro dele", () => {
+    expect(DEFAULT_PROFILE.workArea).toEqual({ width: 810, height: 390 });
+    expect(DEFAULT_PROFILE.drawZone.maxY).toBeLessThanOrEqual(390);
+    expect(validateProfile(DEFAULT_PROFILE)).toEqual([]);
+  });
+
+  it("perfil salvo antes da correção, com Y 385 (o padrão antigo), passa a 390", () => {
+    const p = mergeProfile({ ...structuredClone(DEFAULT_PROFILE), version: 2, workArea: { width: 810, height: 385 } });
+    expect(p.workArea).toEqual({ width: 810, height: 390 });
+    expect(p.version).toBe(3);
+  });
+
+  it("a correção não mexe em mais nada do perfil salvo (as canetas e o resto ficam)", () => {
+    const saved = { ...structuredClone(DEFAULT_PROFILE), version: 2, workArea: { width: 810, height: 385 } };
+    saved.pens.unshift({ id: "branca", name: "Branca", widthMm: 0.5, color: "#ffffff", offsetX: 0, offsetY: 0 });
+    saved.feed.straight = 1800;
+    const p = mergeProfile(saved);
+    expect(p.pens[0].name).toBe("Branca");
+    expect(p.feed.straight).toBe(1800);
+    expect(p.feed.fixed).toBe(saved.feed.fixed);
+  });
+
+  it("quem tinha escolhido outro valor fica com o dele", () => {
+    expect(mergeProfile({ ...structuredClone(DEFAULT_PROFILE), version: 2, workArea: { width: 800, height: 380 } }).workArea).toEqual({ width: 800, height: 380 });
+  });
+
+  it("perfil já salvo depois da correção com 385 fica em 385: aí foi escolha de quem salvou", () => {
+    expect(mergeProfile({ ...structuredClone(DEFAULT_PROFILE), version: 3, workArea: { width: 810, height: 385 } }).workArea.height).toBe(385);
   });
 });

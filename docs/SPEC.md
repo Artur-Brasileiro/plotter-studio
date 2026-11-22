@@ -11,7 +11,7 @@ Cada fase termina com algo que o Artur consegue usar de verdade na máquina. Com
 Nesta fase o envio continua pelo LaserGRBL (que já funciona). Só uma coisa muda por vez.
 
 ### Área de trabalho
-- Mesa 810 × 385 mm desenhada em escala, com grade de 10/50 mm, origem (0,0) marcada embaixo à esquerda e gabaritos A4/A3 tracejados (já existe em `src/ui/board.ts`).
+- Mesa 810 × 390 mm desenhada em escala, com grade de 10/50 mm, origem (0,0) marcada embaixo à esquerda e gabaritos A4/A3 tracejados (já existe em `src/ui/board.ts`).
 - Zoom (roda do mouse) e pan (espaço + arrastar ou botão do meio). Botão "ajustar à tela".
 - Régua/coordenadas do mouse em mm no rodapé.
 
@@ -89,7 +89,7 @@ G0 X0.00 Y0.00
 Aqui o LaserGRBL sai de cena. Detalhes do protocolo em [GRBL.md](GRBL.md).
 
 - Conectar / desconectar (seletor de porta do Chrome, 115200). Esperar o banner `Grbl 1.1h` antes de mandar qualquer coisa (5 s; se não vier, mandar 0x18 e esperar mais 3 s). A porta usada fica lembrada: da segunda vez, conecta sem abrir o seletor. Se a porta estiver em uso (LaserGRBL, monitor serial do Arduino), dizer isso.
-- Ao conectar, ler `$$` e `$#` e **avisar** (sem corrigir nada) se a configuração divergir do perfil: área, velocidades, aceleração, `$11`, `$32` ≠ 0, `$20` ≠ 1, G54 ≠ (−810, −385).
+- Ao conectar, ler `$$` e `$#` e **avisar** (sem corrigir nada) se a configuração divergir do perfil: área, velocidades, aceleração, `$11`, `$32` ≠ 0, `$20` ≠ 1, G54 ≠ (−810, −390).
 - Painel de estado em tempo real (consulta `?` ~5×/s): estado (Idle, Run, Hold, Alarm, Home...), posição de trabalho X/Y, velocidade atual, overrides, fins de curso acionados (`Pn`). A posição da caneta também aparece na mesa.
 - Botões: **Home** (`$H`), **Desbloquear** (`$X`, com aviso de que desenhar continua exigindo Home), **Ir para a origem**, **Caneta ↑ / ↓** (teste do servo), **Reset** (0x18).
 - **Jog** com setas na tela e no teclado: passo 0,1 / 1 / 10 / 50 mm ou **contínuo** (segurar a tecla = um `$J=` até a borda da área, cancelado com 0x85 ao soltar ou ao sair da janela), e velocidade de jog. O destino é sempre limitado à área.

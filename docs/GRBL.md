@@ -50,14 +50,14 @@ Reset (0x18) com a máquina andando gera `ALARM:3` (durante o Home, `ALARM:6`) e
 
 Exemplo:
 ```
-<Idle|MPos:-797.500,-345.000,0.000|FS:0,0|WCO:-810.000,-385.000,0.000>
+<Idle|MPos:-797.500,-350.000,0.000|FS:0,0|WCO:-810.000,-390.000,0.000>
 <Run|MPos:-700.120,-300.000,0.000|FS:1500,220|Ov:100,100,100>
 <Alarm|MPos:0.000,0.000,0.000|FS:0,0|Pn:XY>
 ```
 
 - Estados: `Idle`, `Run`, `Hold:0` (parado em pausa), `Hold:1` (desacelerando), `Jog`, `Alarm`, `Door`, `Check`, `Home`, `Sleep`.
-- `MPos` é a posição de máquina (relativa ao home). A posição de trabalho (a que importa, 0..810 / 0..385) é **`WPos = MPos − WCO`**.
-- `WCO` não vem em todo relatório (só de tempos em tempos ou quando muda): guardar o último valor recebido. Também dá para ler com `$#` (linha `[G54:-810.000,-385.000,0.000]`).
+- `MPos` é a posição de máquina (relativa ao home). A posição de trabalho (a que importa, 0..810 / 0..390) é **`WPos = MPos − WCO`**.
+- `WCO` não vem em todo relatório (só de tempos em tempos ou quando muda): guardar o último valor recebido. Também dá para ler com `$#` (linha `[G54:-810.000,-390.000,0.000]`).
 - `Pn:` lista os pinos acionados (`X`, `Y` = fins de curso).
 - **Não alterar `$10`** para mudar o formato do relatório: isso grava na EEPROM.
 
@@ -100,7 +100,7 @@ Conferidos no fonte do GRBL 1.1 (`protocol.c`, `motion_control.c`, `system.c`) e
 - **`WCO` e `Ov` não vêm em todo relatório** (parado: de 10 em 10; andando: de 30 em 30; ou quando mudam): guarde o último.
 - **Em Alarm, qualquer G-code dá `error:9`**, antes mesmo de interpretar a linha.
 - **Soft limit num G-code** (`G0`/`G1` fora da área) dá `ALARM:2` seguido de `[MSG:Reset to continue]`: o GRBL ignora tudo até um reset (0x18) e depois volta em Alarm.
-- **Depois do Home**, a máquina se afasta da chave pelo `$27` (pull-off): a posição fica perto de 810/385, não exatamente.
+- **Depois do Home**, a máquina se afasta da chave pelo `$27` (pull-off): a posição fica perto de 810/390, não exatamente.
 - **Reset (0x18) parado** (Idle ou `Hold:0`): banner novo, posição e Home mantidos, a caneta sobe (o reset executa `M5`). **Andando** (Run, Jog ou `Hold:1`): `ALARM:3` antes do banner; **durante o Home**: `ALARM:6`. Se uma linha estava no meio da execução (um `G4`, o `$H`), o `ok` dela ainda chega **depois** do alarme e antes do banner.
 - **Dois silêncios que não são placa travada** (`limits.c`, `protocol.c`): durante o `$H` o GRBL **não responde ao `?` nem ao `!`** (só o reset interrompe o Home); e depois de um `ALARM:1`/`ALARM:2` ele fica **mudo até o reset**. O Plotter Studio mostra "Home" por conta própria enquanto o `$H` não responde e não acusa "sem resposta" nesses dois casos.
 - **`?`, `!` e `~` são comandos em tempo real em qualquer lugar da linha, até dentro de comentário.** Um comentário `; pronto!` enviado cru seria uma pausa. O envio tira os comentários antes de mandar e recusa linha que ainda tenha um desses; o gerador nunca os escreve no nome do arquivo.
@@ -115,6 +115,6 @@ Conferidos no fonte do GRBL 1.1 (`protocol.c`, `motion_control.c`, `system.c`) e
 ## Comandos úteis de diagnóstico
 
 - `$$`: lista toda a configuração (útil para mostrar numa aba "Máquina", só leitura).
-- `$#`: offsets (confere o G54 = −810, −385).
+- `$#`: offsets (confere o G54 = −810, −390).
 - `$G`: estado do parser (G90/G91, unidades, etc.).
 - `$I`: versão do firmware.

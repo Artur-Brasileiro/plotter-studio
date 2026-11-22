@@ -41,7 +41,7 @@ describe("frameProgram", () => {
     expect(lines[0]).toBe("M5");
     expect(lines[1]).toBe("G4 P0.3");
     const moves = lines.filter((l) => l.startsWith("G0 "));
-    expect(moves).toEqual(["G0 X0.00 Y10.00", "G0 X120.00 Y10.00", "G0 X120.00 Y385.00", "G0 X0.00 Y385.00", "G0 X0.00 Y10.00"]);
+    expect(moves).toEqual(["G0 X0.00 Y10.00", "G0 X120.00 Y10.00", "G0 X120.00 Y390.00", "G0 X0.00 Y390.00", "G0 X0.00 Y10.00"]);
     expect(lines.some((l) => l.startsWith("G1") || l.startsWith("M3"))).toBe(false);
   });
 });
@@ -67,14 +67,22 @@ describe("classifyManualCommand", () => {
 
 describe("compareSettings", () => {
   const good = new Map(
-    Object.entries({ 11: "0.010", 20: "1", 22: "1", 32: "0", 110: "12000.000", 111: "12000.000", 120: "800.000", 121: "800.000", 130: "810.000", 131: "385.000" }).map(
+    Object.entries({ 11: "0.010", 20: "1", 22: "1", 32: "0", 110: "12000.000", 111: "12000.000", 120: "800.000", 121: "800.000", 130: "810.000", 131: "390.000" }).map(
       ([k, v]) => [Number(k), v] as const,
     ),
   );
-  const g54 = { x: -810, y: -385 };
+  const g54 = { x: -810, y: -390 };
 
   it("configuração igual ao perfil: nenhum aviso", () => {
     expect(compareSettings(good, g54, DEFAULT_PROFILE)).toEqual([]);
+  });
+
+  it("máquina gravada com o curso antigo (385): avisa o $131 e o G54, para ninguém desenhar 5 mm fora do lugar", () => {
+    const old = new Map(good);
+    old.set(131, "385.000");
+    const w = compareSettings(old, { x: -810, y: -385 }, DEFAULT_PROFILE);
+    expect(w.some((s) => s.includes("$131"))).toBe(true);
+    expect(w.some((s) => s.includes("G54"))).toBe(true);
   });
 
   it("avisa $32=1, $20=0, área e G54 errados", () => {
@@ -82,7 +90,7 @@ describe("compareSettings", () => {
     bad.set(32, "1");
     bad.set(20, "0");
     bad.set(130, "800.000");
-    const w = compareSettings(bad, { x: -800, y: -385 }, DEFAULT_PROFILE);
+    const w = compareSettings(bad, { x: -800, y: -390 }, DEFAULT_PROFILE);
     expect(w.some((s) => s.includes("$32"))).toBe(true);
     expect(w.some((s) => s.includes("$20"))).toBe(true);
     expect(w.some((s) => s.includes("$130"))).toBe(true);

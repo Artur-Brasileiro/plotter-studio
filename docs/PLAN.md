@@ -2,6 +2,8 @@
 
 Escrito em 14/11/2026 a partir do esqueleto v0.1 (perfil da máquina, mesa no canvas, 3 SVGs de teste). É o roteiro para implementar a v1 e a v2 sem precisar voltar a perguntar decisões de arquitetura. A v3 fica em nível alto.
 
+> **Correção de 22/11/2026:** o curso da máquina em Y é **390 mm**, não 385 (corrigido pelo Artur). Onde este plano diz 385 como tamanho da máquina ou G54 = (−810, −385), vale 390. Os exemplos de conta com H = 385 continuam certos como exemplos (os testes passam a altura como parâmetro).
+
 Leia antes: [CLAUDE.md](../CLAUDE.md) (fatos da máquina e convenções), [SPEC.md](SPEC.md) (o que cada fase entrega), [GRBL.md](GRBL.md) (protocolo serial).
 
 ## Regras para quem executa

@@ -43,7 +43,9 @@ const canvas = new Canvas(layout.canvasEl, {
   stopContextMenu: true,
   uniformScaling: false, // Shift mantém a proporção (SPEC)
 });
-installBoard(canvas, profile);
+// as cruzes de registro aparecem na mesa quando o trabalho tem mais de uma caneta (ligado mais abaixo, com o planejador)
+let showCrosses = false;
+installBoard(canvas, profile, () => showCrosses);
 // pré-visualização do caminho: canvas por cima do Fabric
 const overlay = new Overlay(layout.canvasWrap, canvas, () => profile().workArea.height);
 const player = new Player(overlay);
@@ -119,6 +121,11 @@ updateUndo();
 // painel lateral
 const planner = new Planner(store);
 planner.subscribe((plan) => {
+  const crosses = !!plan?.layer?.registration;
+  if (crosses !== showCrosses) {
+    showCrosses = crosses;
+    canvas.requestRenderAll();
+  }
   // durante o envio a pré-visualização mostra o plano do trabalho (o painel de envio cuida dela)
   if (!session.jobActive) {
     if (player.playing) player.stop();

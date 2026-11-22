@@ -9,7 +9,7 @@ import type { MachineProfile } from "../core/machine";
  * Tudo aqui é em mm da cena (Y para baixo). A grade é alinhada à origem da MÁQUINA
  * (canto inferior esquerdo), por isso as linhas horizontais ficam em y_cena = H − k·10.
  */
-export function installBoard(canvas: Canvas, getProfile: () => MachineProfile): () => void {
+export function installBoard(canvas: Canvas, getProfile: () => MachineProfile, showCrosses: () => boolean = () => false): () => void {
   const handler = ({ ctx }: { ctx: CanvasRenderingContext2D }) => {
     if (ctx !== canvas.getContext()) return;
     const p = getProfile();
@@ -17,7 +17,7 @@ export function installBoard(canvas: Canvas, getProfile: () => MachineProfile): 
     const z = v[0];
     ctx.save();
     ctx.transform(v[0], v[1], v[2], v[3], v[4], v[5]);
-    drawBoard(ctx, p, z);
+    drawBoard(ctx, p, z, showCrosses());
     ctx.restore();
   };
   canvas.on("before:render", handler);
@@ -34,7 +34,7 @@ const PLAN = "#1b4fa8";
 const INK = "#14213d";
 const FONT = 'Bahnschrift, "DIN Alternate", "Segoe UI", system-ui, sans-serif';
 
-function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number) {
+function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number, crosses: boolean) {
   const { width: W, height: H } = p.workArea;
   const zone = p.drawZone;
   const px = 1 / z; // 1 pixel de tela, em mm
@@ -139,6 +139,23 @@ function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number) 
     line(sx, sy - r * 1.7, sx, sy + r * 1.7);
     ctx.stroke();
   }
+
+  // ---------------------------------------------------------------- cruzes de registro (quando o trabalho tem mais de uma caneta)
+  if (crosses) {
+    const r = p.registration;
+    const hArm = r.armMm / 2;
+    ctx.lineWidth = Math.max(1.5 * px, 0.4);
+    ctx.strokeStyle = PLAN;
+    ctx.beginPath();
+    for (const cx of [r.x1, r.x2]) {
+      const cy = H - r.y;
+      line(cx - hArm, cy, cx + hArm, cy);
+      line(cx, cy - hArm, cx, cy + hArm);
+    }
+    ctx.stroke();
+    // (sem legenda: ali embaixo ficam os números da régua; o passo Desenho explica as cruzes)
+  }
+
 
   // ---------------------------------------------------------------- origem: X+ (direita) e Y+ (para longe do operador)
   const a = 30 * px;

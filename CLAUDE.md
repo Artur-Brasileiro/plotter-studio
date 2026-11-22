@@ -4,7 +4,7 @@ Software próprio de G-code para a **CNC Plotter do Artur**: uma página web (Ch
 
 O objetivo é a praticidade do LaserGRBL, mas feito sob medida para esta máquina, e que o Artur consiga ajustar tudo sozinho pela tela de Configurações, sem mexer no código.
 
-Especificação completa e fases: [docs/SPEC.md](docs/SPEC.md). Protocolo serial do GRBL: [docs/GRBL.md](docs/GRBL.md). **Plano de implementação (arquitetura, interfaces, algoritmos, tarefas T01–T27): [docs/PLAN.md](docs/PLAN.md).** Resultados dos testes na máquina: `docs/TESTES.md`.
+**As regras de G-code desta máquina estão em [docs/REGRAS_GCODE.md](docs/REGRAS_GCODE.md) e mandam em tudo o que o gerador faz** (se alguma for quebrada, o arquivo não vai para a máquina). Desenho da v3: [docs/V3.md](docs/V3.md); estado atual: [docs/PROGRESSO.md](docs/PROGRESSO.md). Especificação completa e fases: [docs/SPEC.md](docs/SPEC.md). Protocolo serial do GRBL: [docs/GRBL.md](docs/GRBL.md). **Plano de implementação (arquitetura, interfaces, algoritmos, tarefas T01–T27): [docs/PLAN.md](docs/PLAN.md).** Resultados dos testes na máquina: `docs/TESTES.md`.
 
 ## Comandos
 
@@ -22,16 +22,17 @@ npm run build    # typecheck + build em dist/
 
 - **Firmware:** GRBL 1.1h, fork `vankesteren/grbl-servo` (servo da caneta no PWM do spindle, pino D11). Arduino Uno + CNC Shield V3, drivers A4988 em 1/16 (`$100`/`$101` = 80).
 - **Conexão:** Windows, porta COM6, 115200 baud. Ao abrir a porta, o Uno **reinicia** (DTR) e o GRBL liga em **ALARM** até o `$H` (homing).
-- **Área útil:** **810 × 385 mm** (`$130`/`$131`). Soft limits ligados (`$20=1`): qualquer coordenada fora de 0..810 / 0..385 gera `ALARM:2` (o GRBL fica mudo até um reset; por segurança o aplicativo pede o Home de novo). O software deve **bloquear a exportação** se algo sair da área.
+- **Curso da máquina:** **810 × 385 mm** (`$130`/`$131`). **Zona de desenho (o papel): X 30–570, Y 25–370** (`profile.drawZone`): nenhum traço sai dela; as exceções são o ponto de aquecimento (X0 Y0) e as cruzes de registro (Y12). Soft limits ligados (`$20=1`): qualquer coordenada fora de 0..810 / 0..385 gera `ALARM:2` (o GRBL fica mudo até um reset; por segurança o aplicativo pede o Home de novo). O software deve **bloquear a exportação** se algo sair da área.
 - **Coordenadas:** origem de trabalho G54 gravada na EEPROM (`G10 L2 P1 X-810 Y-385`), no canto da **frente à esquerda**. **X+ para a direita, Y+ para longe do operador.** Todas as coordenadas do desenho são positivas, em mm, com `G90` (absoluto).
   - **Na tela, Y+ aponta para cima** (o operador vê o papel de frente). SVG e canvas têm Y para baixo, então é preciso inverter: `y_maquina = altura - y_tela`. Essa inversão existe em **um único lugar**, `sceneToMachineMatrix(H)` em `src/core/coords.ts`; nenhum outro código inverte Y. O desenho no papel deve sair com a mesma orientação que aparece na tela, **sem espelhar** (use `samples/orientacao.svg` para conferir).
 - **Caneta:**
-  - Abaixar: **`M3 S220`**. Levantar: **`M5`**. Depois de cada um: **`G4 P0.3`** (o servo leva ~0,3 s).
+  - Abaixar: **`M3 S220`**. Levantar: **`M5`**. Depois de cada um, sempre um `G4`: **0,3 s depois de descer, 0,2 s depois de subir** (0,6 s na 1ª descida do arquivo).
+  - **O servo é o ponto fraco da máquina.** Ele esquenta de ficar subindo e descendo, não de ficar embaixo. Por isso o gerador emenda traços, limita os ciclos por minuto e faz a caneta descansar em cima (seção "Regras de G-code", abaixo).
   - `M5` = caneta em cima é proposital: o GRBL executa `M5` sozinho em reset/alarme, então qualquer pane levanta a caneta.
   - **Nunca** enviar `$32=1` (laser mode): o servo para de funcionar.
 - **Velocidades:** máximo `$110`/`$111` = 12000 mm/min, aceleração 800 mm/s². Deslocamentos com a caneta levantada usam `G0`.
 - **Comentários no G-code:** só com `;`. Parênteses aninhados como `( centro (60,60) )` dão erro no GRBL.
-- **G-code só em ASCII, inclusive nos comentários.** O GRBL trata todo byte acima de 0x7F como comando em tempo real. Em UTF-8, um "—" termina em `0x94` (velocidade −1%) e um "”" em `0x9D` (spindle −1% = **move o servo**). Nomes de arquivo vão sem acento, travessão vira `-`, aspas curvas viram retas, e o que sobrar fora de ASCII vira `?`.
+- **G-code só em ASCII, inclusive nos comentários.** O GRBL trata todo byte acima de 0x7F como comando em tempo real. Em UTF-8, um "—" termina em `0x94` (velocidade −1%) e um "”" em `0x9D` (spindle −1% = **move o servo**). Nomes de arquivo vão sem acento, travessão vira `-`, aspas curvas viram retas, e o que sobrar fora de ASCII vira `_`. **`?`, `!` e `~` também nunca aparecem**, nem em comentário: para o GRBL são relatório, pausa e continuar, em qualquer lugar da linha.
 - Resolução da máquina: 0,0125 mm por passo. Duas casas decimais nas coordenadas bastam (e deixam as linhas curtas, o que ajuda a serial).
 
 ### O que os testes de traço mostraram (13/11/2026) — base do modo de velocidade dinâmica
@@ -54,6 +55,28 @@ Regras de implementação que saem disso:
   - fusão de segmentos < 0,1 mm;
   - **teto de vazão**: nenhum segmento dura menos que `motion.minSegmentTimeMs` (10 ms), ou seja, F ≤ 6000 × comprimento em mm.
 
+## Regras de G-code (v3) — onde cada uma mora
+
+`docs/REGRAS_GCODE.md` é a fonte. No código (`src/core/job/`):
+
+- **`pipeline.ts`** (`planJob`, `planLayers`): documento → traços → área e zona → retira tracinhos escondidos → ordem com emendas → cruzes de registro → corte das descidas longas → correção da ponta da caneta → velocidades → agenda. **Um plano por camada (caneta).**
+- **`inkmap.ts`**: mapa de tinta **conservador** (só diz "tem tinta" onde tem com certeza). Serve para emendar por cima de tinta que já existe e para retirar tracinhos totalmente cobertos. Na dúvida, ele não emenda e não retira: um ciclo a mais do servo é melhor que um risco novo no desenho.
+- **`optimize.ts`**: ordem que prefere o traço que dá para emendar (salto ≤ largura da caneta, ou ligação sobre tinta, busca de 3 mm) ao mais próximo; `capDescents` corta descidas acima de 900 mm.
+- **`schedule.ts`**: junta os traços em descidas e agenda o tempo. **Balde de fichas** para o servo (padrão: média 30/min, pico 45 em 60 s; faltou ficha, a caneta espera em cima com um `G4`). O balde enche pelo relógio mais apressado entre o da máquina (com aceleração) e o do script de blindagem, e os ciclos do aquecimento são pagos dele. Checkpoints a cada ~10 min, partes de ~25 min cortadas num checkpoint.
+- **`gcode.ts`**: escreve o arquivo no formato das regras (bloco `G0` / `M3 S220` / `G4` / `G1 F500` / pontos / `M5` `G4` duas vezes), com aquecimento de 8 ciclos em X0 Y0, checkpoints, descansos, rodapé `M2`. Também faz uma parte avulsa e a **retomada** (`fromDescent`).
+- **`layers.ts`**: camadas por caneta (ordem = ordem de `profile.pens`: cor → fina → grossa), cruzes de registro em ida e volta (X20 Y12 e X580 Y12, braço de 6 mm) como 1ª e última descida, desvio da ponta (`pen.offsetX/Y`: a camada inteira sai deslocada ao contrário).
+- **`audit.ts`** (`auditGcode`): lê o **texto** final como o GRBL leria e confere tudo da seção 10 das regras. **O que ela não sabe ler, ela acusa.** `checkAgainstPlan` confere que o arquivo risca o que o plano mandou. A interface só deixa baixar ou enviar com `audit.ok`.
+- **`resume.ts`**: de onde retomar depois de uma parada (a descida anterior à que estava sendo feita).
+- **`review.test.ts`**: os defeitos que uma revisão independente achou, cada um com o teste que o prova. Não apagar.
+
+Regras que não podem quebrar ao mexer aqui: o gerador nunca escreve `G0` com a caneta embaixo; todo `M3`/`M5` tem `G4` depois; nenhuma linha passa de 69 caracteres; só ASCII; o arquivo gerado passa na própria auditoria (há testes de estresse para o arquivo inteiro, cada parte e cada ponto de retomada).
+
+## Imagem → traço (v3)
+
+- `src/core/trace/`: campo de tinta com limiar local e borda subpixel (`inkField.ts`), esqueleto e distância (`skeleton.ts`), grafo de traços com pareamento nas junções (`strokes.ts`), ajuste de curvas de Bézier com cantos (`fit.ts`), "régua" que transforma trecho reto em reta de verdade (`straight.ts`), contornos e hachura (`contours.ts`, `hatch.ts`), e `traceImage.ts` que junta tudo nos três modos (`line`, `ink`, `photo`).
+- É um porte, **número por número**, do laboratório em Python que fica em `lab/python/` (referência, não faz parte do aplicativo). Os testes comparam com dados gerados por ele (`__fixtures__/`). Mudou o algoritmo: mude no laboratório, regenere as fixtures (`lab/python/fixtures_*.py`) e só então porte.
+- Roda num Web Worker (`src/trace/`); a tela é `src/ui/trace/traceDialog.ts`, carregada sob demanda.
+- Imagens de terceiros não vão para o repositório: as fixtures são formas sintéticas.
 ## Arquitetura (decisões tomadas)
 
 - **Vite + TypeScript, sem framework de UI** (HTML + módulos TS). Mantém o projeto simples de entender e de alterar.
@@ -80,7 +103,7 @@ Estrutura (árvore completa em `docs/PLAN.md`, seção 2.1):
 
 ```
 src/
-  core/      lógica pura + testes (*.test.ts): geometry/, svg/, job/, grbl/, documento, histórico
+  core/      lógica pura + testes (*.test.ts): geometry/, svg/, job/ (regras de G-code), trace/ (imagem → traço), grbl/, documento, histórico
   import/    DOMParser → SvgNode; testes golden (jsdom)
   storage/   localStorage e IndexedDB
   serial/    Web Serial (v2)
@@ -88,7 +111,8 @@ src/
   main.ts    monta a aplicação
 scripts/     vitest.mjs, make-stress-svg.mjs
 samples/     SVGs de teste; golden/ com o G-code esperado
-docs/        SPEC.md, GRBL.md, PLAN.md, TESTES.md
+docs/        REGRAS_GCODE.md, V3.md, PROGRESSO.md, SPEC.md, GRBL.md, PLAN.md, TESTES.md
+lab/python/  laboratório do vetorizador (referência em Python; não faz parte do aplicativo)
 ```
 
 ## Convenções
@@ -98,5 +122,7 @@ docs/        SPEC.md, GRBL.md, PLAN.md, TESTES.md
 - Só `src/import/golden.test.ts` usa o ambiente jsdom (`// @vitest-environment jsdom`); os demais testes rodam em Node puro.
 - Antes de dizer que algo está pronto: `npm test`, `npm run build` e abrir no navegador para ver funcionando.
 - Não adicionar dependência sem motivo claro. Se uma função de 30 linhas resolve, prefira ela.
-- O Artur é estudante de Engenharia da Computação e sabe programar. Ele prefere explicações diretas e práticas, com analogias do mundo real, em vez de texto formal e denso.
+- **Para quem é a interface:** em 21/11/2026 o Artur disse que não sabe programar. Textos da tela e explicações para ele: diretos, sem jargão, com analogias do mundo real, tudo resolvido por clique. Qualidade do desenho vem antes de velocidade.
+- **Visual ("mesa de desenho")**: a mesa é madeira clara (`--table`), a folha é branca, o cromo é azul-tinta (`--ink`) com azul de planta (`--plan`) nas ações; fonte Bahnschrift (DIN); mono só no console. As cores e medidas são variáveis no topo de `src/style.css`. Três passos numerados: Desenho, Conferir, Plotar.
+- **Nunca** publicar (push na `main` faz o deploy), nunca conectar na máquina real nem mandar nada para ela, nunca gravar EEPROM sem o Artur pedir.
 - Qualquer mudança que mexa na EEPROM do GRBL (comandos `$xxx=`) precisa de confirmação explícita do Artur na interface.

@@ -2,7 +2,11 @@
 
 Software de G-code para a minha CNC Plotter de caneta (GRBL 1.1h + servo, área útil 810 × 385 mm).
 
-Roda no navegador (Chrome/Edge): importa SVGs, posiciona/gira/redimensiona os desenhos na área do papel, gera G-code com velocidade fixa ou dinâmica (mais rápido nas retas, mais devagar nas curvas) e, a partir da v2, envia direto para a máquina pela serial (Web Serial API).
+Roda no navegador (Chrome/Edge), em três passos:
+
+1. **Desenho**: traz um SVG ou uma imagem (PNG/JPG, que vira traço de caneta ali mesmo: linha única, hachura, foto por tom), posiciona, gira e redimensiona na folha, escolhe a caneta.
+2. **Conferir**: mostra o tempo, a carga do servo e as regras de [docs/REGRAS_GCODE.md](docs/REGRAS_GCODE.md) uma a uma. Arquivo que quebra regra não sai.
+3. **Plotar**: envia direto para a máquina pela serial (Web Serial API), com pausa, parada, retomada e troca de caneta entre camadas. Também dá para baixar o `.gcode` e usar o LaserGRBL.
 
 ## Rodar localmente
 
@@ -25,7 +29,11 @@ Para ensaiar sem a máquina, acrescente `?sim=1` na URL: o app conversa com um G
 
 - [CLAUDE.md](CLAUDE.md) — dados da máquina, decisões de arquitetura e convenções
 - [docs/SPEC.md](docs/SPEC.md) — funcionalidades e fases (v1, v2, v3)
+- [docs/REGRAS_GCODE.md](docs/REGRAS_GCODE.md) — as regras de G-code desta máquina (formato, servo, blindagem, canetas). **Mandam em tudo.**
+- [docs/V3.md](docs/V3.md) — desenho da v3: regras no gerador, imagem → traço, camadas
+- [docs/PROGRESSO.md](docs/PROGRESSO.md) — o que está pronto, o que foi medido e o que falta
 - [docs/GRBL.md](docs/GRBL.md) — protocolo serial do GRBL usado no envio
+- [docs/TESTES.md](docs/TESTES.md) — roteiros de teste na máquina (v1, v2 e v3)
 - [docs/PLAN.md](docs/PLAN.md) — plano de implementação: arquitetura, algoritmos, testes e tarefas T01–T27
 
 ## Status
@@ -33,4 +41,4 @@ Para ensaiar sem a máquina, acrescente `?sim=1` na URL: o app conversa com um G
 - [x] Esqueleto: mesa 810 × 385 mm com grade e gabaritos A4/A3
 - [x] v1 — compor desenhos e exportar `.gcode` (software pronto em 14/11/2026; falta o roteiro de testes na máquina: [docs/TESTES.md](docs/TESTES.md))
 - [x] v2 — enviar direto para a máquina (software pronto em 14/11/2026, testado no simulador; falta o roteiro na máquina: [docs/TESTES.md](docs/TESTES.md))
-- [ ] v3 — texto, hachura, várias cores
+- [x] v3 — regras de G-code no gerador, auditoria, imagem → traço com hachura, várias canetas, retomada (software pronto em 22/11/2026 no ramo `v3-regras-e-vetorizador`, testado no simulador; **falta o roteiro na máquina**: [docs/TESTES.md](docs/TESTES.md))

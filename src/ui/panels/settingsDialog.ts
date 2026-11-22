@@ -64,7 +64,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "pen",
-    title: "Caneta",
+    title: "Subir e descer a caneta",
     lead: "Como a caneta sobe e desce. A largura e a cor de cada caneta ficam em Canetas.",
     fields: [
       {
@@ -84,7 +84,7 @@ const GROUPS: Group[] = [
   },
   {
     id: "pens",
-    title: "Canetas",
+    title: "Estojo de canetas",
     lead: "O estojo. Cada caneta usada num trabalho vira uma camada, plotada nesta ordem (cor, depois a fina, depois a grossa: a grossa cobre as pontas da fina).",
     pens: true,
     fields: [

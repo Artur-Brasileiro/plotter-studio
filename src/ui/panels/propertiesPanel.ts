@@ -201,7 +201,7 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
       root.append(
         h("h3", null, "Caneta"),
         h("label", { class: "field" }, "Desenhado com", penSel),
-        h("p", { class: "hint" }, "Cada caneta vira uma camada, plotada na ordem do estojo (Configurações → Canetas), com cruzes de registro para alinhar."),
+        h("p", { class: "hint" }, "Cada caneta vira uma camada, plotada na ordem do estojo (Configurações → Estojo de canetas), com cruzes de registro para alinhar."),
       );
     }
 

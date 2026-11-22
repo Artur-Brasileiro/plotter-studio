@@ -39,7 +39,7 @@ Para ensaiar antes, sem a máquina: acrescente `?sim=1` na URL (um GRBL falso). 
 | 6 | Caneta | **Caneta ↓** e **Caneta ↑** | O servo desce e sobe; o painel mostra "Caneta embaixo/em cima" | |
 | 7 | Contorno | Com um desenho na mesa: **▭ Contorno** | O retângulo percorrido (caneta em cima) envolve o desenho como na tela | |
 | 8 | Envio | `orientacao.svg` na origem → **▶ Enviar desenho** | Barra anda, a cruz acompanha a caneta, o traço já feito fica forte na tela; no fim a máquina volta a (0,0) e aparece "Desenho concluído em …" | |
-| 9 | **Pausa** (decide o `pen.pauseLift`) | `curvas.svg`: **⏸ Pausar** no meio de um círculo; esperar 5 s; **▶ Continuar** | A caneta **sobe** na pausa e **desce antes de andar** ao continuar, sem falha no traço. Se não subir (ou o painel avisar "o GRBL diz que a caneta continua embaixo"): ⚙ Configurações → Caneta → Pausa = "no fim do traço" e repetir | |
+| 9 | **Pausa** (decide o `pen.pauseLift`) | `curvas.svg`: **⏸ Pausar** no meio de um círculo; esperar 5 s; **▶ Continuar** | A caneta **sobe** na pausa e **desce antes de andar** ao continuar, sem falha no traço. Se não subir (ou o painel avisar "o GRBL diz que a caneta continua embaixo"): ⚙ Configurações → Subir e descer a caneta → Pausa = "no fim do traço" e repetir | |
 | 10 | Parar | **■ Parar** no meio de um desenho; depois **Ir para a origem** | A caneta sobe, **sem alarme**, Home continua "feito"; "Ir para a origem" vai ao lugar certo sem refazer o Home | |
 | 11 | Emergência | **⛔ Emergência** (ou Esc) no meio de um desenho | ALARM:3 traduzido, Home "falta"; Enviar fica bloqueado até o Home | |
 | 12 | Cabo | Puxar o USB no meio de um desenho | Em até 1 s: aviso vermelho, estado "conexão perdida", a tela não trava. Reconectar: banner, Alarm, Home | |
@@ -76,7 +76,7 @@ Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pr
 |---|---|---|---|---|
 | B1 | Aquecimento | **Enviar desenho** | Antes de tudo a máquina vai a X0 Y0 e o servo bate **8 vezes** no ar. Só depois vai para o desenho | |
 | B2 | Subida dupla | Olhe o Console durante um traço | Depois de cada traço saem dois `M5` seguidos; o servo só se mexe no primeiro | |
-| B3 | Pausar | **⏸ Pausar** no meio de um traço, esperar, **▶ Continuar** | O servo **sobe** na pausa e **desce ~0,5 s antes** de andar. Se não subir: Configurações → Caneta → Pausa = "no fim do traço" | |
+| B3 | Pausar | **⏸ Pausar** no meio de um traço, esperar, **▶ Continuar** | O servo **sobe** na pausa e **desce ~0,5 s antes** de andar. Se não subir: Configurações → Subir e descer a caneta → Pausa = "no fim do traço" | |
 | B4 | Pausar no aquecimento e num descanso | Pausar durante as 8 batidas; depois durante um "descanso do servo" (use um desenho com muitos tracinhos) | Pausa e continua sem perder nada | |
 | B5 | Parar e voltar | **■ Parar** no meio de um traço; depois **Ir para a origem** | Sem alarme. A máquina volta exatamente para uma marca feita antes na origem. Repita 3 vezes | |
 | B6 | Retomar | Depois de parar, em "O que enviar" já vem **Retomar de onde parou**. **Enviar** | Aquecimento de novo e o desenho continua do traço anterior ao que parou | |
@@ -94,7 +94,7 @@ Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pr
 | C3 | 1º traço | Olhe o primeiro traço de C1 e C2 | Sai com tinta desde o começo (a 1ª descida espera 0,6 s) | |
 | C4 | Imagem vira traço | **Trazer desenho → Imagem**, uma imagem de linha pequena (~15 min), tipo **Traço** | O desenho sai igual à prévia da tela de vetorizar. Compare o tempo real com o estimado em "Últimos trabalhos" | |
 | C5 | Preto e branco com hachura | Uma imagem de nanquim pequena, tipo **Preto e branco** | Áreas cheias com contorno e hachura a 45°; traços finos em linha única | |
-| C6 | Duas canetas | Dois desenhos na mesa, um com a caneta **Fina 0,03** (passo 1 → Caneta). Plote a camada 1, troque a caneta **sem mexer no papel**, plote a camada 2 | Cada camada começa com uma cruz em X20 Y12 e termina com outra em X580 Y12. As cruzes das duas canetas têm que cair uma em cima da outra. Se não caírem, meça a diferença (o braço da cruz tem 6 mm) e ajuste o desvio em Configurações → Canetas | |
+| C6 | Duas canetas | Dois desenhos na mesa, um com a caneta **Fina 0,03** (passo 1 → Caneta). Plote a camada 1, troque a caneta **sem mexer no papel**, plote a camada 2 | Cada camada começa com uma cruz em X20 Y12 e termina com outra em X580 Y12. As cruzes das duas canetas têm que cair uma em cima da outra. Se não caírem, meça a diferença (o braço da cruz tem 6 mm) e ajuste o desvio em Configurações → Estojo de canetas | |
 | C7 | Aceite | Um desenho real de 1 h ou mais, em partes ou inteiro | Termina com o servo frio e sem falha de caneta | |
 
 **O que anotar aqui depois dos testes:** `pen.pauseLift` (B3): ______ · desvio medido da caneta fina (C6): X ______ Y ______ · limite do servo que ficou (média/pico): ______ / ______

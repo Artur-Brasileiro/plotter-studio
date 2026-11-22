@@ -92,7 +92,7 @@ Todas são configuráveis ou fáceis de trocar.
 - **Descida longa**: o corte é em 900 mm a F500 (108 s); num trabalho mais lento o comprimento encolhe junto, para o tempo ser o mesmo. Um resto menor que 0,5 mm não ganha descida própria.
 - **Emendas "por cima da tinta"** ficaram conservadoras: só emenda quando a ligação inteira cai, com certeza, sobre tinta
   que já existe. Perde-se alguma emenda; não se cria risco novo.
-- **Ordem das camadas** = ordem da lista de canetas em Configurações → Canetas (verde → fina → preta).
+- **Ordem das camadas** = ordem da lista de canetas em Configurações → Estojo de canetas (verde → fina → preta).
 - **Desvio da caneta fina** = 1,0 mm em X (do README). As cruzes de registro são a conferência.
 - **Aquecimento com no máximo 20 ciclos** e pausas do servo com no mínimo 0,05 s nas Configurações.
 

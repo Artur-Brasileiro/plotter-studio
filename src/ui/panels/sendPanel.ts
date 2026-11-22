@@ -329,7 +329,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
         clear(nextBox);
         nextBox.append(
           h("strong", null, `Agora a camada ${next.layer.index + 1}: ${next.layer.penName}`),
-          h("span", null, ` Troque a caneta sem mexer no papel e envie. A primeira coisa que ela desenha é a cruz de registro: se não cair em cima da cruz da camada anterior, pare e ajuste o desvio dessa caneta em Configurações → Canetas.`),
+          h("span", null, ` Troque a caneta sem mexer no papel e envie. A primeira coisa que ela desenha é a cruz de registro: se não cair em cima da cruz da camada anterior, pare e ajuste o desvio dessa caneta em Configurações → Estojo de canetas.`),
         );
         nextBox.hidden = false;
       } else if (done && done.count > 1 && job.wholeLayer) {
@@ -408,7 +408,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
       if (j.pauseMode === "endOfStroke") note = "Pausado no fim do traço, com a caneta em cima. Dá para trocar a caneta ou ajustar o papel.";
       else if (j.penLifted && (s.status?.spindle ?? 0) > 0)
         note =
-          "Pausado, mas o GRBL diz que a caneta continua embaixo: este firmware não levanta a caneta com 0x9E. Em ⚙ Configurações → Caneta, mude \"Pausa\" para \"no fim do traço\".";
+          "Pausado, mas o GRBL diz que a caneta continua embaixo: este firmware não levanta a caneta com 0x9E. Em ⚙ Configurações → Subir e descer a caneta, mude \"Pausa\" para \"no fim do traço\".";
       else if (j.penLifted) note = "Pausado com a caneta levantada. Ao continuar, ela desce, espera o servo e só então anda.";
       else note = "Pausado. Atenção: a caneta ficou no papel.";
     }

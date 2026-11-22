@@ -7,6 +7,8 @@ const MAX_SIDE = 4000;
 
 export interface LoadedImage {
   readonly gray: GrayImage;
+  /** Os pixels coloridos (R, G, B, A), com o fundo transparente já em branco: o modo "illus" usa a cor */
+  readonly rgba: Uint8ClampedArray;
   /** A imagem como foi aberta (já reduzida, se era grande demais), para mostrar na tela */
   readonly bitmap: ImageBitmap;
   readonly name: string;
@@ -44,7 +46,7 @@ export async function loadImage(file: File): Promise<LoadedImage> {
   const data = new Float32Array(width * height);
   // mesma conta do OpenCV (BGR2GRAY)
   for (let i = 0, j = 0; i < data.length; i++, j += 4) data[i] = Math.round(0.299 * rgba[j] + 0.587 * rgba[j + 1] + 0.114 * rgba[j + 2]);
-  return { gray: { width, height, data }, bitmap, name: file.name, reducedFrom };
+  return { gray: { width, height, data }, rgba, bitmap, name: file.name, reducedFrom };
 }
 
 /**
@@ -56,7 +58,12 @@ export class Tracer {
   private seq = 0;
   private rejectCurrent: ((e: Error) => void) | undefined;
 
-  run(gray: GrayImage, options: Partial<TraceOptions>, onProgress: (fraction: number, label: string) => void): Promise<{ result: TraceResult; ms: number }> {
+  run(
+    gray: GrayImage,
+    options: Partial<TraceOptions>,
+    onProgress: (fraction: number, label: string) => void,
+    rgba?: Uint8ClampedArray,
+  ): Promise<{ result: TraceResult; ms: number }> {
     this.cancel();
     const id = ++this.seq;
     const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -81,8 +88,10 @@ export class Tracer {
       };
       // cópia dos pixels: a original fica com a tela, para rodar de novo com outros ajustes
       const data = gray.data.slice();
-      const req: TraceRequest = { id, width: gray.width, height: gray.height, data, options };
-      worker.postMessage(req, [data.buffer]);
+      // a cor só viaja quando o modo usa (são 4 bytes por pixel a mais)
+      const color = options.mode === "illus" && rgba ? rgba.slice() : undefined;
+      const req: TraceRequest = { id, width: gray.width, height: gray.height, data, rgba: color, options };
+      worker.postMessage(req, color ? [data.buffer, color.buffer] : [data.buffer]);
     });
   }
 

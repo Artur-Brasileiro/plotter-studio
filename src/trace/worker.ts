@@ -6,6 +6,8 @@ export interface TraceRequest {
   readonly width: number;
   readonly height: number;
   readonly data: Float32Array;
+  /** Os pixels coloridos (R, G, B, A), só quando o modo usa cor ("illus") */
+  readonly rgba?: Uint8ClampedArray;
   readonly options: Partial<TraceOptions>;
 }
 
@@ -17,16 +19,17 @@ export type TraceReply =
 const ctx = self as unknown as { onmessage: ((e: MessageEvent<TraceRequest>) => void) | null; postMessage(m: TraceReply): void };
 
 ctx.onmessage = (e) => {
-  const { id, width, height, data, options } = e.data;
+  const { id, width, height, data, rgba, options } = e.data;
   const t0 = performance.now();
   try {
     let last = 0;
-    const result = traceImage({ width, height, data }, options, (fraction, label) => {
+    const onProgress = (fraction: number, label: string) => {
       const now = performance.now();
       if (now - last < 80 && fraction < 1) return; // não inunda a tela de mensagens
       last = now;
       ctx.postMessage({ id, type: "progress", fraction, label });
-    });
+    };
+    const result = traceImage({ width, height, data }, options, onProgress, rgba ? { width, height, data: rgba } : undefined);
     ctx.postMessage({ id, type: "done", result, ms: performance.now() - t0 });
   } catch (err) {
     ctx.postMessage({ id, type: "error", message: err instanceof Error ? err.message : String(err) });

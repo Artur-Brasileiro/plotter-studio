@@ -3,6 +3,7 @@ import type { Mat2D } from "../../core/geometry/mat2d";
 import type { Geometry } from "../../core/geometry/path";
 import { penOf } from "../../core/machine";
 import type { Store } from "../../core/store";
+import { colorfulness } from "../../core/trace/illus";
 import { DEFAULT_TRACE, type TraceMode, type TraceOptions, type TraceResult } from "../../core/trace/traceImage";
 import { CancelledError, loadImage, Tracer, type LoadedImage } from "../../trace/client";
 import { append, h, toast } from "../dom";
@@ -15,6 +16,11 @@ type Settings = { -readonly [K in keyof TraceOptions]: TraceOptions[K] };
 const PREFS_KEY = "plotter-studio:trace";
 /** Folga entre o desenho e a borda da folha ao encaixar (mm de cada lado). */
 const SHEET_MARGIN = 5;
+/** A partir desta fração de pixels coloridos, a tela sugere o tipo "Ilustração". */
+const COLORFUL = 0.03;
+
+/** O nome de cada tipo de desenho, como aparece nos botões. */
+const MODE_NAME: Record<TraceMode, string> = { line: "Traço", ink: "Preto e branco", illus: "Ilustração", photo: "Foto" };
 
 function loadPrefs(): Partial<Settings> {
   try {
@@ -53,7 +59,8 @@ export function openTraceDialog(store: Store, file: File): void {
   const zone = profile.drawZone;
   // a caneta dos desenhos novos: é ela que decide o que é "fino" e o que é "área cheia"
   let pen = penOf(profile, undefined);
-  const s: Settings = { ...DEFAULT_TRACE, ...loadPrefs(), penMm: pen.widthMm };
+  const prefs = loadPrefs();
+  const s: Settings = { ...DEFAULT_TRACE, ...prefs, penMm: pen.widthMm };
   let img: LoadedImage | undefined;
   let result: TraceResult | undefined;
   let resultPath: Path2D | undefined;
@@ -192,8 +199,12 @@ export function openTraceDialog(store: Store, file: File): void {
   const sizeNote = h("p", { class: "hint" });
   const placeBtn = h("button", { class: "primary big", disabled: true, onclick: () => place() }, "Colocar na mesa");
   const fillBox = h("div", { class: "panel-section" });
+  const illusBox = h("div", { class: "panel-section" });
   const photoBox = h("div", { class: "panel-section" });
   const strokeBox = h("div", { class: "panel-section" });
+  // imagem colorida num tipo feito para desenho de traço: avisa que existe um tipo próprio
+  let colorful = false;
+  const colorNote = h("p", { class: "notice", hidden: true });
 
   const schedule = (delay = 650) => {
     fresh = false;
@@ -246,9 +257,10 @@ export function openTraceDialog(store: Store, file: File): void {
   const modeHint = h("p", { class: "hint" });
   const mode = seg<TraceMode>(
     [
-      ["line", "Traço"],
-      ["ink", "Preto e branco"],
-      ["photo", "Foto"],
+      ["line", MODE_NAME.line],
+      ["ink", MODE_NAME.ink],
+      ["illus", MODE_NAME.illus],
+      ["photo", MODE_NAME.photo],
     ],
     () => s.mode,
     (v) => {
@@ -305,10 +317,16 @@ export function openTraceDialog(store: Store, file: File): void {
         ? "Cada linha do desenho vira um traço único da caneta. Para desenho de contorno, planta, texto vazado."
         : s.mode === "ink"
           ? "Traço fino vira linha única; área preta mais larga que a caneta vira contorno com hachura. Para gravura, nanquim, logotipo cheio."
-          : "Foto não tem linhas: o tom vira hachura. Quanto mais escuro, mais direções se cruzam. É uma interpretação, não uma cópia.";
+          : s.mode === "illus"
+            ? "Para pintura, desenho colorido ou imagem com textura. O programa primeiro redesenha a imagem (a textura some, ficam os contornos das formas) e só depois traça. As partes escuras podem ganhar hachura."
+            : "Foto não tem linhas: o tom vira hachura. Quanto mais escuro, mais direções se cruzam. É uma interpretação, não uma cópia.";
     fillBox.hidden = s.mode !== "ink";
+    illusBox.hidden = s.mode !== "illus";
     photoBox.hidden = s.mode !== "photo";
-    strokeBox.hidden = s.mode === "photo";
+    strokeBox.hidden = s.mode === "photo" || s.mode === "illus";
+    const wrongType = colorful && (s.mode === "line" || s.mode === "ink");
+    colorNote.hidden = !wrongType;
+    if (wrongType) colorNote.textContent = `Esta imagem é colorida. O tipo ${MODE_NAME[s.mode]} foi feito para desenho que já é de linhas: numa pintura, mancha vira rabisco. Experimente o tipo ${MODE_NAME.illus}.`;
   }
 
   function renderSize() {
@@ -342,16 +360,32 @@ export function openTraceDialog(store: Store, file: File): void {
     range("Tracinho mínimo", 0.5, 10, 0.5, () => s.hatchMinMm, (v) => (s.hatchMinMm = v), mmFmt, "Linhas mais curtas que isto não valem a descida da caneta"),
     check("A imagem tem fundo escuro", () => s.invert, (v) => (s.invert = v)),
   ]);
+  const mmShort = (v: number) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1 })} mm`;
+  append(illusBox, [
+    h("h3", null, "Ilustração"),
+    range("Detalhe", 0, 1, 0.05, () => s.detail, (v) => (s.detail = v), pct, "Para a esquerda, só as formas grandes: desenho mais limpo e mais rápido de plotar"),
+    range("Traço mínimo", 0, 10, 0.5, () => s.minStrokeMm, (v) => (s.minStrokeMm = v), mmShort, "Traços mais curtos que isto somem: cada um seria uma descida da caneta"),
+    range("Sombras", 0, 1, 0.05, () => s.shade, (v) => (s.shade = v), (v) => (v === 0 ? "sem sombra" : pct(v)), "Quanto da imagem ganha hachura. No zero ficam só as linhas, e o desenho sai bem mais rápido."),
+    h("h3", null, "Ajuste fino"),
+    range("Linhas fracas", 0, 1, 0.05, () => s.edge, (v) => (s.edge = v), pct, "Para a direita, as bordas de pouco contraste também viram linha"),
+    range("Distância da hachura", 0.8, 6, 0.1, () => s.shadeSpacingMm, (v) => (s.shadeSpacingMm = v), mmShort, "Menor = sombra mais escura e mais demorada"),
+    range("Ângulo da hachura", 0, 175, 5, () => s.hatchAngleDeg, (v) => (s.hatchAngleDeg = v), (v) => `${v}°`),
+    range("Suavizar curvas", 0, 1, 0.05, () => s.smooth, (v) => (s.smooth = v), pct),
+    range("Endireitar retas", 0, 1.5, 0.1, () => s.straighten, (v) => (s.straighten = v), (v) => (v === 0 ? "desligado" : px(v)), "Trechos retos viram retas de verdade"),
+    check("A imagem tem fundo escuro", () => s.invert, (v) => (s.invert = v)),
+  ]);
   append(side, [
     h("h3", null, "Tipo de desenho"),
     mode.el,
     modeHint,
+    colorNote,
     h("h3", null, "Tamanho no papel"),
     orient.el,
     h("label", { class: "field" }, "Lado maior (mm)", sizeInput),
     h("label", { class: "field", title: "É a largura da caneta que decide o que vira linha única e o que vira área com hachura. Dá para trocar depois, no passo 1." }, "Caneta", penSelect),
     sizeNote,
     fillBox,
+    illusBox,
     photoBox,
     strokeBox,
     h("h3", null, "Resultado"),
@@ -385,10 +419,15 @@ export function openTraceDialog(store: Store, file: File): void {
       /* sem armazenamento: só não lembra */
     }
     try {
-      const { result: r, ms } = await tracer.run(img.gray, { ...s }, (f, label) => {
-        busyFill.style.width = `${Math.round(f * 100)}%`;
-        busyLabel.textContent = label;
-      });
+      const { result: r, ms } = await tracer.run(
+        img.gray,
+        { ...s },
+        (f, label) => {
+          busyFill.style.width = `${Math.round(f * 100)}%`;
+          busyLabel.textContent = label;
+        },
+        img.rgba,
+      );
       result = r;
       resultPath = geometryPath(r.geometry);
       fresh = true;
@@ -404,12 +443,18 @@ export function openTraceDialog(store: Store, file: File): void {
       if (st.hatches) parts.push(`${st.hatches.toLocaleString("pt-BR")} hachuras`);
       stats.textContent =
         r.geometry.subpaths.length === 0
-          ? "Não achei traço nenhum com estes ajustes. Aumente a Tinta ou as Linhas claras."
+          ? `Não achei traço nenhum com estes ajustes. ${s.mode === "illus" ? "Aumente o Detalhe ou as Linhas fracas." : s.mode === "photo" ? "Leve o “Claro ou escuro” para a direita." : "Aumente a Tinta ou as Linhas claras."}`
           : `${parts.join(", ")}. Cerca de ${fmtLength(lengthMm)} de tinta, uns ${fmtDuration(drawS)} só desenhando a F${profile.feed.fixed}. ` +
             `Calculado em ${fmtDuration(ms / 1000)} (ampliação interna de ${st.scale}×). O tempo certo, com as subidas da caneta, aparece no passo Conferir.`;
       // docs/REGRAS_GCODE.md, seção 9: acima de 2-3 h o risco de falha da caneta aumenta
       budget.hidden = drawS < 3 * 3600 || r.geometry.subpaths.length === 0;
-      budget.textContent = `São mais de 3 horas de máquina, e acima disso o risco de a caneta falhar aumenta. Para encurtar: ${s.mode === "line" ? "diminua o tamanho no papel ou limpe mais sujeira" : "aumente a distância da hachura, use menos direções ou diminua o tamanho no papel"}.`;
+      const shorter =
+        s.mode === "line"
+          ? "diminua o tamanho no papel ou limpe mais sujeira"
+          : s.mode === "illus"
+            ? "diminua as Sombras, aumente a distância da hachura, diminua o Detalhe ou o tamanho no papel"
+            : "aumente a distância da hachura, use menos direções ou diminua o tamanho no papel";
+      budget.textContent = `São mais de 3 horas de máquina, e acima disso o risco de a caneta falhar aumenta. Para encurtar: ${shorter}.`;
       draw();
     } catch (e) {
       if (e instanceof CancelledError) return;
@@ -430,7 +475,7 @@ export function openTraceDialog(store: Store, file: File): void {
     const cy = H - (zone.minY + zone.maxY) / 2; // cena: Y para baixo
     // deitado = girado 90° no sentido horário: o topo da imagem vai para o lado X+ (REGRAS_GCODE.md, seção 8)
     const m: Mat2D = turned ? [0, k, -k, 0, cx + hh / 2, cy - w / 2] : [k, 0, 0, k, cx - w / 2, cy - hh / 2];
-    const name = img.name.replace(/\.[^.]+$/, "") + (s.mode === "line" ? " (traço)" : s.mode === "ink" ? " (preto e branco)" : " (foto)");
+    const name = `${img.name.replace(/\.[^.]+$/, "")} (${MODE_NAME[s.mode].toLowerCase()})`;
     const d = createDrawing(crypto.randomUUID(), name, result.geometry, m, pen.id === penOf(profile, undefined).id ? undefined : pen.id);
     store.commit("Vetorizar imagem", (doc) => addDrawing(doc, d));
     store.setSelection([d.id]);
@@ -472,6 +517,13 @@ export function openTraceDialog(store: Store, file: File): void {
       applySize();
       renderSize();
       if (loaded.reducedFrom) toast(`A imagem era grande (${loaded.reducedFrom.width} × ${loaded.reducedFrom.height} px) e foi reduzida para ${loaded.gray.width} × ${loaded.gray.height} px. O traçado continua fiel.`, "info", 8000);
+      // imagem colorida: quem nunca escolheu um tipo já começa no certo; quem já escolheu fica com o seu, e a tela avisa
+      colorful = colorfulness(loaded.rgba) > COLORFUL;
+      if (colorful && prefs.mode === undefined) {
+        s.mode = "illus";
+        mode.sync();
+      }
+      renderMode();
       fit();
       draw();
       void run();

@@ -24,6 +24,7 @@ export function createHelpDialog(): { open(): void } {
         "Desenho",
         "Traga o que você quer plotar com o botão “Trazer desenho”: uma imagem (PNG ou JPG, que vira traço de caneta ali mesmo), um arquivo SVG, ou um texto.",
         list(
+          "Imagem: escolha o tipo na tela que abre. Traço para desenho que já é de linhas, Preto e branco para nanquim e gravura, Ilustração para pintura ou desenho colorido, Foto para fotografia.",
           "A parte branca da mesa é a sua folha. O desenho já cai dentro dela.",
           "Clique no desenho para mover, girar ou mudar o tamanho. “Encaixar na folha” faz ele ocupar o máximo possível.",
           "Se for usar mais de uma caneta, escolha a caneta de cada desenho em “Caneta”.",

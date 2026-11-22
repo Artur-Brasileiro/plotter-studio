@@ -11,6 +11,13 @@ export interface GrayImage {
   readonly data: Float32Array;
 }
 
+/** Pixels coloridos como o navegador entrega: R, G, B, A (0..255), linha a linha. O A é ignorado. */
+export interface RgbaImage {
+  readonly width: number;
+  readonly height: number;
+  readonly data: Uint8ClampedArray | Uint8Array;
+}
+
 /** Máscara binária, linha a linha. 1 = tinta, 0 = papel. */
 export interface Mask {
   readonly width: number;

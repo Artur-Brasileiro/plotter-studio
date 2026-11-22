@@ -6,6 +6,44 @@ e num Chrome dirigido por script. O que só a máquina pode confirmar está em [
 
 Para ver funcionando: **dois cliques em `Abrir Plotter Studio (simulador).bat`**, na pasta do projeto (abre o navegador sozinho, com uma máquina de mentira). `Abrir Plotter Studio.bat` abre o programa de verdade.
 
+## Acrescentado em 22/11/2026, de manhã: tipo Ilustração e tons da Foto
+
+O Artur abriu o programa, gostou, e trouxe uma imagem em que nada funcionava: uma pintura colorida de um robô
+enferrujado, cheia de textura, sobre uma planta técnica. Ele aprovou colocar no programa a solução testada antes
+no laboratório.
+
+- **Tipo novo "Ilustração"** na tela de vetorizar, para pintura, desenho colorido e imagem com textura. O programa
+  primeiro redesenha a imagem (a textura some, ficam os contornos das formas) e só depois traça. As partes escuras
+  podem ganhar hachura. Três controles principais: **Detalhe**, **Traço mínimo** e **Sombras**.
+- **Tipo "Foto" corrigido**: os tons escuros saíam todos iguais (um borrão). Agora cada tom mais escuro ganha mais
+  hachura. As fotos saem mais claras que antes; o controle "Claro ou escuro" escurece.
+- A tela **escolhe Ilustração sozinha** na primeira imagem colorida de quem nunca escolheu um tipo, e **avisa**
+  quando uma imagem colorida está no tipo Traço ou Preto e branco.
+
+Medido na imagem do robô, folha inteira (297 × 530 mm, deitado), caneta 0,4, pelo planejador de verdade:
+
+| Tipo | Descidas | Tempo | Espera do servo | Regras |
+|---|---|---|---|---|
+| Traço (como era) | 7.396 | 4 h 49 min | 49 min | passa, mas o desenho sai cheio de "estrelas" e rabiscos |
+| Ilustração, só linhas (Detalhe 75%) | 1.321 | 1 h 09 min | 0 | passa |
+| Ilustração, só linhas (Detalhe 50%) | 973 | 59 min | 0 | passa |
+| Ilustração padrão (Sombras 50%) | 2.317 | 2 h 28 min | 0 | passa |
+| Foto corrigida | 1.996 | 2 h 24 min | ~0 | passa |
+
+Como foi conferido: 106 testes novos (a conversão para TypeScript bate com a referência em Python etapa por etapa,
+em cena sintética); a imagem do robô rodou pelo código do programa e pelo navegador com o simulador, do "Trazer
+desenho" até o "Pronto para plotar"; o cálculo leva ~6 s (10 a 13 s no navegador de teste).
+
+Limites conhecidos do tipo Ilustração:
+
+- **Testado a fundo numa imagem só** (o robô) e, por alto, em outras quatro. Não foi testado em fotografia.
+- **Não separa a figura do fundo.** No robô, as linhas finas da planta ao fundo ficam e o texto miúdo some quase todo.
+- **Linha grossa do original vira duas** (o contorno dela) quando é bem mais larga que a caneta. Com sombras, o meio
+  é hachurado.
+- **Divisa entre duas cores de mesma luminância** (vermelho e verde, por exemplo) sai como duas linhas juntas.
+- **Sombras em folha grande custam mais de uma hora.** No zero ficam só as linhas.
+- **Nada disso rodou na máquina.** O teste é o C5b de [TESTES.md](TESTES.md).
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -26,14 +64,16 @@ Para ver funcionando: **dois cliques em `Abrir Plotter Studio (simulador).bat`**
 | 4. Interface nova | pronto: passos Desenho / Conferir / Plotar, Configurações, tela de vetorizar |
 | 5. Várias canetas (camadas, cruzes de registro, correção da ponta) e retomar | pronto |
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
+| 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
 
-Testes automáticos: 1.331 passando (eram 304 no começo da noite). `npm run build` passa.
+Testes automáticos: 1.437 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 
-1. **Desenho.** "Trazer desenho" aceita SVG, imagem (PNG/JPG) e **texto** (letras de traço único: a caneta escreve com uma linha só). A imagem abre a tela de vetorizar, com três tipos:
+1. **Desenho.** "Trazer desenho" aceita SVG, imagem (PNG/JPG) e **texto** (letras de traço único: a caneta escreve com uma linha só). A imagem abre a tela de vetorizar, com quatro tipos:
    *Traço* (cada linha vira um traço único), *Preto e branco* (traço fino em linha única, área cheia com contorno e
-   hachura) e *Foto* (o tom vira hachura cruzada). O desenho cai dentro da folha, e dá para mover, girar, redimensionar,
+   hachura), *Ilustração* (pintura ou desenho colorido: contornos limpos e sombras em hachura) e *Foto* (o tom vira
+   hachura cruzada). O desenho cai dentro da folha, e dá para mover, girar, redimensionar,
    "Encaixar na folha" e escolher a **caneta** de cada desenho.
 2. **Conferir.** Diz se pode ir para a máquina (verde, amarelo ou vermelho), quanto tempo leva, quanto o servo trabalha
    (média e pico, com a barra do limite) e passa as regras uma a uma. Baixa o G-code inteiro, em partes de ~25 min,
@@ -116,6 +156,12 @@ Todas são configuráveis ou fáceis de trocar.
   batidas de reaquecimento no fim). É a conta do limite do servo refeita para um arquivo que começa no meio.
 - **A média do servo de um arquivo com menos de um minuto** é contada como "descidas nesse minuto" (um tracinho só,
   de 2 segundos, não são "30 por minuto").
+- **Tipo Ilustração: os padrões são Detalhe 75%, Traço mínimo 2,5 mm e Sombras 50%** (hachura a 2 mm). Com as sombras
+  o desenho fica mais bonito e bem mais demorado; quem preferir rapidez põe Sombras no zero.
+- **A tela troca o tipo para Ilustração sozinha** só para quem nunca escolheu um tipo; depois disso respeita a última
+  escolha e apenas avisa.
+- **Foto: os tons agora são proporcionais** (o mais escuro da imagem recebe todas as camadas). Uma foto que antes saía
+  escura agora sai mais clara.
 
 ## O que NÃO foi feito, ou ficou pela metade
 

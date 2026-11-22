@@ -1,26 +1,31 @@
-import type { Geometry, Segment, SubPath } from "../geometry/path";
+import { scaling } from "../geometry/mat2d";
+import { transformGeometry, type Geometry, type Segment, type SubPath } from "../geometry/path";
 import { findContours, loopArea } from "./contours";
 import { fitPolyline, type FitOptions } from "./fit";
 import { hatchField } from "./hatch";
+import { lineArt, lineArtParams, resample, rgbFromGray, rgbFromRgba, toneDarkness, type RgbImage } from "./illus";
 import { cleanMask, fieldToMask, inkField } from "./inkField";
 import { gaussianBlur, percentile, resizeBicubic } from "./raster";
 import { distanceTransform, skeletonize } from "./skeleton";
 import { skeletonStrokes } from "./strokes";
-import type { GrayImage, Mask, Polyline } from "./types";
+import { gray, type GrayImage, type Mask, type Polyline, type RgbaImage } from "./types";
 
 /**
  * Imagem → traços de caneta. O método é o do laboratório em Python (lab/python/vec.py):
  * campo de tinta com borda sub-pixel → esqueleto → grafo → traços longos → curvas.
  *
- * Três modos:
+ * Quatro modos:
  *  - "line":  tudo vira linha única (desenho de traço, planta, texto de contorno);
  *  - "ink":   traço fino vira linha única; área mais larga que a caneta vira contorno + hachura;
+ *  - "illus": pintura, desenho colorido, render. A imagem é REDESENHADA antes (illus.ts): some a textura,
+ *             ficam os contornos das formas, e só então entra o traçador de linha. As partes escuras
+ *             ganham hachura (opcional);
  *  - "photo": foto não tem linhas, então o tom vira hachura (mais escuro = mais camadas cruzadas).
  *
  * Tudo aqui é puro (sem DOM): roda igual no navegador, num worker e nos testes.
  * As coordenadas de saída são pixels da imagem original (pixel (0,0) ocupa [0,1]×[0,1]).
  */
-export type TraceMode = "line" | "ink" | "photo";
+export type TraceMode = "line" | "ink" | "illus" | "photo";
 
 export interface TraceOptions {
   readonly mode: TraceMode;
@@ -63,6 +68,16 @@ export interface TraceOptions {
   readonly photoLevels: number;
   /** Modo "photo": suavização do tom antes de hachurar (mm no papel). Sem isso as manchas saem serrilhadas. */
   readonly photoSmoothMm: number;
+  /** Modo "illus": 0 a 1, quanto detalhe pequeno entra no desenho (0 = só as formas grandes) */
+  readonly detail: number;
+  /** Modo "illus": 0 a 1, quanto das bordas de pouco contraste vira linha */
+  readonly edge: number;
+  /** Modo "illus": traços mais curtos que isto (mm) somem: cada um custaria uma descida da caneta */
+  readonly minStrokeMm: number;
+  /** Modo "illus": 0 a 1, quanto da imagem ganha hachura de sombra (0 = só linhas) */
+  readonly shade: number;
+  /** Modo "illus": distância entre as linhas da hachura de sombra (mm) */
+  readonly shadeSpacingMm: number;
 }
 
 export const DEFAULT_TRACE: TraceOptions = {
@@ -86,6 +101,11 @@ export const DEFAULT_TRACE: TraceOptions = {
   photoSpacingMm: 2.2,
   photoLevels: 3,
   photoSmoothMm: 1.2,
+  detail: 0.75,
+  edge: 0.5,
+  minStrokeMm: 2.5,
+  shade: 0.5,
+  shadeSpacingMm: 2,
 };
 
 export interface TraceStats {
@@ -114,6 +134,21 @@ export type TraceProgress = (fraction: number, label: string) => void;
 /** Ampliação interna: mira ~5000 px no lado maior, entre 2× e 6×. */
 export function autoScale(width: number, height: number): number {
   return Math.min(6, Math.max(2, Math.round(5000 / Math.max(width, height))));
+}
+
+/** Teto da imagem de trabalho do modo ilustração (px): caneta muito fina numa folha grande não passa disto. */
+const ILLUS_MAX_PX = 4_000_000;
+
+/**
+ * Tamanho da imagem de trabalho do modo ilustração: 1 px = 1 largura de caneta no papel.
+ * É a caneta que decide quanto detalhe cabe: uma imagem enorme num papel pequeno não pode virar
+ * linhas a 0,1 mm uma da outra, e uma imagem pequena num papel grande não pode sair serrilhada.
+ */
+export function illusWorkSize(width: number, height: number, mmPerPx: number, penMm: number): { width: number; height: number } {
+  let s = mmPerPx / penMm; // px de trabalho por px da imagem
+  if (!(s > 0) || !Number.isFinite(s) || Math.abs(s - 1) < 0.03) s = 1; // quase igual: não mexe
+  if (width * height * s * s > ILLUS_MAX_PX) s = Math.sqrt(ILLUS_MAX_PX / (width * height));
+  return { width: Math.max(8, Math.round(width * s)), height: Math.max(8, Math.round(height * s)) };
 }
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * Math.min(1, Math.max(0, t));
@@ -152,7 +187,11 @@ function dotSubPath(x: number, y: number): SubPath {
   return { start: { x, y }, segments: [{ kind: "line", to: { x: x + 0.01, y } }], closed: false };
 }
 
-export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, progress: TraceProgress = () => {}): TraceResult {
+/**
+ * `color` são os pixels coloridos da mesma imagem; só o modo "illus" usa (para enxergar a borda entre
+ * duas cores de mesma luminância). Sem ele, o modo "illus" trabalha só com o cinza.
+ */
+export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, progress: TraceProgress = () => {}, color?: RgbaImage): TraceResult {
   const o: TraceOptions = { ...DEFAULT_TRACE, ...opts };
   const { width, height } = img;
   const k = Math.max(1, Math.round(o.scale ?? autoScale(width, height)));
@@ -180,27 +219,40 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
 
   const subpaths: SubPath[] = [];
   let strokes = 0, dots = 0, outlines = 0, hatches = 0, lengthPx = 0;
+  let usedScale = k; // ampliação interna que valeu (no modo "illus" é a da imagem de trabalho)
 
-  /** Linha única de uma máscara (a máscara inteira no modo "line"; só a parte fina no modo "ink"). */
-  const centerlines = (m: Mask, from: number, to: number) => {
+  /**
+   * Linha única de uma máscara (a máscara inteira no modo "line"; só a parte fina no modo "ink"; o desenho
+   * de linhas no modo "illus"). `c` descreve a máscara quando ela não é a da imagem original:
+   *  - `k`: ampliação da máscara em relação à imagem que foi traçada;
+   *  - `minLength`: traços mais curtos que isto (px da imagem traçada) somem;
+   *  - `out` e `outScale`: levam o traço pronto, e o comprimento dele, para a imagem original.
+   */
+  const centerlines = (
+    m: Mask,
+    from: number,
+    to: number,
+    c: { k?: number; spurPx?: number; dots?: boolean; minLength?: number; out?: (sp: SubPath) => SubPath; outScale?: number } = {},
+  ) => {
     progress(from, "Afinando os traços");
     const dist = distanceTransform(m);
     const skel = skeletonize(m);
     progress(from + (to - from) * 0.45, "Seguindo os traços");
-    const res = skeletonStrokes(skel, dist, k, { spurPx: o.spurPx });
+    const res = skeletonStrokes(skel, dist, c.k ?? k, { spurPx: c.spurPx ?? o.spurPx });
     progress(from + (to - from) * 0.6, "Ajustando as curvas");
     const total = res.polylines.length;
     res.polylines.forEach((pl: Polyline, i: number) => {
       const len = polylineLength(pl.points, pl.closed);
+      if (len < (c.minLength ?? 0)) return;
       const sp = fitPolyline(pl.points, pl.closed, strokeFit(len, o));
       if (sp) {
-        subpaths.push(sp);
+        subpaths.push(c.out ? c.out(sp) : sp);
         strokes++;
-        lengthPx += len;
+        lengthPx += len * (c.outScale ?? 1);
       }
       if (i % 400 === 0) progress(from + (to - from) * (0.6 + (0.4 * i) / Math.max(1, total)), "Ajustando as curvas");
     });
-    for (let i = 0; o.dots && i < res.dots.length; i += 2) {
+    for (let i = 0; (c.dots ?? o.dots) && i < res.dots.length; i += 2) {
       subpaths.push(dotSubPath(res.dots[i], res.dots[i + 1]));
       dots++;
     }
@@ -224,13 +276,17 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     const dirs = Math.min(4, Math.max(1, Math.round(o.photoLevels)));
     const angles = [0, 90, 45, 135].slice(0, dirs).map((a) => o.hatchAngleDeg + a);
     const minLength = (o.hatchMinMm / o.mmPerPx) * kp;
+    // O mais escuro da foto recebe TODAS as camadas, e os tons do meio, uma parte proporcional. Com o limiar
+    // tirado só da cobertura real da caneta (que nem com tudo cruzado chega a 50%), tudo que passava de
+    // ~40% de escuro saía igual, e uma imagem escura virava um borrão.
+    const full = 1 - Math.pow(1 - cov, 2 * angles.length);
     let acc = 0;
     let layer = 0;
     for (const angleDeg of angles) {
       for (const offset of [0, s]) {
         const before = acc;
         acc = acc + (1 - acc) * cov;
-        const thr = (before + acc) / 2;
+        const thr = (before + acc) / 2 / full;
         progress(0.2 + (0.75 * layer++) / (2 * angles.length), "Hachurando os tons");
         for (const z of hatchField(tone.data, tone.width, tone.height, thr, { angleDeg, spacing: 2 * s, offset, link: 0, minLength: penPx })) {
           if (polylineLength(z, false) < minLength) continue;
@@ -243,6 +299,61 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
         }
       }
     }
+  } else if (o.mode === "illus") {
+    // --- a imagem é redesenhada (só contornos, sem textura) e o desenho de linhas vai para o traçador.
+    // Tudo acontece na imagem de trabalho, em que 1 px = 1 caneta; no fim volta para px da imagem original.
+    progress(0.03, "Preparando a imagem");
+    const full: RgbImage = color ? rgbFromRgba(color.width, color.height, color.data, o.invert) : rgbFromGray(img, o.invert);
+    if (full.width !== width || full.height !== height) throw new RangeError("a imagem colorida e a cinza têm tamanhos diferentes");
+    const size = illusWorkSize(width, height, o.mmPerPx, o.penMm);
+    const ww = size.width, wh = size.height;
+    const same = ww === width && wh === height;
+    const plane = (d: Float32Array) => resample(gray(width, height, d), ww, wh).data;
+    let work = full;
+    if (!same) {
+      const r = plane(full.r);
+      work = full.mono ? { width: ww, height: wh, r, g: r, b: r, mono: true } : { width: ww, height: wh, r, g: plane(full.g), b: plane(full.b) };
+    }
+    const workMm = (o.mmPerPx * width) / ww; // mm de papel por px de trabalho (≈ a largura da caneta)
+    const toImage = scaling(width / ww, height / wh);
+    const back = (sp: SubPath): SubPath => (same ? sp : transformGeometry({ subpaths: [sp] }, toImage).subpaths[0]);
+
+    progress(0.06, "Apagando a textura");
+    const art = lineArt(work, lineArtParams(o.detail, o.edge), (f) => progress(0.06 + 0.34 * f, f < 0.5 ? "Apagando a textura" : "Achando os contornos"));
+
+    // sombras primeiro: hachura só onde o tom (já sem textura) é escuro de verdade
+    if (o.shade > 0 && o.shadeSpacingMm > 0) {
+      progress(0.42, "Hachurando as sombras");
+      const kp = 2;
+      const spacingPx = Math.max(o.shadeSpacingMm, 1.5 * o.penMm) / workMm;
+      const up = resizeBicubic(gray(ww, wh, toneDarkness(art.tone)), kp);
+      // o tom é alisado na escala da hachura: mancha menor que isso só picotaria as linhas
+      const tone = gaussianBlur(up, Math.max(0.6, 0.75 * spacingPx * kp));
+      const first = 0.85 - 0.5 * Math.min(1, o.shade); // a partir deste escuro, uma direção
+      const second = first + 0.26; // bem mais escuro: cruza com a segunda
+      const link = Math.max(2 / workMm, 1.6 * spacingPx) * kp; // regra 1: emenda curta, por dentro da sombra
+      const minLength = (Math.max(o.hatchMinMm, 2 * o.shadeSpacingMm) / workMm) * kp;
+      for (const [thr, angleDeg] of [[first, o.hatchAngleDeg], [second, o.hatchAngleDeg + 90]] as const) {
+        if (thr >= 0.97) continue;
+        for (const z of hatchField(tone.data, tone.width, tone.height, thr, { angleDeg, spacing: spacingPx * kp, link, linkSlack: 1, minLength: (o.penMm / workMm) * kp })) {
+          if (polylineLength(z, false) < minLength) continue;
+          const sp = polylineToSubPath(z, kp);
+          if (sp) {
+            subpaths.push(back(sp));
+            hatches++;
+            lengthPx += (polylineLength(z, false) / kp) * (width / ww);
+          }
+        }
+      }
+    }
+
+    // contornos: o desenho de linhas tem contraste cheio, então o campo de tinta usa ajustes fixos
+    progress(0.5, "Achando a tinta");
+    const kw = Math.max(1, Math.round(o.scale ?? autoScale(ww, wh)));
+    usedScale = kw;
+    const field = inkField(art.gray, kw, { win: 5, cmin: lerp(70, 14, 0.3), cmax: lerp(110, 38, 0.3), blur: 0.22 });
+    const ink = cleanMask(fieldToMask(field), 2 * kw * kw);
+    centerlines(ink, 0.56, 0.98, { k: kw, spurPx: 2.5, dots: false, minLength: o.minStrokeMm / workMm, out: back, outScale: width / ww });
   } else if (o.mode === "line") {
     centerlines(findInk(), 0.2, 0.98);
   } else {
@@ -310,5 +421,5 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
   }
 
   progress(1, "Pronto");
-  return { geometry: { subpaths }, width, height, stats: { strokes, dots, outlines, hatches, scale: k, lengthPx } };
+  return { geometry: { subpaths }, width, height, stats: { strokes, dots, outlines, hatches, scale: usedScale, lengthPx } };
 }

@@ -366,3 +366,8 @@ dialog.sheet.trace { width: min(1280px, 96vw); height: min(860px, 94vh); }
 .resume { margin-top: 4px; }
 .resume .row { align-items: flex-end; }
 
+
+/* tela de texto */
+.trace-side textarea { font: inherit; color: var(--ink); width: 100%; padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--field); resize: vertical; min-height: 84px; line-height: 1.35; }
+.trace-side textarea:focus-visible { outline: 2px solid var(--plan); outline-offset: 1px; }
+

@@ -4,7 +4,7 @@ Software de G-code para a minha CNC Plotter de caneta (GRBL 1.1h + servo, área 
 
 Roda no navegador (Chrome/Edge), em três passos:
 
-1. **Desenho**: traz um SVG ou uma imagem (PNG/JPG, que vira traço de caneta ali mesmo: linha única, hachura, foto por tom), posiciona, gira e redimensiona na folha, escolhe a caneta.
+1. **Desenho**: traz um SVG, uma imagem (PNG/JPG, que vira traço de caneta ali mesmo: linha única, hachura, foto por tom) ou um texto em letra de traço único, posiciona, gira e redimensiona na folha, escolhe a caneta.
 2. **Conferir**: mostra o tempo, a carga do servo e as regras de [docs/REGRAS_GCODE.md](docs/REGRAS_GCODE.md) uma a uma. Arquivo que quebra regra não sai.
 3. **Plotar**: envia direto para a máquina pela serial (Web Serial API), com pausa, parada, retomada e troca de caneta entre camadas. Também dá para baixar o `.gcode` e usar o LaserGRBL.
 

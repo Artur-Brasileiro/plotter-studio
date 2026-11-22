@@ -77,6 +77,10 @@ Regras que não podem quebrar ao mexer aqui: o gerador nunca escreve `G0` com a 
 - É um porte, **número por número**, do laboratório em Python que fica em `lab/python/` (referência, não faz parte do aplicativo). Os testes comparam com dados gerados por ele (`__fixtures__/`). Mudou o algoritmo: mude no laboratório, regenere as fixtures (`lab/python/fixtures_*.py`) e só então porte.
 - Roda num Web Worker (`src/trace/`); a tela é `src/ui/trace/traceDialog.ts`, carregada sob demanda.
 - Imagens de terceiros não vão para o repositório: as fixtures são formas sintéticas.
+
+## Texto (v3)
+
+- `src/core/text/`: fontes Hershey de traço único (`fontData.ts` é gerado dos arquivos .jhf; uso livre, com o reconhecimento que está no topo do arquivo). `hershey.ts` monta o texto como geometria: acentos do português compostos (letra + sinal), alinhamento, entrelinha e curvas suaves (vértice de curva vira Bézier, canto continua vivo). A tela é `src/ui/textDialog.ts`. O texto vira um desenho comum; não é reeditável depois de colocado na mesa.
 ## Arquitetura (decisões tomadas)
 
 - **Vite + TypeScript, sem framework de UI** (HTML + módulos TS). Mantém o projeto simples de entender e de alterar.

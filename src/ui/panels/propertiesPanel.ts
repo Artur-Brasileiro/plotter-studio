@@ -56,6 +56,7 @@ export function deleteSelection(store: Store): void {
 export interface BringActions {
   pickSvg(): void;
   pickImage(): void;
+  writeText?(): void;
 }
 
 export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLElement {
@@ -107,6 +108,7 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
         ? [
             h("button", { class: "choice", onclick: () => bring.pickImage() }, h("strong", null, "Imagem PNG ou JPG"), h("span", null, "Vira traço aqui mesmo: linha única e hachura.")),
             h("button", { class: "choice", onclick: () => bring.pickSvg() }, h("strong", null, "Arquivo SVG"), h("span", null, "Desenho que já está em vetor (Inkscape, Illustrator).")),
+            ...(bring.writeText ? [h("button", { class: "choice", onclick: () => bring.writeText!() }, h("strong", null, "Texto"), h("span", null, "Letras de traço único: a caneta escreve com uma linha só."))] : []),
           ]
         : [];
       if (!docCount) {

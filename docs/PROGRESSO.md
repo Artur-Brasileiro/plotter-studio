@@ -25,13 +25,13 @@ Para ver funcionando: `npm run dev` e abrir `http://localhost:5173/?sim=1&simSpe
 | 3. Revisão do controle da CNC | pronto: 11 achados corrigidos, simulador refeito a partir do fonte do GRBL |
 | 4. Interface nova | pronto: passos Desenho / Conferir / Plotar, Configurações, tela de vetorizar |
 | 5. Várias canetas (camadas, cruzes de registro, correção da ponta) e retomar | pronto |
-| 6. Texto em fonte de traço único | ver o fim deste arquivo |
+| 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 
-Testes automáticos: 1.269 passando (eram 304 no começo da noite). `npm run build` passa.
+Testes automáticos: 1.288 passando (eram 304 no começo da noite). `npm run build` passa.
 
 ## O que cada passo da tela faz
 
-1. **Desenho.** "Trazer desenho" aceita SVG e imagem (PNG/JPG). A imagem abre a tela de vetorizar, com três tipos:
+1. **Desenho.** "Trazer desenho" aceita SVG, imagem (PNG/JPG) e **texto** (letras de traço único: a caneta escreve com uma linha só). A imagem abre a tela de vetorizar, com três tipos:
    *Traço* (cada linha vira um traço único), *Preto e branco* (traço fino em linha única, área cheia com contorno e
    hachura) e *Foto* (o tom vira hachura cruzada). O desenho cai dentro da folha, e dá para mover, girar, redimensionar,
    "Encaixar na folha" e escolher a **caneta** de cada desenho.

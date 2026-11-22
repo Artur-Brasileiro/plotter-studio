@@ -79,9 +79,17 @@ new ResizeObserver(() => {
 // a tela de vetorização é ligada mais abaixo (precisa do store): por enquanto só guarda a referência
 let openTracer: (file: File) => void = () => toast("A vetorização ainda está carregando. Tente de novo em instantes.", "warn");
 const importer = installImport(store, layout.canvasWrap, (file) => openTracer(file));
+// tela de texto: carregada sob demanda, como a de vetorizar
+const writeText = () => {
+  void import("./ui/textDialog").then((m) => m.openTextDialog(store)).catch((e) => {
+    console.error(e);
+    toast("Não consegui abrir a tela de texto.", "error");
+  });
+};
 const bringMenu = createMenu("Trazer desenho", [
   { label: "Imagem PNG ou JPG", hint: "Vira traço aqui mesmo: linha única e hachura", action: importer.pickImage },
   { label: "Arquivo SVG", hint: "Desenho que já está em vetor", action: importer.pickSvg },
+  { label: "Texto", hint: "Letras de traço único: a caneta escreve com uma linha só", action: writeText },
 ]);
 const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
 const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
@@ -121,7 +129,7 @@ planner.subscribe((plan) => {
 overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
 
 const side = new SidePanel(layout.side);
-side.addTab("props", "Desenho", createPropertiesPanel(store, importer));
+side.addTab("props", "Desenho", createPropertiesPanel(store, { ...importer, writeText }));
 side.addTab(
   "job",
   "Conferir",

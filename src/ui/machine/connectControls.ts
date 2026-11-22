@@ -1,4 +1,4 @@
-import type { ControllerSnapshot } from "../../core/grbl/controller";
+import { escapeAction, type ControllerSnapshot } from "../../core/grbl/controller";
 import { stateLabel } from "../../core/grbl/protocol";
 import { h, toast } from "../dom";
 import type { MachineSession } from "./session";
@@ -108,8 +108,10 @@ export function createConnectControls(session: MachineSession): HTMLElement {
 }
 
 /**
- * Esc com a máquina andando (ou trabalho em andamento): parada de emergência. Num jog, só cancela o jog
- * (0x85), que para sem perder a posição. Escuta na captura, antes dos atalhos de edição.
+ * Esc com a máquina andando (ou trabalho em andamento, ou uma ação manual como o Home): parada de
+ * emergência. Num jog, só cancela o jog (0x85), que para sem perder a posição. A decisão é do
+ * `escapeAction` (testado no núcleo): ela não pode depender só do último relatório de estado, porque o
+ * GRBL não manda relatório durante o homing. Escuta na captura, antes dos atalhos de edição.
  */
 export function installEmergencyKey(session: MachineSession): void {
   window.addEventListener(
@@ -119,11 +121,11 @@ export function installEmergencyKey(session: MachineSession): void {
       const s = session.snapshot;
       const c = session.controller;
       if (!c || s.link !== "connected" || document.querySelector("dialog[open]")) return;
-      const st = s.status?.state;
-      if (session.jobActive || st === "Run" || st === "Home" || st === "Hold") {
+      const action = escapeAction(s);
+      if (action === "estop") {
         c.emergencyStop();
         toast("Parada de emergência (Esc).", "error", 8000);
-      } else if (st === "Jog") c.jogStop();
+      } else if (action === "jogCancel") c.jogStop();
       else return;
       e.preventDefault();
       e.stopImmediatePropagation();

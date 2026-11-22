@@ -16,6 +16,8 @@ export interface Drawing {
   readonly localBBox: BBox;
   /** Local (mm) → cena (mm) */
   readonly transform: Mat2D;
+  /** Caneta (id em MachineProfile.pens). Sem valor = a caneta padrão do perfil. */
+  readonly penId?: string;
 }
 
 export interface PlotDocument {
@@ -24,8 +26,19 @@ export interface PlotDocument {
 
 export const EMPTY_DOCUMENT: PlotDocument = { drawings: [] };
 
-export function createDrawing(id: DrawingId, name: string, geometry: Geometry, transform: Mat2D): Drawing {
-  return { id, name, geometry, localBBox: controlBBox(geometry), transform };
+export function createDrawing(id: DrawingId, name: string, geometry: Geometry, transform: Mat2D, penId?: string): Drawing {
+  return { id, name, geometry, localBBox: controlBBox(geometry), transform, ...(penId ? { penId } : {}) };
+}
+
+/** Troca a caneta dos desenhos indicados. */
+export function setPen(doc: PlotDocument, ids: readonly DrawingId[], penId: string): PlotDocument {
+  let changed = false;
+  const drawings = doc.drawings.map((d) => {
+    if (!ids.includes(d.id) || d.penId === penId) return d;
+    changed = true;
+    return { ...d, penId };
+  });
+  return changed ? { drawings } : doc;
 }
 
 /**

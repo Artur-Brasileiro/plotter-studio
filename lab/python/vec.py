@@ -1,4 +1,4 @@
-﻿"""
+"""
 SPIKE DESCARTAVEL - vetorizacao para caneta (pen plotter).
 
 Nao e codigo de produto. Serve so para ver que tipo de resultado da para obter.
@@ -295,7 +295,7 @@ def _sharpen(E, s, c, gap, m, lim_b, lim_f):
 
 
 def fit_polyline(P, closed, tol=0.2, cL=2.0, cdeg=55.0, cratio=0.7, sharpen=True, gap=1.0,
-                 smooth=0.0, presmooth=0.0, line_tol=0.04, corners=True):
+                 smooth=0.0, presmooth=0.0, line_tol=0.04, corners=True, piece_fitter=None):
     """Polilinha densa -> caminho de Beziers cubicas/retas, preservando cantos.
 
     Devolve dict(segs=[(bez(4,2), is_line)], closed) ou None.
@@ -392,6 +392,12 @@ def fit_polyline(P, closed, tol=0.2, cL=2.0, cdeg=55.0, cratio=0.7, sharpen=True
         if len(Q) == 2:
             segs.append((np.array([Q[0], Q[0], Q[1], Q[1]]), True))
             continue
+        if piece_fitter is not None:
+            # opcional (ver straight.py): trechos retos viram retas de verdade. None = ajuste normal.
+            res = piece_fitter(Q, tol, tw_arc, tw)
+            if res is not None:
+                segs.extend(res)
+                continue
         if t1 is None:
             t1 = _end_tangent(Q, tw_arc)
         if t2 is None:

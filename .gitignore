@@ -8,3 +8,7 @@ dist/
 # SVGs de estresse gerados por scripts/make-stress-svg.mjs
 /samples/estresse.svg
 /samples/buffer.svg
+
+# Python do laboratorio
+__pycache__/
+*.pyc

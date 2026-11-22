@@ -8,6 +8,23 @@
  *   - X+ para a direita, Y+ para longe do operador
  *   - na tela, Y+ aponta para CIMA (o operador vê o papel de frente)
  */
+/** Uma caneta do estojo. A ordem da lista em `MachineProfile.pens` é a ordem de plotagem das camadas. */
+export interface Pen {
+  /** Identificador estável (os desenhos guardam este id) */
+  id: string;
+  name: string;
+  /** Largura do traço (mm): decide o que dá para emendar sem aparecer */
+  widthMm: number;
+  /** Cor na tela */
+  color: string;
+  /**
+   * Quanto a PONTA desta caneta fica deslocada no suporte em relação à caneta de referência (mm).
+   * A camada inteira é desenhada com a correção contrária (REGRAS_GCODE.md, seção 7).
+   */
+  offsetX: number;
+  offsetY: number;
+}
+
 export interface MachineProfile {
   readonly version: 2;
   /** Curso da máquina em mm (= $130 / $131 do GRBL). Limite duro: fora dele o GRBL dá ALARM:2. */
@@ -51,6 +68,21 @@ export interface MachineProfile {
     searchMm: number;
     /** Pode emendar passando por cima de tinta já prevista no desenho */
     overInk: boolean;
+  };
+  /** Canetas, na ordem em que as camadas são plotadas (cor → fina → grossa) */
+  pens: Pen[];
+  /** Caneta dos desenhos que não escolheram uma */
+  defaultPen: string;
+  /** Cruzes de registro: alinham as camadas quando o desenho usa mais de uma caneta */
+  registration: {
+    /** auto = só quando o trabalho tem mais de uma caneta */
+    mode: "auto" | "always" | "never";
+    /** Centro da 1ª cruz (feita antes de tudo) e da 2ª (feita por último), em mm da máquina */
+    x1: number;
+    x2: number;
+    y: number;
+    /** Comprimento de cada braço (mm): serve de régua na foto para medir o deslocamento */
+    armMm: number;
   };
   /** Blindagem contra falhas da caneta (regras 10 a 14 de docs/REGRAS_GCODE.md) */
   shield: {
@@ -140,6 +172,14 @@ export const DEFAULT_PROFILE: MachineProfile = {
     onOverload: "wait",
   },
   join: { searchMm: 3, overInk: true },
+  // ordem de plotagem de REGRAS_GCODE.md: cor -> fina -> grossa (a grossa cobre as pontas da fina)
+  pens: [
+    { id: "verde", name: "Verde 0,4", widthMm: 0.4, color: "#12805c", offsetX: 0, offsetY: 0 },
+    { id: "fina", name: "Fina 0,03", widthMm: 0.1, color: "#1b4fa8", offsetX: 1, offsetY: 0 },
+    { id: "preta", name: "Preta 0,4", widthMm: 0.4, color: "#10151f", offsetX: 0, offsetY: 0 },
+  ],
+  defaultPen: "preta",
+  registration: { mode: "auto", x1: 20, x2: 580, y: 12, armMm: 6 },
   shield: {
     enabled: true,
     warmupCycles: 8,
@@ -219,10 +259,32 @@ export function mergeProfile(saved: unknown): MachineProfile {
       [t.x, t.y, t.width, t.height].every((n) => typeof n === "number" && Number.isFinite(n)),
   );
   const pauseLift = merged.pen.pauseLift === "endOfStroke" ? "endOfStroke" : "spindleStop";
+  const isStr = (v: unknown): v is string => typeof v === "string";
+  const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  let pens = merged.pens.filter((p) => isObj(p) && isStr(p.id) && p.id !== "" && isStr(p.name) && isStr(p.color) && [p.widthMm, p.offsetX, p.offsetY].every(isNumber));
+  if (pens.length === 0) pens = structuredClone(DEFAULT_PROFILE.pens);
+  const defaultPen = pens.some((p) => p.id === merged.defaultPen) ? merged.defaultPen : pens[pens.length - 1].id;
+  const regMode = merged.registration.mode === "always" || merged.registration.mode === "never" ? merged.registration.mode : "auto";
   const onOverload = merged.servo.onOverload === "warn" || merged.servo.onOverload === "block" ? merged.servo.onOverload : "wait";
   const old = isObj(saved) && saved.version !== 2;
   const feed = old ? { ...merged.feed, fixed: DEFAULT_PROFILE.feed.fixed } : merged.feed;
-  return { ...merged, version: 2, feed, pen: { ...merged.pen, pauseLift }, servo: { ...merged.servo, onOverload }, paperTemplates: templates };
+  return {
+    ...merged,
+    version: 2,
+    feed,
+    pen: { ...merged.pen, pauseLift },
+    servo: { ...merged.servo, onOverload },
+    pens,
+    defaultPen,
+    registration: { ...merged.registration, mode: regMode },
+    paperTemplates: templates,
+  };
+}
+
+/** A caneta de um desenho: a escolhida, ou a padrão do perfil, ou a última da lista. */
+export function penOf(profile: MachineProfile, penId: string | undefined): Pen {
+  const pens = profile.pens;
+  return pens.find((p) => p.id === penId) ?? pens.find((p) => p.id === profile.defaultPen) ?? pens[pens.length - 1];
 }
 
 const ASCII_PRINTABLE = /^[\x20-\x7e]*$/;
@@ -260,6 +322,25 @@ export function validateProfile(p: MachineProfile): string[] {
   if (p.servo.peakPer60s < p.servo.avgPerMin) e.push("O pico do servo em 60 s não pode ser menor que a média por minuto.");
   range(p.servo.maxDescentMm, 10, 100000, "Traço máximo por descida (mm)");
   range(p.join.searchMm, 0, 50, "Distância de busca para emendar (mm)");
+
+  const ids = new Set<string>();
+  for (const pen of p.pens) {
+    if (!pen.name.trim()) e.push("Toda caneta precisa de nome.");
+    if (ids.has(pen.id)) e.push(`Há duas canetas com o mesmo identificador (${pen.id}).`);
+    ids.add(pen.id);
+    range(pen.widthMm, 0.01, 10, `Largura da caneta ${pen.name}`);
+    range(pen.offsetX, -20, 20, `Deslocamento X da caneta ${pen.name}`);
+    range(pen.offsetY, -20, 20, `Deslocamento Y da caneta ${pen.name}`);
+  }
+  if (p.pens.length === 0) e.push("O perfil precisa de pelo menos uma caneta.");
+  const reg = p.registration;
+  range(reg.armMm, 1, 50, "Braço da cruz de registro (mm)");
+  for (const x of [reg.x1, reg.x2]) {
+    if (x - reg.armMm / 2 < 0 || x + reg.armMm / 2 > p.workArea.width || reg.y - reg.armMm / 2 < 0 || reg.y + reg.armMm / 2 > p.workArea.height) {
+      e.push("As cruzes de registro têm que caber no curso da máquina.");
+      break;
+    }
+  }
 
   const sh = p.shield;
   range(sh.warmupCycles, 0, 50, "Ciclos de aquecimento");

@@ -6,10 +6,12 @@ import {
   selectionMachineBBox,
   setMachineBox,
   setMachineRotation,
+  setPen,
   translateMachine,
   type DrawingId,
 } from "../../core/document";
 import type { BBox } from "../../core/geometry/path";
+import { penOf } from "../../core/machine";
 import type { Store } from "../../core/store";
 import { append, clear, h } from "../dom";
 
@@ -179,6 +181,25 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
       cb.addEventListener("change", () => (keepRatio = cb.checked));
       root.append(
         h("label", { class: "check", title: free ? "" : "Com o desenho girado em ângulo não reto, a proporção fica sempre travada (senão ele distorce)." }, cb, "Travar proporção"),
+      );
+    }
+
+    // --- caneta: só aparece quando o estojo tem mais de uma
+    const prof = store.state.profile;
+    if (prof.pens.length > 1) {
+      const chosen = store.doc.drawings.filter((d) => ids.includes(d.id)).map((d) => penOf(prof, d.penId).id);
+      const same = chosen.every((p) => p === chosen[0]);
+      const penSel = h(
+        "select",
+        { "aria-label": "Caneta" },
+        same ? null : h("option", { value: "", selected: true }, "(várias)"),
+        ...prof.pens.map((p) => h("option", { value: p.id, selected: same && p.id === chosen[0] }, `${p.name} (${fmt(p.widthMm)} mm)`)),
+      );
+      penSel.addEventListener("change", () => penSel.value && store.commit("Trocar a caneta", (doc) => setPen(doc, ids, penSel.value)));
+      root.append(
+        h("h3", null, "Caneta"),
+        h("label", { class: "field" }, "Desenhado com", penSel),
+        h("p", { class: "hint" }, "Cada caneta vira uma camada, plotada na ordem do estojo (Configurações → Canetas), com cruzes de registro para alinhar."),
       );
     }
 

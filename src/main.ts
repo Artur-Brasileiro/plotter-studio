@@ -1,6 +1,7 @@
 import { Canvas } from "fabric";
 import { sceneToMachine } from "./core/coords";
 import { canRedo, canUndo, redoLabel, undoLabel } from "./core/history";
+import { penOf } from "./core/machine";
 import { initialState, Store } from "./core/store";
 import { loadJobSettings, loadProfileWithStatus, saveJobSettings, saveProfile } from "./storage/profileStore";
 import { restoreSession, startAutosave } from "./storage/sessionStore";
@@ -25,6 +26,7 @@ import { createMachinePanel } from "./ui/panels/machinePanel";
 import { createJogPanel } from "./ui/panels/jogPanel";
 import { createConsole } from "./ui/panels/consolePanel";
 import { createSendPanel } from "./ui/panels/sendPanel";
+import { createPlotSteps } from "./ui/panels/plotSteps";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -127,7 +129,7 @@ side.addTab(
 );
 const jog = createJogPanel(session, () => side.active === "machine");
 const send = createSendPanel(session, store, planner, overlay, player);
-const machineTab = h("div", { class: "panel" }, createMachinePanel(session), send.el, jog.el);
+const machineTab = h("div", { class: "panel" }, createPlotSteps(session, planner, (id) => side.show(id)), send.el, createMachinePanel(session), jog.el);
 side.addTab("machine", "Plotar", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
 const consolePanel = createConsole(session, layout.console);
@@ -138,11 +140,12 @@ side.onChange = updateArrowMode;
 session.subscribe(updateArrowMode);
 
 const view = new CanvasView(canvas, store, (n) =>
-  status.setMessage("area", n ? `⚠ ${n} desenho${n > 1 ? "s" : ""} fora da área` : undefined, "warn"),
+  status.setMessage("area", n ? `${n} desenho${n > 1 ? "s" : ""} fora da folha` : undefined, "warn"),
 );
 installEmergencyKey(session); // antes dos atalhos: Esc com a máquina andando é emergência, não "limpar seleção"
 installShortcuts(store, { arrowsEnabled: () => !jog.keysActive() });
 
+DrawingObject.penStyle = (id) => penOf(profile(), id);
 store.subscribe((s, prev) => {
   if (s.profile !== prev.profile) canvas.requestRenderAll();
   if (s.history !== prev.history) updateUndo();

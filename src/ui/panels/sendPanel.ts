@@ -2,7 +2,7 @@ import { describeError } from "../../core/grbl/codes";
 import { isJobActive, type ControllerSnapshot, type JobState } from "../../core/grbl/controller";
 import { RT } from "../../core/grbl/protocol";
 import { bboxOfPoints } from "../../core/geometry/path";
-import { generateGcode, type GcodeProgram } from "../../core/job/gcode";
+import type { GcodeProgram } from "../../core/job/gcode";
 import type { JobPlan } from "../../core/job/types";
 import type { Store } from "../../core/store";
 import { addRun, loadRuns, type RunRecord } from "../../storage/runsStore";
@@ -16,6 +16,9 @@ interface ActiveJob {
   readonly plan: JobPlan;
   readonly program: GcodeProgram;
   readonly name: string;
+  /** tempo estimado (s) em que este envio começa e termina, dentro do plano inteiro */
+  readonly t0: number;
+  readonly t1: number;
   /** tempo estimado (s) da posição atual, para a barra e o "restante" */
   estAt: number;
   recorded: boolean;
@@ -60,6 +63,8 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     h("button", { title: "Volta para 100% (0x90)", onclick: () => feed(RT.FEED_RESET) }, "100%"),
     h("button", { title: "+10% (0x91)", onclick: () => feed(RT.FEED_PLUS_10) }, "+10%"),
   );
+  const partSelect = h("select", { "aria-label": "O que enviar" });
+  const partRow = h("label", { class: "field" }, "O que enviar", partSelect);
   const reasons = h("ul", { class: "reasons" });
   const bar = h("div", { class: "progress-fill" });
   const progress = h("div", { class: "progress" }, bar);
@@ -72,6 +77,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     "div",
     { class: "panel-section" },
     h("h3", null, "Enviar"),
+    partRow,
     h("div", { class: "row" }, frameBtn, sendBtn, pauseBtn, stopBtn),
     reasons,
     progress,
@@ -107,27 +113,52 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     void machineAction(() => c.frame(planBBox(plan)));
   });
 
+  /** Início e fim (s, no tempo do plano inteiro) do que vai ser enviado: tudo, ou uma parte. */
+  function span(plan: JobPlan, part: number | undefined): { t0: number; t1: number } {
+    const total = plan.stats.estimate.totalS;
+    if (part === undefined) return { t0: 0, t1: total };
+    const first = plan.descents.find((d) => d.part === part);
+    const next = plan.descents.find((d) => d.part === part + 1);
+    return { t0: first?.tDownS ?? 0, t1: next?.tDownS ?? total };
+  }
+
+  function renderParts(plan: JobPlan | undefined) {
+    const total = plan?.stats.parts ?? 1;
+    partRow.hidden = total <= 1;
+    const prev = partSelect.value;
+    clear(partSelect);
+    partSelect.append(h("option", { value: "" }, `Desenho inteiro (~${fmtDuration(plan?.stats.estimate.totalS ?? 0)})`));
+    for (let p = 0; plan && p < total; p++) {
+      const s = span(plan, p);
+      partSelect.append(h("option", { value: String(p) }, `Parte ${p + 1} de ${total} (~${fmtDuration(s.t1 - s.t0)})`));
+    }
+    partSelect.value = [...partSelect.options].some((o) => o.value === prev) ? prev : "";
+  }
+
   sendBtn.addEventListener("click", () => {
     const c = session.controller;
     const plan = planner.fresh();
     if (!c || !plan) return;
-    if (plan.violations.length) return toast("Há desenho fora da área: corrija antes de enviar.", "error");
-    const names = store.doc.drawings.map((d) => d.name);
+    if (plan.violations.length) return toast("Há desenho fora da folha: corrija antes de enviar.", "error");
+    // arquivo que quebra regra não vai para a máquina (docs/REGRAS_GCODE.md)
+    const review = planner.review();
+    if (!review?.audit?.ok) return toast("A conferência reprovou este G-code. Veja o passo 2.", "error", 9000);
+    const part = partSelect.value === "" ? undefined : Number(partSelect.value);
     let program: GcodeProgram;
     try {
-      program = generateGcode(plan, store.state.profile, { fileName: names.join(" + "), date: new Date(), job: store.state.job });
+      program = part === undefined ? review.program! : planner.program(part)!;
       c.startJob(program);
     } catch (e) {
       return toast(e instanceof Error ? e.message : String(e), "error", 10000);
     }
-    job = { plan, program, name: names.join(" + ") || "desenho", estAt: 0, recorded: false };
+    const name = planner.jobName() || "desenho";
+    job = { plan, program, name: part === undefined ? name : `${name} (parte ${part + 1})`, ...span(plan, part), estAt: 0, recorded: false };
     if (player.playing) player.stop();
     overlay.setPlan(plan, store.state.job.speedMode === "fixed");
     overlay.setVisible(true);
     void lockScreen();
     render(session.snapshot);
   });
-
   stopBtn.addEventListener("click", () => {
     const c = session.controller;
     if (c) void machineAction(() => c.stop());
@@ -175,10 +206,10 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     const showing = !!job && j.state !== "none";
     progress.hidden = progressText.hidden = !showing;
     if (!showing || !job) return;
-    const total = job.plan.stats.estimate.totalS;
+    const total = job.t1 - job.t0;
     if (isJobActive(j.state)) {
       const t = overlay.setProgress(progressPoint(job.program, j.currentLine));
-      if (t !== undefined) job.estAt = Math.max(job.estAt, t);
+      if (t !== undefined) job.estAt = Math.max(job.estAt, Math.min(total, t - job.t0));
     }
     const now = performance.now();
     const pausedNow = j.pausedAt !== undefined ? now - j.pausedAt : 0;
@@ -201,7 +232,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     job.recorded = true;
     unlockScreen();
     const realS = j.startedAt !== undefined && j.endedAt !== undefined ? (j.endedAt - j.startedAt - j.pausedMs) / 1000 : 0;
-    const est = job.plan.stats.estimate.totalS;
+    const est = job.t1 - job.t0;
     addRun({ at: new Date().toISOString(), name: job.name, estimatedS: est, realS, result: j.state, lines: j.total });
     renderRuns();
     overlay.setProgress(undefined);
@@ -244,8 +275,9 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
 
     const why: string[] = [];
     if (!active) {
-      if (!plan) why.push("Importe um desenho.");
-      else if (plan.violations.length) why.push("Há desenho fora da área (veja a aba Trabalho).");
+      if (!plan) why.push("Traga um desenho (passo 1).");
+      else if (plan.violations.length) why.push("Há desenho fora da folha (passo 1).");
+      else if (!planner.review()?.audit?.ok) why.push("A conferência reprovou o G-code (passo 2).");
       if (on && session.controller) why.push(...session.controller.jobProblems());
       else if (!on) why.push("Conecte a máquina.");
     }
@@ -255,6 +287,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
 
     sendBtn.hidden = active;
     sendBtn.disabled = why.length > 0;
+    partSelect.disabled = active;
     frameBtn.hidden = active;
     frameBtn.disabled = !on || !plan || !s.homed || !!s.busy || s.status?.state !== "Idle";
     frameBtn.title = s.homed ? "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." : "Faça o Home antes do contorno.";
@@ -324,7 +357,11 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     if (!raf) raf = requestAnimationFrame(() => ((raf = 0), render(session.snapshot)));
   };
   session.subscribe(schedule);
-  planner.subscribe(schedule);
+  planner.subscribe((plan) => {
+    renderParts(plan);
+    schedule();
+  });
+  renderParts(planner.plan);
   // o tempo decorrido anda mesmo sem relatório novo (pausa)
   setInterval(() => session.jobActive && schedule(), 500);
   renderRuns();

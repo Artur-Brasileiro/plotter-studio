@@ -1,5 +1,5 @@
 import { classifyManualCommand } from "../../core/grbl/commands";
-import type { LogEntry } from "../../core/grbl/controller";
+import { consoleRealtimeAction, type LogEntry } from "../../core/grbl/controller";
 import { RT } from "../../core/grbl/protocol";
 import { loadUiPrefs, saveUiPrefs } from "../../storage/uiPrefs";
 import { clear, h } from "../dom";
@@ -105,6 +105,17 @@ export function createConsole(session: MachineSession, host: HTMLElement): Conso
     // um caractere de tempo real sozinho vai como tempo real
     const rt = { "?": RT.STATUS, "!": RT.HOLD, "~": RT.RESUME }[line];
     if (rt !== undefined) {
+      // com trabalho em andamento, "!" e "~" passam pela pausa do controlador (ver consoleRealtimeAction)
+      const action = consoleRealtimeAction(line as "?" | "!" | "~", session.snapshot.job.state);
+      if (action === "pause") {
+        local("info", "! com trabalho em andamento: usando o Pausar do Plotter Studio (ele cuida da caneta e para de mandar linhas).");
+        return c.pause();
+      }
+      if (action === "resume") {
+        local("info", "~ com o trabalho pausado: usando o Continuar do Plotter Studio (a caneta desce antes de andar).");
+        return c.resume();
+      }
+      if (action === "refuse") return local("error", `"${line}" recusado agora: com um trabalho em andamento use os botões Pausar, Continuar e Parar.`);
       if (rt === RT.STATUS) {
         showNextStatus = true;
         local("out", "?");

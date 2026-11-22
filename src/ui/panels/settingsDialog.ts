@@ -43,6 +43,8 @@ interface Group {
   readonly fields: Field[];
   /** Mostra a lista de gabaritos de papel depois dos campos */
   readonly templates?: boolean;
+  /** Mostra o estojo de canetas antes dos campos */
+  readonly pens?: boolean;
 }
 
 const GROUPS: Group[] = [
@@ -63,9 +65,8 @@ const GROUPS: Group[] = [
   {
     id: "pen",
     title: "Caneta",
-    lead: "Como a caneta sobe e desce, e a largura do traço dela.",
+    lead: "Como a caneta sobe e desce. A largura e a cor de cada caneta ficam em Canetas.",
     fields: [
-      { path: "pen.widthMm", label: "Largura do traço (mm)", help: "Salto menor que isto é emendado sem levantar a caneta, porque não aparece.", min: 0.01, max: 10 },
       {
         path: "pen.pauseLift",
         label: "Ao pausar um desenho",
@@ -79,6 +80,28 @@ const GROUPS: Group[] = [
       { path: "pen.settleUpSeconds", label: "Pausa depois de subir (s)", help: "G4 depois do M5.", min: 0, max: 5 },
       { path: "pen.downCmd", label: "Comando para abaixar", help: "M3 S220 no fork do servo. Sem $ nem comentários.", text: true },
       { path: "pen.upCmd", label: "Comando para levantar", help: "M5: o GRBL faz M5 sozinho em reset ou alarme, então qualquer pane levanta a caneta.", text: true },
+    ],
+  },
+  {
+    id: "pens",
+    title: "Canetas",
+    lead: "O estojo. Cada caneta usada num trabalho vira uma camada, plotada nesta ordem (cor, depois a fina, depois a grossa: a grossa cobre as pontas da fina).",
+    pens: true,
+    fields: [
+      {
+        path: "registration.mode",
+        label: "Cruzes de registro",
+        help: "Uma cruz antes e outra depois de cada camada, para alinhar as canetas.",
+        options: [
+          ["auto", "Só com mais de uma caneta"],
+          ["always", "Sempre"],
+          ["never", "Nunca"],
+        ],
+      },
+      { path: "registration.armMm", label: "Braço da cruz (mm)", help: "Serve de régua na foto para medir o deslocamento da ponta.", min: 1, max: 50 },
+      { path: "registration.x1", label: "1ª cruz: X (mm)", help: "Feita antes de tudo.", min: 0, max: W },
+      { path: "registration.x2", label: "2ª cruz: X (mm)", help: "Feita por último.", min: 0, max: W },
+      { path: "registration.y", label: "Cruzes: Y (mm)", help: "Na borda, fora do desenho.", min: 0, max: H },
     ],
   },
   {
@@ -242,6 +265,98 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     return h("div", { class: "field" }, h("label", { class: "check" }, cb, f.label), f.help ? h("small", { class: "help" }, f.help) : null);
   };
 
+  const pensSection = () => {
+    const box = h("div", { class: "templates" });
+    const render = () => {
+      clear(box);
+      box.append(h("div", { class: "pen-row pen-head" }, h("span", null, "Cor"), h("span", null, "Nome"), h("span", null, "Traço (mm)"), h("span", null, "Ponta X"), h("span", null, "Ponta Y"), h("span", null, "")));
+      draft.pens.forEach((p, i) => {
+        const num = (k: "widthMm" | "offsetX" | "offsetY", label: string) => {
+          const input = h("input", { type: "text", inputMode: "decimal", value: fmt(p[k]), "aria-label": `${p.name}: ${label}`, title: label });
+          input.addEventListener("input", () => {
+            const v = parseNum(input.value);
+            input.classList.toggle("invalid", v === undefined);
+            if (v !== undefined) p[k] = v;
+            refreshErrors();
+          });
+          return input;
+        };
+        const color = h("input", { type: "color", value: p.color, "aria-label": `${p.name}: cor na tela` });
+        color.addEventListener("input", () => (p.color = color.value));
+        const name = h("input", { type: "text", value: p.name, "aria-label": "Nome da caneta" });
+        name.addEventListener("input", () => {
+          p.name = name.value;
+          refreshErrors();
+        });
+        const move = (d: number) => {
+          const j = i + d;
+          if (j < 0 || j >= draft.pens.length) return;
+          [draft.pens[i], draft.pens[j]] = [draft.pens[j], draft.pens[i]];
+          render();
+        };
+        box.append(
+          h(
+            "div",
+            { class: "pen-row" },
+            color,
+            name,
+            num("widthMm", "largura do traço"),
+            num("offsetX", "deslocamento da ponta em X"),
+            num("offsetY", "deslocamento da ponta em Y"),
+            h(
+              "span",
+              { class: "row" },
+              h("button", { title: "Plotar antes", "aria-label": "Plotar antes", disabled: i === 0, onclick: () => move(-1) }, "↑"),
+              h("button", { title: "Plotar depois", "aria-label": "Plotar depois", disabled: i === draft.pens.length - 1, onclick: () => move(1) }, "↓"),
+              h(
+                "button",
+                {
+                  title: "Tirar do estojo",
+                  "aria-label": "Tirar do estojo",
+                  disabled: draft.pens.length <= 1,
+                  onclick: () => {
+                    draft.pens.splice(i, 1);
+                    if (!draft.pens.some((q) => q.id === draft.defaultPen)) draft.defaultPen = draft.pens[draft.pens.length - 1].id;
+                    render();
+                    refreshErrors();
+                  },
+                },
+                "✕",
+              ),
+            ),
+          ),
+        );
+      });
+      const def = h("select", { "aria-label": "Caneta padrão" }, ...draft.pens.map((p) => h("option", { value: p.id, selected: p.id === draft.defaultPen }, p.name)));
+      def.addEventListener("change", () => (draft.defaultPen = def.value));
+      box.append(
+        h(
+          "button",
+          {
+            onclick: () => {
+              draft.pens.push({ id: `caneta-${Date.now().toString(36)}`, name: "Nova caneta", widthMm: 0.4, color: "#7a3fb8", offsetX: 0, offsetY: 0 });
+              render();
+              refreshErrors();
+            },
+          },
+          "+ Caneta",
+        ),
+        h("label", { class: "field", style: "max-width:260px" }, "Caneta dos desenhos novos", def),
+      );
+    };
+    render();
+    return h(
+      "div",
+      { class: "panel-section" },
+      box,
+      h(
+        "p",
+        { class: "help" },
+        "Ponta X / Y: quanto a ponta desta caneta fica deslocada no suporte em relação à de referência. Rode a 1ª cruz, fotografe, meça com o braço da cruz e ponha o valor aqui: a camada inteira sai corrigida. Na fina 0,03 mediu-se +1,0 mm em X.",
+      ),
+    );
+  };
+
   const templatesSection = () => {
     const box = h("div", { class: "templates" });
     const render = () => {
@@ -338,7 +453,7 @@ export function createSettingsDialog(store: Store): { open: () => void } {
       clear(body);
       const grid = h("div", { class: "grid2" });
       for (const f of g.fields) grid.append("text" in f ? textField(f) : "options" in f ? selectField(f) : "bool" in f ? boolField(f) : numField(f));
-      append(body, [h("h4", null, g.title), h("p", { class: "lead" }, g.lead), grid, g.templates ? templatesSection() : null]);
+      append(body, [h("h4", null, g.title), h("p", { class: "lead" }, g.lead), g.pens ? pensSection() : null, grid, g.templates ? templatesSection() : null]);
       body.scrollTop = 0;
     };
     for (const g of GROUPS) nav.append(h("button", { dataset: { id: g.id }, onclick: () => showGroup(g.id) }, g.title));

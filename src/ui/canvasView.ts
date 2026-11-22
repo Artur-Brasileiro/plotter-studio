@@ -16,8 +16,9 @@ const ACTION_LABEL: Record<string, string> = {
 
 const EPS = 0.005; // mesma folga do checkBounds
 
-function outside(b: BBox, area: { width: number; height: number }): boolean {
-  return b.minX < -EPS || b.minY < -EPS || b.maxX > area.width + EPS || b.maxY > area.height + EPS;
+/** Fora da zona de desenho (a folha)? Quem sai dela não pode ser plotado (docs/REGRAS_GCODE.md). */
+function outside(b: BBox, zone: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+  return b.minX < zone.minX - EPS || b.minY < zone.minY - EPS || b.maxX > zone.maxX + EPS || b.maxY > zone.maxY + EPS;
 }
 
 /**
@@ -97,6 +98,8 @@ export class CanvasView {
           updates.push([o, d.transform]);
           if (active.has(o)) touchesSelection = true;
         }
+        const cur = this.objs.get(d.id)!;
+        if (cur.penId !== d.penId) cur.penId = d.penId;
       }
 
       // Mexer num objeto que está dentro de uma ActiveSelection corrompe a posição:
@@ -154,7 +157,7 @@ export class CanvasView {
     const { profile } = this.store.state;
     let count = 0;
     for (const d of this.store.doc.drawings) {
-      const out = outside(machineBBox(d, this.H, profile.tolerance.chordMm), profile.workArea);
+      const out = outside(machineBBox(d, this.H, profile.tolerance.chordMm), profile.drawZone);
       this.objs.get(d.id)?.setOutOfArea(out);
       if (out) count++;
     }
@@ -163,7 +166,7 @@ export class CanvasView {
 
   /** Durante o arraste: aproximação pelos cantos da caixa do objeto (um pouco conservadora se girado). */
   private liveAreaCheck(): void {
-    const area = this.store.state.profile.workArea;
+    const area = this.store.state.profile.drawZone;
     const F = sceneToMachineMatrix(this.H);
     for (const o of this.activeDrawings()) {
       const m = multiply(F, o.calcTransformMatrix() as unknown as Mat2D);

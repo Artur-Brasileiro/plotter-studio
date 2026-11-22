@@ -51,7 +51,11 @@ export function createMachinePanel(session: MachineSession): HTMLElement {
   const originBtn = btn("Ir para a origem", "Levanta a caneta e vai para (0, 0), o canto da frente à esquerda.", () => ctrl().goToOrigin());
   const upBtn = btn("Caneta ↑", "M5 + pausa do servo", () => ctrl().penUp());
   const downBtn = btn("Caneta ↓", "M3 S220 + pausa do servo (teste do servo)", () => ctrl().penDown());
-  const stopBtn = btn("■ Parar", "Para o movimento (Home, contorno, ir para a origem) mantendo a posição.", () => ctrl().stop());
+  const stopBtn = btn(
+    "■ Parar",
+    "Para o movimento (contorno, ir para a origem) mantendo a posição. No meio do Home o GRBL só aceita o reset: para na hora, dá ALARM:6 e o Home tem que ser refeito.",
+    () => ctrl().stop(),
+  );
   const resetBtn = btn("Reset", "Ctrl-X: reinicia o GRBL. Com a máquina andando, a posição se perde (ALARM:3).", () => ctrl().softReset());
 
   const settingsList = h("pre", { class: "settings-dump" });

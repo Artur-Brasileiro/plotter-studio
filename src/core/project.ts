@@ -12,6 +12,8 @@ export interface ProjectFileV1 {
   readonly drawings: readonly {
     readonly id: string;
     readonly name: string;
+    /** Caneta do desenho (ausente = a padrão do perfil) */
+    readonly pen?: string;
     /** 6 números (Mat2D) */
     readonly transform: readonly number[];
     readonly subpaths: readonly {
@@ -31,6 +33,7 @@ export function serializeDocument(doc: PlotDocument, now: Date): ProjectFileV1 {
     drawings: doc.drawings.map((d) => ({
       id: d.id,
       name: d.name,
+      ...(d.penId ? { pen: d.penId } : {}),
       transform: [...d.transform],
       subpaths: d.geometry.subpaths.map((sp) => ({
         start: [sp.start.x, sp.start.y] as const,
@@ -82,7 +85,7 @@ export function deserializeDocument(data: unknown): PlotDocument {
     });
     const t = d.transform as number[];
     const m: Mat2D = [t[0], t[1], t[2], t[3], t[4], t[5]];
-    return createDrawing(d.id as string, d.name as string, { subpaths }, m);
+    return createDrawing(d.id as string, d.name as string, { subpaths }, m, typeof d.pen === "string" && d.pen ? d.pen : undefined);
   });
   return { drawings };
 }

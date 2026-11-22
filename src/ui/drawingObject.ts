@@ -4,7 +4,7 @@ import type { Drawing, DrawingId } from "../core/document";
 import type { Mat2D } from "../core/geometry/mat2d";
 import { bboxCenter, type BBox, type Geometry } from "../core/geometry/path";
 
-const ACCENT = "#2f6fd6";
+const ACCENT = "#1b4fa8"; // azul de planta (--plan em style.css)
 
 /**
  * Padrões de todos os objetos interativos (inclusive a seleção múltipla):
@@ -46,17 +46,21 @@ function pathFor(g: Geometry): Path2D {
 
 /**
  * A "vista" de um Drawing no Fabric. O traço é desenhado à mão em _render (strokeWidth 0
- * no objeto, porque o strokeWidth do Fabric entra no cálculo da caixa) e tem ~1,5 px
- * em qualquer zoom e escala.
+ * no objeto, porque o strokeWidth do Fabric entra no cálculo da caixa), com a largura real da
+ * caneta na escala da mesa, e nunca menos de ~1,25 px para não sumir de longe.
  */
 export class DrawingObject extends FabricObject {
   static type = "PlotterDrawing";
   /** Com a pré-visualização do caminho ligada, os desenhos ficam claros para o caminho aparecer. */
   static dimmed = false;
+  /** Largura e cor da caneta de um desenho: ele aparece na mesa como vai sair no papel. */
+  static penStyle: (penId: string | undefined) => { widthMm: number; color: string } = () => ({ widthMm: 0.4, color: "#10151f" });
 
   readonly drawingId: DrawingId;
   readonly geometry: Geometry;
   readonly localBBox: BBox;
+  /** Caneta do desenho (atualizada no sync) */
+  penId: string | undefined;
   /** Matriz do modelo aplicada por último (comparada por referência no sync) */
   modelTransform: Mat2D;
   outOfArea = false;
@@ -75,6 +79,7 @@ export class DrawingObject extends FabricObject {
     this.drawingId = d.id;
     this.geometry = d.geometry;
     this.localBBox = b;
+    this.penId = d.penId;
     this.modelTransform = d.transform;
     this.applyModel(d.transform);
   }
@@ -98,10 +103,13 @@ export class DrawingObject extends FabricObject {
     const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
     ctx.save();
     ctx.translate(-c.x, -c.y);
-    ctx.lineWidth = (1.5 * (window.devicePixelRatio || 1)) / scale;
+    const dpr = window.devicePixelRatio || 1;
+    const pen = DrawingObject.penStyle(this.penId);
+    const penPx = pen.widthMm * (this.canvas?.getZoom() ?? 1) * dpr;
+    ctx.lineWidth = Math.max(1.25 * dpr, penPx) / scale;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = this.outOfArea ? "#c0392b" : DrawingObject.dimmed ? "#c9c5bc" : "#1b1b1b";
+    ctx.strokeStyle = this.outOfArea ? "#c0362c" : DrawingObject.dimmed ? "#c5cbd6" : pen.color;
     ctx.stroke(pathFor(this.geometry));
     ctx.restore();
   }

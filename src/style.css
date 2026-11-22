@@ -206,6 +206,18 @@ button.big { padding: 9px 14px; font-size: 15px; }
 .parts button { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; }
 .parts button span:last-child { color: var(--ink-2); font-weight: 400; }
 
+/* ------------------------------------------------------------------ roteiro antes de enviar */
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.steps li { display: grid; grid-template-columns: 22px 1fr; gap: 9px; align-items: start; }
+.steps .mark { width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--rule-strong); display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
+.steps .done .mark { background: var(--ok); border-color: var(--ok); }
+.steps .next .mark { border-color: var(--plan); box-shadow: 0 0 0 3px var(--plan-wash); }
+.steps .label { font-weight: 500; }
+.steps .done .label { color: var(--ink-2); }
+.steps .todo .label { color: var(--ink-3); }
+.steps .next .label { font-weight: 600; }
+.steps .hint { margin: 2px 0 6px; }
+
 /* ------------------------------------------------------------------ máquina */
 .connect { display: inline-flex; gap: 6px; align-items: center; }
 .connect-other { padding: 6px 8px; }
@@ -291,6 +303,13 @@ dialog.settings:not([open]), dialog.sheet:not([open]) { display: none; }
 .templates { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tpl-row { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr) auto; gap: 6px; width: 100%; }
 .tpl-row input { min-width: 0; }
+.pen-row { display: grid; grid-template-columns: 44px 1.6fr 0.8fr 0.7fr 0.7fr auto; gap: 6px; width: 100%; align-items: center; }
+.pen-row input { font: inherit; color: var(--ink); padding: 6px 8px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--field); min-width: 0; width: 100%; }
+.pen-row input[type="color"] { padding: 2px; height: 32px; }
+.pen-row input.invalid { border-color: var(--danger); background: var(--danger-wash); }
+.pen-row .row { flex-wrap: nowrap; gap: 4px; }
+.pen-row .row button { padding: 5px 9px; }
+.pen-head { font-size: 12.5px; color: var(--ink-2); }
 
 /* ------------------------------------------------------------------ vetorizar imagem */
 dialog.sheet.trace { width: min(1280px, 96vw); height: min(860px, 94vh); }
@@ -309,7 +328,7 @@ dialog.sheet.trace { width: min(1280px, 96vw); height: min(860px, 94vh); }
 .range input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: var(--plan); margin: 0; }
 .range output { color: var(--ink); font-weight: 600; }
 .seg-row { display: flex; }
-.seg-row button { flex: 1; border-radius: 0; margin-left: -1px; padding: 7px 6px; }
+.seg-row button { flex: 1 1 auto; border-radius: 0; margin-left: -1px; padding: 7px 5px; white-space: nowrap; }
 .seg-row button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; }
 .seg-row button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
 .seg-row button.on { background: var(--plan); border-color: var(--plan); color: #fff; position: relative; }

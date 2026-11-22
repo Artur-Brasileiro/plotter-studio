@@ -8,7 +8,13 @@ Roda no navegador (Chrome/Edge), em três passos:
 2. **Conferir**: mostra o tempo, a carga do servo e as regras de [docs/REGRAS_GCODE.md](docs/REGRAS_GCODE.md) uma a uma. Arquivo que quebra regra não sai.
 3. **Plotar**: envia direto para a máquina pela serial (Web Serial API), com pausa, parada, retomada e troca de caneta entre camadas. Também dá para baixar o `.gcode` e usar o LaserGRBL.
 
-## Rodar localmente
+## Abrir o programa
+
+**Dois cliques em `Abrir Plotter Studio.bat`** (na pasta do projeto). Uma janela preta abre, e em alguns segundos o navegador abre sozinho. Deixe a janela preta aberta enquanto usa; para encerrar, feche-a.
+
+Para treinar sem a máquina: **`Abrir Plotter Studio (simulador).bat`**. É o mesmo programa conversando com uma máquina de mentira.
+
+Pelo terminal é a mesma coisa:
 
 ```bash
 npm install

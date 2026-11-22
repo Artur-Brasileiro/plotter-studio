@@ -4,7 +4,7 @@ Ramo: `v3-regras-e-vetorizador`. **Nada foi publicado**: a versão no ar (ramo `
 **Nada foi enviado para a máquina real**: tudo foi testado com testes automáticos, com o simulador (`?sim=1`)
 e num Chrome dirigido por script. O que só a máquina pode confirmar está em [TESTES.md](TESTES.md), "Roteiro da v3".
 
-Para ver funcionando: `npm run dev` e abrir `http://localhost:5173/?sim=1&simSpeed=20` no Chrome.
+Para ver funcionando: **dois cliques em `Abrir Plotter Studio (simulador).bat`**, na pasta do projeto (abre o navegador sozinho, com uma máquina de mentira). `Abrir Plotter Studio.bat` abre o programa de verdade.
 
 ## Combinado com o Artur
 
@@ -27,7 +27,7 @@ Para ver funcionando: `npm run dev` e abrir `http://localhost:5173/?sim=1&simSpe
 | 5. Várias canetas (camadas, cruzes de registro, correção da ponta) e retomar | pronto |
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 
-Testes automáticos: 1.288 passando (eram 304 no começo da noite). `npm run build` passa.
+Testes automáticos: 1.291 passando (eram 304 no começo da noite). `npm run build` passa.
 
 ## O que cada passo da tela faz
 
@@ -89,7 +89,7 @@ Todas são configuráveis ou fáceis de trocar.
   Proteção do servo dá para voltar a 20: os desenhos ficam mais lentos, com mais descanso.
 - **A retomada repete o traço anterior ao que parou**, por segurança (os arquivos RETOMAR antigos repetiam ~42 movimentos).
 - **Partes de ~25 min** são cortadas no primeiro checkpoint depois de 20 min; com checkpoints de 10 em 10, saem de ~20 min.
-- **Descida longa**: o corte é por comprimento (900 mm = 108 s a F500). Um resto menor que 0,5 mm não ganha descida própria.
+- **Descida longa**: o corte é em 900 mm a F500 (108 s); num trabalho mais lento o comprimento encolhe junto, para o tempo ser o mesmo. Um resto menor que 0,5 mm não ganha descida própria.
 - **Emendas "por cima da tinta"** ficaram conservadoras: só emenda quando a ligação inteira cai, com certeza, sobre tinta
   que já existe. Perde-se alguma emenda; não se cria risco novo.
 - **Ordem das camadas** = ordem da lista de canetas em Configurações → Canetas (verde → fina → preta).
@@ -103,6 +103,5 @@ Todas são configuráveis ou fáceis de trocar.
   só emenda sobre a própria tinta.
 - A regra "elementos soltos pequenos agrupados numa descida só" (regra 4) não existe: pontinhos soltos continuam sendo
   uma descida cada. A tela de vetorizar deixa desligar os pontinhos, e o servo descansa quando precisa.
-- A auditoria confere o comprimento das descidas, não a duração: a F250 uma descida de 900 mm dura 3,6 min.
 - Importar um G-code pronto (de fora) para conferir e enviar não existe: a auditoria só roda no que o aplicativo gera.
 - A tela não foi testada em celular nem em janela estreita.

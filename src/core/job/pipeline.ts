@@ -116,7 +116,10 @@ function planLayer(
   // Correção da ponta (seção 7): a caneta risca `offset` além de onde a máquina acha que está, então a
   // camada INTEIRA (cruzes incluídas) é comandada com a correção contrária.
   const shifted = offset.x === 0 && offset.y === 0 ? (s: OrderedStroke) => s : (s: OrderedStroke) => ({ ...s, points: s.points.map((p) => ({ x: p.x - offset.x, y: p.y - offset.y })) });
-  const capped = capDescents(ordered, profile.servo.maxDescentMm).map(shifted);
+  // Regra 5: "~2 min por descida". O limite em mm foi medido a F500 (o F fixo do perfil): num trabalho
+  // mais lento a descida encurta na mesma proporção, para o tempo com a caneta embaixo não crescer.
+  const slower = job.speedMode === "fixed" && job.fixedFeed > 0 ? Math.min(1, job.fixedFeed / profile.feed.fixed) : 1;
+  const capped = capDescents(ordered, profile.servo.maxDescentMm * slower).map(shifted);
   const planned = capped.map((s) => assignFeeds(s, job, profile));
   const sched = scheduleJob(planned, start, end, profile, job.speedMode === "fixed" ? job.fixedFeed : undefined);
 

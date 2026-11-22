@@ -4,3 +4,5 @@
 * text=auto eol=lf
 *.png binary
 *.jpg binary
+# os atalhos de duplo clique sao do Windows: fim de linha CRLF
+*.bat text eol=crlf

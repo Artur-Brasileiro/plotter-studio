@@ -277,3 +277,25 @@ describe("o arquivo risca exatamente o que o plano mandou (seção 10 das regras
     expect(a.problems.map((p) => p.message).join(" ")).toMatch(/não saiu inteiro/);
   });
 });
+
+describe("descida longa em trabalho mais lento que F500 (regra 5: ~2 min)", () => {
+  // um traço de 1,2 m em serpentina
+  const snake: [number, number][] = Array.from({ length: 13 }, (_, i) => [i % 2 === 0 ? 100 : 200, 100 + i * 2] as [number, number]);
+  const d = doc(drawing("a", [snake]));
+  const longest = (plan: JobPlan) => Math.max(...plan.descents.map((x) => x.lengthMm));
+  it("a F500 o corte é em 900 mm; a F250, em 450 mm (o mesmo tempo com a caneta embaixo)", () => {
+    expect(longest(planJob(d, P, JOB))).toBeCloseTo(900, 3);
+    const slow = planJob(d, P, { ...JOB, fixedFeed: 250 });
+    expect(longest(slow)).toBeCloseTo(450, 3);
+    expect(slow.descents.length).toBeGreaterThan(planJob(d, P, JOB).descents.length);
+  });
+  it("mais rápido que F500 não alonga a descida além dos 900 mm", () => {
+    expect(longest(planJob(d, P, { ...JOB, fixedFeed: 1500 }))).toBeCloseTo(900, 3);
+  });
+  it("a auditoria avisa de um arquivo de fora com descida de 900 mm a F250 (216 s)", () => {
+    const lines = ["G21", "G90", "M5", "G4 P0.3", "G0 X40.00 Y40.00", "M3 S220", "G4 P0.3", "G1 F250", "X490.00 Y40.00", "X40.00 Y40.00", "M5", "G4 P0.2"];
+    const a = auditGcode(lines, P);
+    expect(a.longestDescentS).toBeCloseTo(216, 3);
+    expect(a.problems.filter((p) => p.level === "warn" && /caneta embaixo/.test(p.message))).toHaveLength(1);
+  });
+});

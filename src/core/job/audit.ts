@@ -403,6 +403,7 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
   if (peak > servo.peakPer60s) over(`Servo: pico de ${peak} ciclos em 60 s, acima do limite de ${servo.peakPer60s}.`);
   const capS = servo.maxDescentMm / (profile.feed.fixed / 60);
   if (longestMm > servo.maxDescentMm * 1.01 + 1) warn(`Descida de ${Math.round(longestMm)} mm (~${Math.round(longestS)} s): mais longa que o limite de ${servo.maxDescentMm} mm (~${Math.round(capS)} s).`);
+  else if (longestS > capS * 1.25) warn(`Descida de ${Math.round(longestS)} s com a caneta embaixo: a regra é ~${Math.round(capS)} s (o arquivo desenha mais devagar que F${profile.feed.fixed}).`);
 
   return {
     lines: nLines,

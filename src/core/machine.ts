@@ -9,18 +9,65 @@
  *   - na tela, Y+ aponta para CIMA (o operador vê o papel de frente)
  */
 export interface MachineProfile {
-  readonly version: 1;
-  /** Área útil em mm (= $130 / $131 do GRBL) */
+  readonly version: 2;
+  /** Curso da máquina em mm (= $130 / $131 do GRBL). Limite duro: fora dele o GRBL dá ALARM:2. */
   workArea: { width: number; height: number };
+  /**
+   * Zona de desenho (onde fica o papel), em mm da máquina. Nenhum traço pode sair dela
+   * (docs/REGRAS_GCODE.md). O aquecimento do servo e as cruzes de registro são exceções.
+   */
+  drawZone: { minX: number; minY: number; maxX: number; maxY: number };
   pen: {
     /** Comando que ABAIXA a caneta (servo no PWM do spindle) */
     downCmd: string;
     /** Comando que LEVANTA a caneta. M5 = seguro: o GRBL executa M5 em reset/alarme */
     upCmd: string;
-    /** Pausa após cada subida/descida, em segundos (G4 P...) */
+    /** Pausa depois de DESCER, em segundos (G4 P... após o M3) */
     settleSeconds: number;
+    /** Pausa depois de SUBIR, em segundos (G4 P... após o M5) */
+    settleUpSeconds: number;
+    /** Largura do traço da caneta (mm): decide o que dá para emendar sem aparecer */
+    widthMm: number;
     /** v2: como a pausa levanta a caneta (decidido no teste da T26) */
     pauseLift: "spindleStop" | "endOfStroke";
+  };
+  /**
+   * Proteção do servo da caneta, o ponto fraco da máquina: o que o esquenta é subir e descer
+   * sem parar, não ficar embaixo. Um ciclo = uma descida + uma subida.
+   */
+  servo: {
+    /** Média máxima de ciclos por minuto */
+    avgPerMin: number;
+    /** Máximo de ciclos em qualquer janela de 60 s */
+    peakPer60s: number;
+    /** Uma descida não desenha mais que isto (mm): depois disso sobe e desce no mesmo ponto */
+    maxDescentMm: number;
+    /** Se o desenho passar dos limites: esperar com a caneta em cima, só avisar, ou bloquear */
+    onOverload: "wait" | "warn" | "block";
+  };
+  /** Emendar traços sem levantar a caneta quando a ligação não aparece */
+  join: {
+    /** Procura um traço para emendar até esta distância (mm) */
+    searchMm: number;
+    /** Pode emendar passando por cima de tinta já prevista no desenho */
+    overInk: boolean;
+  };
+  /** Blindagem contra falhas da caneta (regras 10 a 14 de docs/REGRAS_GCODE.md) */
+  shield: {
+    enabled: boolean;
+    /** Ciclos de aquecimento do servo antes do 1º traço */
+    warmupCycles: number;
+    /** Ponto seguro, fora do desenho, onde o aquecimento acontece (mm) */
+    safeX: number;
+    safeY: number;
+    /** Pausa depois da 1ª descida (s): mais longa, para o 1º traço não falhar */
+    firstSettleSeconds: number;
+    /** Manda o comando de subir duas vezes */
+    doubleLift: boolean;
+    /** Minutos entre checkpoints (re-sincroniza o servo). 0 desliga. */
+    resyncMinutes: number;
+    /** Duração alvo de cada parte do arquivo (min). 0 = não divide. */
+    partMinutes: number;
   };
   feed: {
     /** Velocidade fixa padrão (mm/min). Deslocamentos com a caneta levantada usam G0. */
@@ -74,16 +121,38 @@ export interface MachineProfile {
 }
 
 export const DEFAULT_PROFILE: MachineProfile = {
-  version: 1,
+  version: 2,
   workArea: { width: 810, height: 385 },
+  drawZone: { minX: 30, minY: 25, maxX: 570, maxY: 370 },
   pen: {
     downCmd: "M3 S220",
     upCmd: "M5",
     settleSeconds: 0.3,
+    settleUpSeconds: 0.2,
+    widthMm: 0.4,
     pauseLift: "spindleStop",
   },
+  servo: {
+    // REGRAS_GCODE.md pede média <= 20; o Artur aceitou até ~30 (21/11/2026), com espera se passar.
+    avgPerMin: 30,
+    peakPer60s: 45,
+    maxDescentMm: 900,
+    onOverload: "wait",
+  },
+  join: { searchMm: 3, overInk: true },
+  shield: {
+    enabled: true,
+    warmupCycles: 8,
+    safeX: 0,
+    safeY: 0,
+    firstSettleSeconds: 0.6,
+    doubleLift: true,
+    resyncMinutes: 10,
+    partMinutes: 25,
+  },
   feed: {
-    fixed: 1000,
+    // F500 = precisão máxima (REGRAS_GCODE.md). F1000-1500 ainda sai muito bom.
+    fixed: 500,
     straight: 2000,
     curve: 1200,
     tightCurve: 600,
@@ -109,11 +178,11 @@ export const DEFAULT_PROFILE: MachineProfile = {
   },
   gcode: { finalPosition: { x: 0, y: 0 } },
   serial: { baudRate: 115200, statusIntervalMs: 200, rxBufferBytes: 128 },
-  // ATENÇÃO: posições assumidas a partir da origem, em paisagem.
+  // ATENÇÃO: posições supostas no canto da zona de desenho, em paisagem.
   // Conferir com o gabarito real da mesa antes de confiar.
   paperTemplates: [
-    { name: "A4", x: 0, y: 0, width: 297, height: 210 },
-    { name: "A3", x: 0, y: 0, width: 420, height: 297 },
+    { name: "A4", x: 30, y: 25, width: 297, height: 210 },
+    { name: "A3", x: 30, y: 25, width: 420, height: 297 },
   ],
 };
 
@@ -132,10 +201,15 @@ function mergeInto(def: unknown, saved: unknown): unknown {
   if (Array.isArray(def)) return Array.isArray(saved) ? structuredClone(saved) : structuredClone(def);
   if (typeof def === "number") return typeof saved === "number" && Number.isFinite(saved) ? saved : def;
   if (typeof def === "string") return typeof saved === "string" ? saved : def;
+  if (typeof def === "boolean") return typeof saved === "boolean" ? saved : def;
   return def;
 }
 
-/** Perfil salvo (possivelmente antigo ou incompleto) + padrão. Chaves desconhecidas são ignoradas. */
+/**
+ * Perfil salvo (possivelmente antigo ou incompleto) + padrão. Chaves desconhecidas são ignoradas.
+ * Perfil da versão 1 (antes das regras de docs/REGRAS_GCODE.md): a velocidade fixa volta ao padrão
+ * novo (F500), porque o valor antigo (F1000) era só o padrão daquela versão, não uma escolha medida.
+ */
 export function mergeProfile(saved: unknown): MachineProfile {
   const merged = mergeInto(DEFAULT_PROFILE, saved) as MachineProfile;
   const templates = merged.paperTemplates.filter(
@@ -145,7 +219,10 @@ export function mergeProfile(saved: unknown): MachineProfile {
       [t.x, t.y, t.width, t.height].every((n) => typeof n === "number" && Number.isFinite(n)),
   );
   const pauseLift = merged.pen.pauseLift === "endOfStroke" ? "endOfStroke" : "spindleStop";
-  return { ...merged, version: 1, pen: { ...merged.pen, pauseLift }, paperTemplates: templates };
+  const onOverload = merged.servo.onOverload === "warn" || merged.servo.onOverload === "block" ? merged.servo.onOverload : "wait";
+  const old = isObj(saved) && saved.version !== 2;
+  const feed = old ? { ...merged.feed, fixed: DEFAULT_PROFILE.feed.fixed } : merged.feed;
+  return { ...merged, version: 2, feed, pen: { ...merged.pen, pauseLift }, servo: { ...merged.servo, onOverload }, paperTemplates: templates };
 }
 
 const ASCII_PRINTABLE = /^[\x20-\x7e]*$/;
@@ -168,7 +245,30 @@ export function validateProfile(p: MachineProfile): string[] {
     else if (cmd.includes("$")) e.push(`${label} não pode ter "$" (comandos $ mexem na configuração do GRBL).`);
     else if (/[;()]/.test(cmd)) e.push(`${label} não pode ter comentários.`);
   }
-  range(p.pen.settleSeconds, 0, 5, "Pausa do servo (s)");
+  range(p.pen.settleSeconds, 0, 5, "Pausa depois de descer (s)");
+  range(p.pen.settleUpSeconds, 0, 5, "Pausa depois de subir (s)");
+  range(p.pen.widthMm, 0.01, 10, "Largura da caneta (mm)");
+
+  const z = p.drawZone;
+  if (!(z.minX < z.maxX && z.minY < z.maxY)) e.push("A zona de desenho está invertida (mínimo maior que o máximo).");
+  if (z.minX < 0 || z.minY < 0 || z.maxX > p.workArea.width || z.maxY > p.workArea.height) {
+    e.push("A zona de desenho tem que ficar dentro do curso da máquina.");
+  }
+
+  range(p.servo.avgPerMin, 1, 200, "Média de ciclos do servo por minuto");
+  range(p.servo.peakPer60s, 1, 400, "Pico de ciclos do servo em 60 s");
+  if (p.servo.peakPer60s < p.servo.avgPerMin) e.push("O pico do servo em 60 s não pode ser menor que a média por minuto.");
+  range(p.servo.maxDescentMm, 10, 100000, "Traço máximo por descida (mm)");
+  range(p.join.searchMm, 0, 50, "Distância de busca para emendar (mm)");
+
+  const sh = p.shield;
+  range(sh.warmupCycles, 0, 50, "Ciclos de aquecimento");
+  if (!(sh.safeX >= 0 && sh.safeX <= p.workArea.width && sh.safeY >= 0 && sh.safeY <= p.workArea.height)) {
+    e.push("O ponto seguro do aquecimento tem que ficar dentro do curso da máquina.");
+  }
+  range(sh.firstSettleSeconds, 0, 5, "Pausa da 1ª descida (s)");
+  range(sh.resyncMinutes, 0, 120, "Minutos entre checkpoints");
+  range(sh.partMinutes, 0, 600, "Duração de cada parte (min)");
 
   const max = p.motion.maxRateMmMin;
   range(p.motion.maxRateMmMin, 1, 100000, "Velocidade máxima");

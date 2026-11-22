@@ -28,9 +28,12 @@ export function createDrawing(id: DrawingId, name: string, geometry: Geometry, t
   return { id, name, geometry, localBBox: controlBBox(geometry), transform };
 }
 
-/** Coloca o canto INFERIOR esquerdo da página no (0,0) da máquina. */
-export function importPlacement(pageMm: { width: number; height: number }, workHeight: number): Mat2D {
-  return translation(0, workHeight - pageMm.height);
+/**
+ * Coloca o canto INFERIOR esquerdo da página em `corner` (mm da máquina). O padrão do aplicativo é o
+ * canto da zona de desenho: um desenho recém-importado já cai dentro do papel (docs/REGRAS_GCODE.md).
+ */
+export function importPlacement(pageMm: { width: number; height: number }, workHeight: number, corner: Vec = { x: 0, y: 0 }): Mat2D {
+  return translation(corner.x, workHeight - pageMm.height - corner.y);
 }
 
 export function addDrawing(doc: PlotDocument, d: Drawing): PlotDocument {

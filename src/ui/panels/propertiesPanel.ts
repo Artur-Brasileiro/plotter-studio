@@ -50,7 +50,13 @@ export function deleteSelection(store: Store): void {
  * largura/altura da caixa, rotação vista pelo operador. Cada edição é um commit
  * (Enter ou sair do campo); editar o mesmo campo seguidamente vira uma entrada só.
  */
-export function createPropertiesPanel(store: Store): HTMLElement {
+/** O que o passo "Desenho" oferece quando a mesa está vazia. */
+export interface BringActions {
+  pickSvg(): void;
+  pickImage(): void;
+}
+
+export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLElement {
   const root = h("div", { class: "panel" });
   let keepRatio = true;
   const fields = new Map<string, HTMLInputElement>();
@@ -95,20 +101,45 @@ export function createPropertiesPanel(store: Store): HTMLElement {
     fields.clear();
     const docCount = store.doc.drawings.length;
     if (ids.length === 0) {
+      const choices = bring
+        ? [
+            h("button", { class: "choice", onclick: () => bring.pickImage() }, h("strong", null, "Imagem PNG ou JPG"), h("span", null, "Vira traço aqui mesmo: linha única e hachura.")),
+            h("button", { class: "choice", onclick: () => bring.pickSvg() }, h("strong", null, "Arquivo SVG"), h("span", null, "Desenho que já está em vetor (Inkscape, Illustrator).")),
+          ]
+        : [];
+      if (!docCount) {
+        append(root, [
+          h("div", { class: "empty" }, h("h3", null, "Traga um desenho"), ...choices, h("p", { class: "hint" }, "Ou arraste o arquivo para cima da mesa. Ele cai dentro da folha, pronto para posicionar.")),
+        ]);
+        return;
+      }
+      const z = store.state.profile.drawZone;
+      const list = h("ul", { class: "drawing-list" });
+      for (const d of store.doc.drawings) {
+        const b = selectionMachineBBox(store.doc, [d.id], H(), tol());
+        const out = b.minX < z.minX - 0.005 || b.minY < z.minY - 0.005 || b.maxX > z.maxX + 0.005 || b.maxY > z.maxY + 0.005;
+        list.append(
+          h(
+            "li",
+            null,
+            h(
+              "button",
+              { onclick: () => store.setSelection([d.id]), title: out ? "Este desenho sai da folha" : "Selecionar" },
+              h("span", { class: "name" }, `${out ? "⚠ " : ""}${d.name}`),
+              h("span", { class: "size" }, `${fmt(b.maxX - b.minX, 0)} × ${fmt(b.maxY - b.minY, 0)} mm`),
+            ),
+          ),
+        );
+      }
       append(root, [
-        h("h3", null, "Propriedades"),
-        h(
-          "p",
-          { class: "hint" },
-          docCount
-            ? "Clique num desenho para selecionar. Shift + clique soma à seleção; arraste no vazio para selecionar vários."
-            : "Importe um SVG para começar (botão ou arraste o arquivo para a janela).",
-        ),
-        docCount ? h("p", { class: "hint" }, `${docCount} desenho${docCount > 1 ? "s" : ""} na mesa.`) : null,
+        h("h3", null, docCount > 1 ? `${docCount} desenhos na mesa` : "Na mesa"),
+        list,
+        h("p", { class: "hint" }, "Clique num desenho para mover, girar ou mudar o tamanho. Shift + clique soma à seleção."),
+        h("h3", null, "Trazer outro"),
+        ...choices,
       ]);
       return;
     }
-
     const single = ids.length === 1 ? store.doc.drawings.find((d) => d.id === ids[0]) : undefined;
     const rot = single ? machineRotationDeg(single.transform) : 0;
     const free = !!single && isRightAngle(rot);
@@ -151,21 +182,37 @@ export function createPropertiesPanel(store: Store): HTMLElement {
       );
     }
 
-    const { workArea, paperTemplates } = store.state.profile;
+    const { drawZone, paperTemplates } = store.state.profile;
+    const zoneBox: BBox = { minX: drawZone.minX, minY: drawZone.minY, maxX: drawZone.maxX, maxY: drawZone.maxY };
+    /** Aumenta ou diminui até caber na folha, com 5 mm de folga, e centraliza. */
+    const fitToSheet = () => {
+      if (!single) return;
+      const b = box();
+      const bw = b.maxX - b.minX, bh = b.maxY - b.minY;
+      if (!(bw > 0) || !(bh > 0)) return;
+      const k = Math.min((drawZone.maxX - drawZone.minX - 10) / bw, (drawZone.maxY - drawZone.minY - 10) / bh);
+      store.commit("Encaixar na folha", (doc) => alignCenter(setMachineBox(doc, single.id, { width: bw * k, keepRatio: true }, H(), tol()), [single.id], zoneBox, H(), tol()));
+    };
+    const turn = () => single && store.commit("Girar 90°", (doc) => setMachineRotation(doc, single.id, rot + 90, H(), tol()));
     root.append(
-      h("h3", null, "Alinhar (centralizar)"),
+      h("h3", null, "Na folha"),
       h(
         "div",
         { class: "row" },
-        align("Na mesa", { minX: 0, minY: 0, maxX: workArea.width, maxY: workArea.height }),
-        ...paperTemplates.map((t) => align(`No ${t.name}`, { minX: t.x, minY: t.y, maxX: t.x + t.width, maxY: t.y + t.height })),
+        single ? h("button", { class: "primary", title: "Deixa do maior tamanho que cabe na folha, centralizado", onclick: fitToSheet }, "Encaixar na folha") : null,
+        align("Centralizar", zoneBox),
+        single ? h("button", { title: "Gira 90° no sentido anti-horário", onclick: turn }, "Girar 90°") : null,
       ),
+      ...(paperTemplates.length
+        ? [h("div", { class: "row center" }, h("span", { class: "hint" }, "Centralizar no"), ...paperTemplates.map((t) => align(t.name, { minX: t.x, minY: t.y, maxX: t.x + t.width, maxY: t.y + t.height })))]
+        : []),
       h("h3", null, "Ações"),
       h(
         "div",
         { class: "row" },
         h("button", { title: "Ctrl+D", onclick: () => duplicateSelection(store) }, "Duplicar"),
         h("button", { title: "Delete", onclick: () => deleteSelection(store) }, "Apagar"),
+        h("button", { class: "quiet", title: "Esc", onclick: () => store.setSelection([]) }, "Soltar seleção"),
       ),
       h("p", { class: "hint" }, "Setas movem 1 mm (Shift: 10 mm). Ctrl+Z desfaz, Ctrl+Y refaz."),
     );

@@ -8,18 +8,21 @@ function newId(): string {
   return crypto.randomUUID();
 }
 
-/** Importa arquivos SVG como novos desenhos (página no canto (0,0) da máquina) e seleciona-os. */
+const isSvg = (f: File) => /\.svg$/i.test(f.name) || f.type === "image/svg+xml";
+const isImage = (f: File) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name) || (/^image\//.test(f.type) && f.type !== "image/svg+xml");
+
+/** Importa arquivos SVG como novos desenhos (página no canto da folha) e seleciona-os. */
 export async function importFiles(store: Store, files: Iterable<File>): Promise<void> {
   const ids: string[] = [];
   for (const file of files) {
-    if (!/\.svg$/i.test(file.name) && file.type !== "image/svg+xml") {
+    if (!isSvg(file)) {
       toast(`"${file.name}" não é um SVG.`, "warn");
       continue;
     }
     try {
       const { name, result } = await readSvgFile(file);
-      const H = store.state.profile.workArea.height;
-      const d = createDrawing(newId(), name, result.geometry, importPlacement(result.pageMm, H));
+      const { workArea, drawZone } = store.state.profile;
+      const d = createDrawing(newId(), name, result.geometry, importPlacement(result.pageMm, workArea.height, { x: drawZone.minX, y: drawZone.minY }));
       store.commit("Importar", (doc) => addDrawing(doc, d));
       ids.push(d.id);
       for (const w of result.warnings) toast(`${name}: ${w.message}`, "warn", 9000);
@@ -32,14 +35,39 @@ export async function importFiles(store: Store, files: Iterable<File>): Promise<
   if (ids.length) store.setSelection(ids);
 }
 
-/** Botão "Importar SVG" (com input escondido) e arrastar-e-soltar na janela. */
-export function installImport(store: Store, toolbar: HTMLElement, dropTarget: HTMLElement): void {
-  const input = h("input", { type: "file", accept: ".svg,image/svg+xml", multiple: true, style: "display:none" });
-  input.addEventListener("change", () => {
-    if (input.files) void importFiles(store, Array.from(input.files));
-    input.value = "";
+export interface Importer {
+  /** Abre a escolha de arquivo SVG */
+  pickSvg(): void;
+  /** Abre a escolha de imagem (PNG, JPG...) para vetorizar */
+  pickImage(): void;
+}
+
+/**
+ * Entrada de desenhos: escolha de arquivo (SVG ou imagem) e arrastar-e-soltar na janela.
+ * SVG entra direto na mesa; imagem vai para `onImage` (a tela de vetorização).
+ */
+export function installImport(store: Store, dropTarget: HTMLElement, onImage: (file: File) => void): Importer {
+  const svgInput = h("input", { type: "file", accept: ".svg,image/svg+xml", multiple: true, style: "display:none" });
+  svgInput.addEventListener("change", () => {
+    if (svgInput.files) void importFiles(store, Array.from(svgInput.files));
+    svgInput.value = "";
   });
-  toolbar.append(h("button", { class: "primary", title: "Importar um ou mais arquivos SVG", onclick: () => input.click() }, "Importar SVG"), input);
+  const imgInput = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp", style: "display:none" });
+  imgInput.addEventListener("change", () => {
+    const f = imgInput.files?.[0];
+    imgInput.value = "";
+    if (f) onImage(f);
+  });
+  document.body.append(svgInput, imgInput);
+
+  const take = (files: File[]) => {
+    const svgs = files.filter(isSvg);
+    const image = files.find((f) => !isSvg(f) && isImage(f));
+    const other = files.filter((f) => !isSvg(f) && !isImage(f));
+    for (const f of other) toast(`"${f.name}" não é SVG nem imagem.`, "warn");
+    if (svgs.length) void importFiles(store, svgs);
+    if (image) onImage(image);
+  };
 
   let depth = 0;
   const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
@@ -61,6 +89,42 @@ export function installImport(store: Store, toolbar: HTMLElement, dropTarget: HT
     e.preventDefault();
     depth = 0;
     dropTarget.classList.remove("dragover");
-    void importFiles(store, Array.from(e.dataTransfer!.files));
+    take(Array.from(e.dataTransfer!.files));
   });
+
+  return { pickSvg: () => svgInput.click(), pickImage: () => imgInput.click() };
+}
+
+/** Botão com lista suspensa (fecha ao escolher, ao clicar fora ou com Esc). */
+export function createMenu(label: string, items: { label: string; hint: string; action: () => void }[], cls = "primary"): HTMLElement {
+  const list = h("div", { class: "menu-list", role: "menu", hidden: true });
+  const button = h("button", { class: cls, "aria-haspopup": "menu", "aria-expanded": "false" }, `${label} ▾`);
+  const close = () => {
+    list.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    list.hidden = !list.hidden;
+    button.setAttribute("aria-expanded", String(!list.hidden));
+  });
+  for (const it of items) {
+    list.append(
+      h(
+        "button",
+        {
+          role: "menuitem",
+          onclick: () => {
+            close();
+            it.action();
+          },
+        },
+        it.label,
+        h("small", null, it.hint),
+      ),
+    );
+  }
+  document.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => e.key === "Escape" && close());
+  return h("div", { class: "menu" }, button, list);
 }

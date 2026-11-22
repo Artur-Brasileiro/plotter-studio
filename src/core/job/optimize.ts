@@ -4,12 +4,16 @@ import type { OrderedStroke, Stroke } from "./types";
 export interface OrderOptions {
   /** Onde a caneta está ao começar (mm da máquina) */
   readonly start: Vec;
-  /** Pontas mais próximas que isto: liga sem levantar a caneta */
+  /** Salto até este tamanho não aparece: liga sem levantar a caneta (largura da caneta) */
   readonly joinGapMm: number;
   /** Pode desenhar um traço aberto de trás para frente */
   readonly allowReverse: boolean;
   /** Um laço fechado pode começar em qualquer vértice */
   readonly rotateClosed: boolean;
+  /** Procura um traço para emendar até esta distância (REGRAS_GCODE.md, regra 2). 0 = só `joinGapMm`. */
+  readonly searchMm?: number;
+  /** A ligação reta de a até b ficaria escondida (por cima de tinta)? Sem isto, só vale `joinGapMm`. */
+  readonly bridgeHidden?: (a: Vec, b: Vec) => boolean;
 }
 
 const CELL = 10; // mm
@@ -92,6 +96,31 @@ class Grid {
     }
     return best;
   }
+
+  /** Chama `visit` para cada entrada de traço não usado a até `radius` de p. */
+  within(p: Vec, radius: number, used: Uint8Array, visit: (e: Entry, d: number) => void): void {
+    const c0x = Math.floor((p.x - radius) / CELL), c1x = Math.floor((p.x + radius) / CELL);
+    const c0y = Math.floor((p.y - radius) / CELL), c1y = Math.floor((p.y + radius) / CELL);
+    for (let cx = c0x; cx <= c1x; cx++) {
+      for (let cy = c0y; cy <= c1y; cy++) {
+        const list = this.cells.get(this.key(cx, cy));
+        if (!list) continue;
+        for (const e of list) {
+          if (used[e.stroke]) continue;
+          const d = Math.hypot(e.x - p.x, e.y - p.y);
+          if (d <= radius) visit(e, d);
+        }
+      }
+    }
+  }
+}
+
+/** Desempate determinístico: menor distância, depois menor índice de traço, depois ordem de inserção. */
+function better(e: Entry, d: number, best: Entry | undefined, bestD: number): boolean {
+  if (!best) return true;
+  if (d < bestD - 1e-9) return true;
+  if (d > bestD + 1e-9) return false;
+  return e.stroke < best.stroke || (e.stroke === best.stroke && e.order < best.order);
 }
 
 function orient(s: Stroke, e: Entry): Stroke {
@@ -104,8 +133,12 @@ function orient(s: Stroke, e: Entry): Stroke {
 }
 
 /**
- * Vizinho mais próximo com inversão de traços abertos, rotação de laços e junção de pontas.
- * Grade espacial de 10 mm: ~20 mil traços em bem menos de 1 s. Saída determinística.
+ * Ordem dos traços pensando no servo (REGRAS_GCODE.md, regras 1 e 2). A cada passo:
+ *  1. procura perto um traço que dê para EMENDAR sem aparecer: salto menor que a caneta, ou
+ *     ligação que passa inteira por cima de tinta (até `searchMm`);
+ *  2. só se não houver, vai ao mais próximo, levantando a caneta.
+ * Com inversão de traços abertos e rotação de laços. Grade espacial de 10 mm: ~20 mil traços
+ * em bem menos de 1 s. Saída determinística.
  */
 export function orderStrokes(strokes: readonly Stroke[], opts: OrderOptions): OrderedStroke[] {
   const grid = new Grid();
@@ -127,16 +160,92 @@ export function orderStrokes(strokes: readonly Stroke[], opts: OrderOptions): Or
   const used = new Uint8Array(strokes.length);
   const out: OrderedStroke[] = [];
   let cur = opts.start;
+  const reach = Math.max(opts.joinGapMm, opts.bridgeHidden ? (opts.searchMm ?? 0) : 0);
   for (let count = 0; count < strokes.length; count++) {
-    const e = grid.nearest(cur, used);
+    let e: Entry | undefined;
+    let joined = false;
+    if (out.length > 0 && reach > 0) {
+      // 1) dá para emendar? Primeiro o salto que cabe na largura da caneta; depois a ponte sobre tinta.
+      let near: Entry | undefined, nearD = Infinity;
+      let bridge: Entry | undefined, bridgeD = Infinity;
+      const from = cur;
+      grid.within(from, reach, used, (c, d) => {
+        if (d <= opts.joinGapMm) {
+          if (better(c, d, near, nearD)) (near = c), (nearD = d);
+        } else if (better(c, d, bridge, bridgeD) && opts.bridgeHidden!(from, { x: c.x, y: c.y })) {
+          (bridge = c), (bridgeD = d);
+        }
+      });
+      e = near ?? bridge;
+      joined = !!e;
+    }
+    // 2) senão, o mais próximo, com a caneta levantada
+    e ??= grid.nearest(cur, used);
     if (!e) break;
     used[e.stroke] = 1;
     const s = orient(strokes[e.stroke], e);
-    const joined = out.length > 0 && dist(cur, s.points[0]) < opts.joinGapMm;
     out.push({ ...s, joinedToPrevious: joined });
     cur = s.points[s.points.length - 1];
   }
   // traços vazios (sem pontos) não entram
+  return out;
+}
+
+/**
+ * REGRAS_GCODE.md, regra 5: uma descida não desenha mais que `maxMm`. Ao atingir o limite a caneta
+ * sobe e desce no mesmo ponto (`relift`), o que não deixa marca. Vem DEPOIS das emendas, porque
+ * são elas que juntam traços em cadeias longas. Corta no meio de um segmento se for preciso.
+ */
+export function capDescents(strokes: readonly OrderedStroke[], maxMm: number): OrderedStroke[] {
+  if (!(maxMm > 0)) return [...strokes];
+  const out: OrderedStroke[] = [];
+  let acc = 0; // mm desenhados desde a última descida
+  let prevEnd: Vec | undefined;
+  for (const s of strokes) {
+    const pts = s.points;
+    if (pts.length === 0) continue;
+    let relift = false;
+    if (!s.joinedToPrevious || !prevEnd) acc = 0;
+    else {
+      const gap = dist(prevEnd, pts[0]);
+      if (acc > 0 && acc + gap > maxMm) {
+        relift = true;
+        acc = gap;
+      } else acc += gap;
+    }
+    let cur: Vec[] = [pts[0]];
+    let first = true;
+    const flush = (closedPiece: boolean) => {
+      out.push({ ...s, points: cur, closed: closedPiece, joinedToPrevious: first ? s.joinedToPrevious : true, relift: first ? relift || undefined : true });
+      first = false;
+    };
+    for (let j = 1; j < pts.length; j++) {
+      let a = pts[j - 1];
+      const b = pts[j];
+      let len = dist(a, b);
+      while (acc + len > maxMm + 1e-9 && len > 1e-9) {
+        const room = maxMm - acc;
+        if (room > 1e-6) {
+          const t = room / len;
+          a = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+          cur.push(a);
+          len -= room;
+        }
+        if (cur.length > 1) {
+          flush(false);
+          cur = [a];
+        } else if (first) {
+          relift = true; // o limite caiu exatamente no começo deste traço: basta re-descer aqui
+        }
+        acc = 0;
+      }
+      cur.push(b);
+      acc += len;
+    }
+    // sem corte, o traço sai inteiro (e continua fechado se era)
+    flush(first ? s.closed : false);
+    prevEnd = pts[pts.length - 1];
+  }
   return out;
 }
 

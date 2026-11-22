@@ -9,7 +9,7 @@ import { assignFeeds, classifyRadius, vertexRadii } from "./speed";
 import type { OrderedStroke } from "./types";
 
 const P = DEFAULT_PROFILE;
-const DYN = DEFAULT_JOB_SETTINGS; // modo dinâmico
+const DYN = { ...DEFAULT_JOB_SETTINGS, speedMode: "dynamic" as const }; // modo dinâmico (o padrão passou a ser F500 fixo)
 const stroke = (points: Vec[], closed = false): OrderedStroke => ({ points, closed, drawingId: "d", joinedToPrevious: false });
 const circle = (r: number): OrderedStroke => {
   const pl = simplifyPolyline(flattenSubPath(ellipseSubPath(0, 0, r, r), 0.05), { rdpMm: 0.05, minSegmentMm: 0.1 });

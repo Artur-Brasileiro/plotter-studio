@@ -23,89 +23,144 @@ interface SelectField {
   readonly help: string;
   readonly options: readonly [string, string][];
 }
-type Field = NumField | TextField | SelectField;
+interface BoolField {
+  readonly path: string;
+  readonly label: string;
+  readonly help: string;
+  readonly bool: true;
+}
+type Field = NumField | TextField | SelectField | BoolField;
 
 const maxFeed = (p: MachineProfile) => p.motion.maxRateMmMin;
+const W = (p: MachineProfile) => p.workArea.width;
+const H = (p: MachineProfile) => p.workArea.height;
 
-const GROUPS: { title: string; fields: Field[] }[] = [
+interface Group {
+  readonly id: string;
+  readonly title: string;
+  /** Uma ou duas frases: para que serve este grupo */
+  readonly lead: string;
+  readonly fields: Field[];
+  /** Mostra a lista de gabaritos de papel depois dos campos */
+  readonly templates?: boolean;
+}
+
+const GROUPS: Group[] = [
   {
-    title: "Área útil",
+    id: "sheet",
+    title: "Mesa e folha",
+    lead: "O curso é até onde a caneta alcança. A folha é a parte da mesa onde o desenho pode ficar: nada é desenhado fora dela.",
     fields: [
-      { path: "workArea.width", label: "Largura (mm)", help: "= $130 do GRBL. Até onde a caneta alcança em X.", min: 1, max: 5000 },
-      { path: "workArea.height", label: "Altura (mm)", help: "= $131 do GRBL. Até onde a caneta alcança em Y.", min: 1, max: 5000 },
+      { path: "drawZone.minX", label: "Folha: X mínimo (mm)", help: "Borda esquerda da folha.", min: 0, max: W },
+      { path: "drawZone.maxX", label: "Folha: X máximo (mm)", help: "Borda direita da folha.", min: 0, max: W },
+      { path: "drawZone.minY", label: "Folha: Y mínimo (mm)", help: "Borda da frente (perto de você).", min: 0, max: H },
+      { path: "drawZone.maxY", label: "Folha: Y máximo (mm)", help: "Borda do fundo.", min: 0, max: H },
+      { path: "workArea.width", label: "Curso em X (mm)", help: "= $130 do GRBL.", min: 1, max: 5000 },
+      { path: "workArea.height", label: "Curso em Y (mm)", help: "= $131 do GRBL.", min: 1, max: 5000 },
     ],
+    templates: true,
   },
   {
+    id: "pen",
     title: "Caneta",
+    lead: "Como a caneta sobe e desce, e a largura do traço dela.",
     fields: [
-      { path: "pen.downCmd", label: "Comando para abaixar", help: "M3 S220 no fork do servo. Sem $ nem comentários.", text: true },
-      { path: "pen.upCmd", label: "Comando para levantar", help: "M5: o GRBL faz M5 sozinho em reset ou alarme, então qualquer pane levanta a caneta.", text: true },
-      { path: "pen.settleSeconds", label: "Pausa do servo (s)", help: "G4 depois de cada subida e descida. O servo leva ~0,3 s.", min: 0, max: 5 },
+      { path: "pen.widthMm", label: "Largura do traço (mm)", help: "Salto menor que isto é emendado sem levantar a caneta, porque não aparece.", min: 0.01, max: 10 },
       {
         path: "pen.pauseLift",
-        label: "Pausa (v2)",
-        help: "Como a pausa levanta a caneta. Decidido no teste da máquina.",
+        label: "Ao pausar um desenho",
+        help: "Como a pausa levanta a caneta. Decida no teste da máquina.",
         options: [
           ["spindleStop", "Levanta na hora (0x9E)"],
           ["endOfStroke", "Espera o fim do traço"],
         ],
       },
+      { path: "pen.settleSeconds", label: "Pausa depois de descer (s)", help: "G4 depois do M3. O servo leva ~0,3 s para chegar.", min: 0, max: 5 },
+      { path: "pen.settleUpSeconds", label: "Pausa depois de subir (s)", help: "G4 depois do M5.", min: 0, max: 5 },
+      { path: "pen.downCmd", label: "Comando para abaixar", help: "M3 S220 no fork do servo. Sem $ nem comentários.", text: true },
+      { path: "pen.upCmd", label: "Comando para levantar", help: "M5: o GRBL faz M5 sozinho em reset ou alarme, então qualquer pane levanta a caneta.", text: true },
     ],
   },
   {
-    title: "Velocidades (mm/min)",
+    id: "servo",
+    title: "Proteção do servo",
+    lead: "O que esquenta o servo é subir e descer sem parar, não ficar embaixo. Aqui ficam os limites e o que fazer quando um desenho passa deles.",
+    fields: [
+      { path: "servo.avgPerMin", label: "Média máxima (descidas por minuto)", help: "A regra original pede 20. Até ~30 tem rodado sem problema.", min: 1, max: 200 },
+      { path: "servo.peakPer60s", label: "Pico máximo em 60 s", help: "Acima de ~50 por minuto, com picos de 80, o servo já travou de quente.", min: 1, max: 400 },
+      {
+        path: "servo.onOverload",
+        label: "Se o desenho passar do limite",
+        help: "Esperar: a máquina descansa com a caneta em cima e o desenho demora mais.",
+        options: [
+          ["wait", "Esperar com a caneta em cima"],
+          ["warn", "Só avisar"],
+          ["block", "Bloquear o envio"],
+        ],
+      },
+      { path: "servo.maxDescentMm", label: "Traço máximo por descida (mm)", help: "Depois disso a caneta sobe e desce no mesmo ponto. 900 mm ≈ 2 min a F500.", min: 10, max: 100000 },
+      { path: "join.searchMm", label: "Procurar emenda até (mm)", help: "Distância em que se procura um traço que dê para emendar sem aparecer.", min: 0, max: 50 },
+      { path: "join.overInk", label: "Emendar por cima de tinta", help: "A ligação entre dois traços pode ser desenhada quando passa inteira sobre tinta do próprio desenho.", bool: true },
+    ],
+  },
+  {
+    id: "shield",
+    title: "Blindagem",
+    lead: "Proteções contra falha da caneta: aquecer o servo antes, subir duas vezes, re-sincronizar de tempos em tempos e dividir o arquivo em partes.",
+    fields: [
+      { path: "shield.enabled", label: "Usar a blindagem", help: "Desligada, o arquivo sai no formato simples, sem nada disso.", bool: true },
+      { path: "shield.doubleLift", label: "Subir a caneta duas vezes", help: "Se um comando se perder na serial, o segundo ainda levanta a caneta.", bool: true },
+      { path: "shield.warmupCycles", label: "Ciclos de aquecimento", help: "Sobe e desce no ponto seguro antes do 1º traço.", min: 0, max: 50 },
+      { path: "shield.firstSettleSeconds", label: "Pausa da 1ª descida (s)", help: "Mais longa, para o 1º traço não sair sem tinta.", min: 0, max: 5 },
+      { path: "shield.safeX", label: "Ponto seguro X (mm)", help: "Onde acontece o aquecimento, fora do desenho.", min: 0, max: W },
+      { path: "shield.safeY", label: "Ponto seguro Y (mm)", help: "", min: 0, max: H },
+      { path: "shield.resyncMinutes", label: "Checkpoint a cada (min)", help: "Dois ciclos curtos que re-sincronizam o servo. 0 desliga.", min: 0, max: 120 },
+      { path: "shield.partMinutes", label: "Duração de cada parte (min)", help: "O arquivo também sai dividido em partes deste tamanho. 0 não divide.", min: 0, max: 600 },
+    ],
+  },
+  {
+    id: "speed",
+    title: "Velocidades",
+    lead: "Em mm/min. F500 é a precisão máxima; até F1500 a diferença não aparece. O modo dinâmico anda mais rápido nas retas.",
     fields: [
       { path: "feed.fixed", label: "Fixa (padrão)", help: "Usada no modo fixo.", min: 1, max: maxFeed },
-      { path: "feed.straight", label: "Retas", help: "Modo dinâmico. Testado perfeito a F1500; se tremer, baixe.", min: 1, max: maxFeed },
-      { path: "feed.curve", label: "Curvas suaves", help: "Modo dinâmico. R40 saiu perfeito a F1000.", min: 1, max: maxFeed },
-      { path: "feed.tightCurve", label: "Curvas fechadas", help: "Modo dinâmico. Se o círculo R5 de curvas.svg ondular, baixe para ~400.", min: 1, max: maxFeed },
-    ],
-  },
-  {
-    title: "Velocidade dinâmica",
-    fields: [
+      { path: "feed.straight", label: "Dinâmico: retas", help: "Testado perfeito a F1500; se tremer, baixe.", min: 1, max: maxFeed },
+      { path: "feed.curve", label: "Dinâmico: curvas suaves", help: "R40 saiu perfeito a F1000.", min: 1, max: maxFeed },
+      { path: "feed.tightCurve", label: "Dinâmico: curvas fechadas", help: "Se o círculo R5 ondular, baixe para ~400.", min: 1, max: maxFeed },
       { path: "dynamic.straightMinRadiusMm", label: "Raio de reta (mm)", help: "Raio maior ou igual a isto anda como reta.", min: 0.01, max: 100000 },
-      { path: "dynamic.curveMinRadiusMm", label: "Raio de curva (mm)", help: "Raio maior ou igual a isto é curva suave; abaixo, curva fechada.", min: 0.01, max: 10000 },
+      { path: "dynamic.curveMinRadiusMm", label: "Raio de curva (mm)", help: "Maior ou igual a isto é curva suave; abaixo, curva fechada.", min: 0.01, max: 10000 },
       { path: "dynamic.cornerAngleDeg", label: "Ângulo de canto (°)", help: "Vértice que vira mais que isto é canto: quem freia é o GRBL ($11).", min: 1, max: 179 },
       { path: "dynamic.maxCurveSegmentMm", label: "Segmento máx. de curva (mm)", help: "Segmento mais longo que isto é reta, não pedaço de curva.", min: 0.1, max: 1000 },
       { path: "dynamic.windowMm", label: "Janela (mm)", help: "A velocidade mais lenta se estende isto para cada lado.", min: 0, max: 100 },
     ],
   },
   {
-    title: "Tolerâncias (mm)",
+    id: "precision",
+    title: "Precisão e movimento",
+    lead: "Como as curvas viram segmentos de reta, e os números do GRBL usados para estimar o tempo.",
     fields: [
-      { path: "tolerance.chordMm", label: "Curva → retas", help: "Erro máximo ao converter curvas em segmentos.", min: 0.001, max: 1 },
-      { path: "tolerance.simplifyMm", label: "Simplificação", help: "Ramer–Douglas–Peucker: tira pontos quase alinhados.", min: 0, max: 1 },
-      { path: "tolerance.minSegmentMm", label: "Segmento mínimo", help: "Segmentos menores são fundidos (o buffer do GRBL agradece).", min: 0, max: 5 },
-      { path: "tolerance.joinGapMm", label: "Junção de pontas", help: "Pontas mais próximas que isto são ligadas sem levantar a caneta.", min: 0, max: 5 },
-    ],
-  },
-  {
-    title: "Movimento (estimativa e buffer)",
-    fields: [
+      { path: "tolerance.chordMm", label: "Curva → retas (mm)", help: "Erro máximo ao converter curvas em segmentos.", min: 0.001, max: 1 },
+      { path: "tolerance.simplifyMm", label: "Simplificação (mm)", help: "Tira pontos quase alinhados.", min: 0, max: 1 },
+      { path: "tolerance.minSegmentMm", label: "Segmento mínimo (mm)", help: "Segmentos menores são fundidos (o buffer do GRBL agradece).", min: 0, max: 5 },
+      { path: "motion.minSegmentTimeMs", label: "Tempo mín. por segmento (ms)", help: "Segmentos curtos andam mais devagar para o buffer não esvaziar. 0 desliga.", min: 0, max: 100 },
       { path: "motion.maxRateMmMin", label: "Velocidade máx. (mm/min)", help: "= $110/$111.", min: 1, max: 100000 },
       { path: "motion.accelMmS2", label: "Aceleração (mm/s²)", help: "= $120/$121.", min: 1, max: 100000 },
       { path: "motion.junctionDeviationMm", label: "Junction deviation (mm)", help: "= $11. Quanto menor, mais o GRBL freia nos cantos.", min: 0.0001, max: 1 },
-      { path: "motion.minSegmentTimeMs", label: "Tempo mín. por segmento (ms)", help: "Segmentos curtos andam mais devagar para o buffer não esvaziar. 0 desliga.", min: 0, max: 100 },
     ],
   },
   {
-    title: "G-code",
+    id: "link",
+    title: "Fim e conexão",
+    lead: "Para onde a máquina vai ao terminar, e a conversa pela serial.",
     fields: [
-      { path: "gcode.finalPosition.x", label: "Posição final X (mm)", help: "Para onde a máquina vai ao terminar.", min: 0, max: (p) => p.workArea.width },
-      { path: "gcode.finalPosition.y", label: "Posição final Y (mm)", help: "", min: 0, max: (p) => p.workArea.height },
-    ],
-  },
-  {
-    title: "Conexão (v2)",
-    fields: [
+      { path: "gcode.finalPosition.x", label: "Posição final X (mm)", help: "Para onde a máquina vai ao terminar.", min: 0, max: W },
+      { path: "gcode.finalPosition.y", label: "Posição final Y (mm)", help: "", min: 0, max: H },
       { path: "serial.baudRate", label: "Baud rate", help: "115200 no GRBL 1.1.", min: 300, max: 2_000_000 },
       { path: "serial.statusIntervalMs", label: "Intervalo do status (ms)", help: "Consulta '?' do estado da máquina.", min: 50, max: 2000 },
       { path: "serial.rxBufferBytes", label: "Buffer de recepção (bytes)", help: "128 no Arduino Uno.", min: 16, max: 1024 },
     ],
   },
 ];
-
 function get(obj: unknown, path: string): unknown {
   return path.split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)?.[k], obj);
 }
@@ -178,6 +233,15 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     return h("label", { class: "field", title: f.help }, f.label, sel, h("small", { class: "help" }, f.help));
   };
 
+  const boolField = (f: BoolField) => {
+    const cb = h("input", { type: "checkbox", checked: get(draft, f.path) === true, "aria-label": f.label });
+    cb.addEventListener("change", () => {
+      set(draft, f.path, cb.checked);
+      refreshErrors();
+    });
+    return h("div", { class: "field" }, h("label", { class: "check" }, cb, f.label), f.help ? h("small", { class: "help" }, f.help) : null);
+  };
+
   const templatesSection = () => {
     const box = h("div", { class: "templates" });
     const render = () => {
@@ -238,10 +302,10 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     };
     render();
     return h(
-      "fieldset",
-      null,
-      h("legend", null, "Gabaritos de papel (mm da máquina: x, y do canto inferior esquerdo, largura, altura)"),
-      h("p", { class: "hint" }, "As posições padrão foram supostas na origem. Meça os gabaritos riscados na madeira e corrija aqui."),
+      "div",
+      { class: "panel-section" },
+      h("h4", null, "Gabaritos de papel"),
+      h("p", { class: "lead", style: "margin:0" }, "Retângulos tracejados na mesa. Nome, depois x, y do canto inferior esquerdo, largura e altura, em mm da máquina. Meça os que estão riscados na madeira e corrija aqui."),
       box,
     );
   };
@@ -261,18 +325,27 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     }
   });
 
+  let currentGroup = GROUPS[0].id;
+
   function render() {
     clear(dialog);
     const body = h("div", { class: "settings-body" });
-    for (const g of GROUPS) {
+    const nav = h("nav", { class: "settings-nav", "aria-label": "Grupos de configuração" });
+    const showGroup = (id: string) => {
+      currentGroup = id;
+      const g = GROUPS.find((x) => x.id === id) ?? GROUPS[0];
+      for (const b of Array.from(nav.children)) b.classList.toggle("on", (b as HTMLElement).dataset.id === g.id);
+      clear(body);
       const grid = h("div", { class: "grid2" });
-      for (const f of g.fields) grid.append("text" in f ? textField(f) : "options" in f ? selectField(f) : numField(f));
-      body.append(h("fieldset", null, h("legend", null, g.title), grid));
-    }
-    body.append(templatesSection());
+      for (const f of g.fields) grid.append("text" in f ? textField(f) : "options" in f ? selectField(f) : "bool" in f ? boolField(f) : numField(f));
+      append(body, [h("h4", null, g.title), h("p", { class: "lead" }, g.lead), grid, g.templates ? templatesSection() : null]);
+      body.scrollTop = 0;
+    };
+    for (const g of GROUPS) nav.append(h("button", { dataset: { id: g.id }, onclick: () => showGroup(g.id) }, g.title));
+    showGroup(currentGroup);
     append(dialog, [
-      h("header", { class: "settings-head" }, h("strong", null, "Configurações da máquina"), h("button", { class: "close", title: "Fechar sem salvar", onclick: () => dialog.close() }, "✕")),
-      body,
+      h("header", { class: "settings-head" }, h("strong", null, "Configurações"), h("button", { class: "close", title: "Fechar sem salvar", "aria-label": "Fechar sem salvar", onclick: () => dialog.close() }, "✕")),
+      h("div", { class: "settings-main" }, nav, body),
       globalErrors,
       h(
         "footer",
@@ -289,8 +362,8 @@ export function createSettingsDialog(store: Store): { open: () => void } {
           },
           "Restaurar padrão",
         ),
-        h("button", { onclick: () => downloadText("perfil-plotter.json", exportProfileJson(store.state.profile)), title: "Baixa o perfil salvo (backup)" }, "Exportar JSON"),
-        h("button", { onclick: () => fileInput.click() }, "Importar JSON"),
+        h("button", { onclick: () => downloadText("perfil-plotter.json", exportProfileJson(store.state.profile)), title: "Baixa o perfil salvo (backup)" }, "Exportar"),
+        h("button", { onclick: () => fileInput.click() }, "Importar"),
         fileInput,
         h("span", { class: "spacer" }),
         h("button", { onclick: () => dialog.close() }, "Cancelar"),
@@ -299,7 +372,6 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     ]);
     refreshErrors();
   }
-
   function save() {
     const errs = [...fieldErrors.values(), ...validateProfile(draft)];
     if (errs.length) return refreshErrors();

@@ -7,6 +7,8 @@ export type KeyValue = Pick<Storage, "getItem" | "setItem">;
 const PROFILE_KEY = "plotter-studio:profile";
 const JOB_KEY = "plotter-studio:job";
 const PROFILE_FILE_FORMAT = "plotter-studio-profile";
+/** Marca o que foi salvo já com as regras de docs/REGRAS_GCODE.md como padrão. */
+const JOB_RULES_VERSION = 2;
 
 const ls = (): KeyValue => localStorage;
 
@@ -63,9 +65,11 @@ export function loadJobSettings(storage: KeyValue = ls()): JobSettings {
   try {
     const raw = storage.getItem(JOB_KEY);
     if (!raw) return DEFAULT_JOB_SETTINGS;
-    const d = JSON.parse(raw) as Partial<JobSettings>;
+    const d = JSON.parse(raw) as Partial<JobSettings> & { rules?: number };
+    // salvo antes das regras de docs/REGRAS_GCODE.md: a velocidade volta ao padrão novo (F500 fixo)
+    if (d.rules !== JOB_RULES_VERSION) return { ...DEFAULT_JOB_SETTINGS, optimize: typeof d.optimize === "boolean" ? d.optimize : DEFAULT_JOB_SETTINGS.optimize };
     return {
-      speedMode: d.speedMode === "fixed" ? "fixed" : "dynamic",
+      speedMode: d.speedMode === "dynamic" ? "dynamic" : "fixed",
       fixedFeed: typeof d.fixedFeed === "number" && d.fixedFeed > 0 ? d.fixedFeed : DEFAULT_JOB_SETTINGS.fixedFeed,
       optimize: typeof d.optimize === "boolean" ? d.optimize : DEFAULT_JOB_SETTINGS.optimize,
     };
@@ -76,7 +80,7 @@ export function loadJobSettings(storage: KeyValue = ls()): JobSettings {
 
 export function saveJobSettings(j: JobSettings, storage: KeyValue = ls()): void {
   try {
-    storage.setItem(JOB_KEY, JSON.stringify(j));
+    storage.setItem(JOB_KEY, JSON.stringify({ ...j, rules: JOB_RULES_VERSION }));
   } catch {
     /* sem armazenamento: só não lembra */
   }

@@ -8,7 +8,7 @@ import { installBoard } from "./ui/board";
 import { CanvasView } from "./ui/canvasView";
 import { DrawingObject } from "./ui/drawingObject";
 import { h, toast } from "./ui/dom";
-import { installImport } from "./ui/importer";
+import { createMenu, installImport } from "./ui/importer";
 import { getLayout } from "./ui/layout";
 import { createJobPanel } from "./ui/panels/jobPanel";
 import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
@@ -74,7 +74,13 @@ new ResizeObserver(() => {
 }).observe(layout.canvasWrap);
 
 // barra superior
-installImport(store, layout.toolbar, layout.canvasWrap);
+// a tela de vetorização é ligada mais abaixo (precisa do store): por enquanto só guarda a referência
+let openTracer: (file: File) => void = () => toast("A vetorização ainda está carregando. Tente de novo em instantes.", "warn");
+const importer = installImport(store, layout.canvasWrap, (file) => openTracer(file));
+const bringMenu = createMenu("Trazer desenho", [
+  { label: "Imagem PNG ou JPG", hint: "Vira traço aqui mesmo: linha única e hachura", action: importer.pickImage },
+  { label: "Arquivo SVG", hint: "Desenho que já está em vetor", action: importer.pickSvg },
+]);
 const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
 const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
 const settings = createSettingsDialog(store);
@@ -82,12 +88,14 @@ const settings = createSettingsDialog(store);
 const session = new MachineSession(store, simSettingsFromUrl(location.search));
 import.meta.hot?.dispose(() => session.dispose());
 layout.toolbar.append(
+  bringMenu,
+  h("span", { class: "sep" }),
   undoBtn,
   redoBtn,
-  h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ajustar à tela"),
+  h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ver a mesa toda"),
   h("span", { class: "spacer" }),
   createConnectControls(session),
-  h("button", { title: "Perfil da máquina", onclick: () => settings.open() }, "⚙ Configurações"),
+  h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações"),
 );
 const updateUndo = () => {
   const hist = store.state.history;
@@ -111,12 +119,16 @@ planner.subscribe((plan) => {
 overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
 
 const side = new SidePanel(layout.side);
-side.addTab("props", "Propriedades", createPropertiesPanel(store));
-side.addTab("job", "Trabalho", createJobPanel(store, planner, createPreviewControls(overlay, player)));
+side.addTab("props", "Desenho", createPropertiesPanel(store, importer));
+side.addTab(
+  "job",
+  "Conferir",
+  createJobPanel(store, planner, createPreviewControls(overlay, player), (flag, title) => side.setFlag("job", flag, title)),
+);
 const jog = createJogPanel(session, () => side.active === "machine");
 const send = createSendPanel(session, store, planner, overlay, player);
 const machineTab = h("div", { class: "panel" }, createMachinePanel(session), send.el, jog.el);
-side.addTab("machine", "Máquina", machineTab);
+side.addTab("machine", "Plotar", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
 const consolePanel = createConsole(session, layout.console);
 layout.status.prepend(consolePanel.toggleButton);
@@ -162,5 +174,13 @@ restoreSession()
   })
   .finally(() => startAutosave(store, { onError: (e) => console.warn("autosave falhou", e) }));
 
+// tela de vetorização (imagem → traço): carregada sob demanda, porque é a parte mais pesada
+openTracer = (file) => {
+  void import("./ui/trace/traceDialog").then((m) => m.openTraceDialog(store, file)).catch((e) => {
+    console.error(e);
+    toast("Não consegui abrir a vetorização.", "error");
+  });
+};
+
 // acesso pelo console do navegador, para depurar
-Object.assign(window, { plotter: { store, canvas, view, planner, side, session } });
+Object.assign(window, { plotter: { store, canvas, view, planner, side, session, openTracer: (f: File) => openTracer(f) } });

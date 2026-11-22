@@ -11,7 +11,7 @@ import type { PlannedStroke, TimeEstimate } from "./types";
  * Ignora a antecipação limitada a ~15 blocos e a falta de linhas na serial (fica um pouco otimista).
  */
 
-interface Block {
+export interface Block {
   readonly len: number;
   readonly ux: number;
   readonly uy: number;
@@ -29,7 +29,7 @@ function limitByAxis(limit: number, ux: number, uy: number): number {
   return v;
 }
 
-function makeBlock(a: Vec, b: Vec, feedMmMin: number | "rapid", profile: MachineProfile): Block | undefined {
+export function makeBlock(a: Vec, b: Vec, feedMmMin: number | "rapid", profile: MachineProfile): Block | undefined {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len = Math.hypot(dx, dy);
   if (len < 1e-9) return undefined;
@@ -52,7 +52,7 @@ export function junctionSpeed(u1: Vec, u2: Vec, profile: MachineProfile): number
 }
 
 /** Tempo de cada bloco de uma sequência que começa e termina parada. */
-function chainTimes(blocks: readonly Block[], profile: MachineProfile): number[] {
+export function chainTimes(blocks: readonly Block[], profile: MachineProfile): number[] {
   const n = blocks.length;
   if (n === 0) return [];
   const entry = new Array<number>(n + 1).fill(0); // entry[n] = saída do último = 0
@@ -134,5 +134,5 @@ export function estimateTime(
   flush();
   if (penDown) penS += settle;
   travel(end);
-  return { estimate: { totalS: penS + drawS + travelS, drawS, travelS, penS }, strokeStartTimesS: startTimes };
+  return { estimate: { totalS: penS + drawS + travelS, drawS, travelS, penS, waitS: 0 }, strokeStartTimesS: startTimes };
 }

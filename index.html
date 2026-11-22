@@ -8,8 +8,15 @@
   </head>
   <body>
     <header class="topbar">
-      <strong class="brand">Plotter Studio</strong>
-      <nav id="toolbar" class="toolbar"></nav>
+      <span class="brand">
+        <!-- a ponta da caneta encostando numa linha -->
+        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 20c4-1 6-1 9 0s5 1 9 0" />
+          <path d="M9 14l8-11 3 2-8 11-4 1z" />
+        </svg>
+        Plotter Studio
+      </span>
+      <nav id="toolbar" class="toolbar" aria-label="Ações"></nav>
     </header>
     <div class="main">
       <div id="canvas-wrap" class="canvas-wrap"><canvas id="board"></canvas></div>

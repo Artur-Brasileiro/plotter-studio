@@ -10,7 +10,8 @@ export interface JobSettings {
 }
 
 export const DEFAULT_JOB_SETTINGS: JobSettings = {
-  speedMode: "dynamic",
+  // docs/REGRAS_GCODE.md: traço em F500 fixo. O modo dinâmico continua disponível.
+  speedMode: "fixed",
   fixedFeed: DEFAULT_PROFILE.feed.fixed,
   optimize: true,
 };

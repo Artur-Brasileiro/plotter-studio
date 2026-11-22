@@ -8,11 +8,13 @@ import type { Stroke } from "./types";
 
 const P = (x: number, y: number) => ({ x, y });
 const open = (id: string, ...pts: [number, number][]): Stroke => ({ points: pts.map(([x, y]) => P(x, y)), closed: false, drawingId: id });
+// estes testes medem a geometria com a pagina na origem da maquina (o aplicativo usa o canto da zona)
+const ORIGIN = { x: 0, y: 0 };
 const OPTS = { start: P(0, 0), joinGapMm: 0.1, allowReverse: true, rotateClosed: true };
 
 describe("documentToStrokes", () => {
   it("o quadrado do teste_quadrado_circulo em (0,0) sai com os vértices certos na máquina", () => {
-    const [sq, circle] = documentToStrokes(docFrom(quadradoCirculoSvg), DEFAULT_PROFILE);
+    const [sq, circle] = documentToStrokes(docFrom(quadradoCirculoSvg, "sample.svg", 385, ORIGIN), DEFAULT_PROFILE);
     expect(sq.points).toEqual([P(10, 110), P(110, 110), P(110, 10), P(10, 10), P(10, 110)]);
     expect(sq.closed).toBe(true);
     expect(circle.points).toHaveLength(57);
@@ -50,7 +52,7 @@ describe("orderStrokes", () => {
   });
 
   it("o laço do quadrado é girado para começar em (10,10) saindo de (0,0)", () => {
-    const strokes = documentToStrokes(docFrom(quadradoCirculoSvg), DEFAULT_PROFILE);
+    const strokes = documentToStrokes(docFrom(quadradoCirculoSvg, "sample.svg", 385, ORIGIN), DEFAULT_PROFILE);
     const [first] = orderStrokes(strokes, OPTS);
     expect(first.points[0]).toEqual(P(10, 10));
     expect(first.points[first.points.length - 1]).toEqual(P(10, 10));
@@ -58,7 +60,7 @@ describe("orderStrokes", () => {
   });
 
   it("teste_quadrado_circulo: viagem cai de 312,96 mm (ordem do arquivo) para 109,71 mm", () => {
-    const strokes = documentToStrokes(docFrom(quadradoCirculoSvg), DEFAULT_PROFILE);
+    const strokes = documentToStrokes(docFrom(quadradoCirculoSvg, "sample.svg", 385, ORIGIN), DEFAULT_PROFILE);
     const home = P(0, 0);
     expect(travelLength(keepOrder(strokes, 0.1), home, home)).toBeCloseTo(312.96, 1);
     const o = orderStrokes(strokes, OPTS);

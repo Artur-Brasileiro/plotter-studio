@@ -56,6 +56,7 @@ describe("Store", () => {
     const s = new Store();
     s.setJob({ optimize: false });
     expect(s.state.job.optimize).toBe(false);
-    expect(s.state.job.speedMode).toBe("dynamic");
+    expect(s.state.job.speedMode).toBe("fixed"); // padrão de docs/REGRAS_GCODE.md: F500 fixo
+    expect(s.state.job.fixedFeed).toBe(500);
   });
 });

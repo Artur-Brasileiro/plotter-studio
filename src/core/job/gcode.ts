@@ -1,6 +1,7 @@
 import type { Vec } from "../geometry/vec";
 import type { MachineProfile } from "../machine";
 import type { JobSettings } from "../store";
+import { CHECKPOINT_DWELLS_S, FOOTER_SETTLE_S, HEADER_SETTLE_S, WARMUP_FINAL_S, WARMUP_SETTLE_S } from "./schedule";
 import type { JobPlan } from "./types";
 
 export interface GcodeMeta {
@@ -9,9 +10,14 @@ export interface GcodeMeta {
   readonly job: JobSettings;
 }
 
+export interface GcodeOptions {
+  /** Só esta parte (0, 1, 2...) do trabalho, com cabeçalho, aquecimento e rodapé próprios */
+  readonly part?: number;
+}
+
 export interface GcodeLine {
   readonly text: string;
-  /** −1 = cabeçalho, deslocamento ou fim */
+  /** −1 = cabeçalho, deslocamento, blindagem ou fim */
   readonly strokeIndex: number;
   /** Ponto do traço que esta linha alcança */
   readonly pointIndex?: number;
@@ -51,77 +57,141 @@ export function toAsciiComment(s: string): string {
     .slice(0, 60);
 }
 
+/** Nenhuma linha passa disto: o buffer de linha do GRBL é de 80 caracteres (REGRAS_GCODE.md, regra 15). */
+export const MAX_LINE_LENGTH = 69;
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const fmtDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const fmtSeconds = (s: number) => String(Math.round(s * 1000) / 1000);
 
 /**
- * JobPlan → G-code no formato do SPEC: G21/G90/G17, caneta com M3 S220 / M5 + G4,
- * deslocamentos com G0, desenho com G1 e F só quando muda. Recusa plano com algo fora da área.
+ * JobPlan → G-code no formato de docs/REGRAS_GCODE.md (copiado de um arquivo blindado que já rodou
+ * na máquina). Cada descida é um bloco:
+ *
+ *   G0 X.. Y..      vai até o início com a caneta EM CIMA
+ *   M3 S220         desce
+ *   G4 P0.3         espera o servo (0.6 na 1ª descida)
+ *   G1 F500         modo traço
+ *   X.. Y..         pontos (G1 modal; no modo dinâmico o F vai na própria linha)
+ *   M5              sobe
+ *   G4 P0.2         espera o servo
+ *   M5 / G4 P0.2    subida dupla (blindagem)
+ *
+ * Com a blindagem ligada: aquecimento do servo no ponto seguro antes do 1º traço, checkpoints
+ * que re-sincronizam o servo, e descansos (G4 com a caneta em cima) quando o servo passaria do limite.
+ * Recusa plano com algo fora da área.
  */
-export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: GcodeMeta): GcodeProgram {
+export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: GcodeMeta, opts: GcodeOptions = {}): GcodeProgram {
   if (plan.violations.length) throw new Error("Há desenho fora da área: corrija antes de gerar o G-code.");
   const { width: W, height: H } = profile.workArea;
+  const { pen, shield } = profile;
   const lines: GcodeLine[] = [];
   const push = (text: string, strokeIndex = -1, pointIndex?: number) => lines.push({ text, strokeIndex, pointIndex });
   const xy = (p: Vec) => `X${formatCoord(Math.min(Math.max(p.x, 0), W))} Y${formatCoord(Math.min(Math.max(p.y, 0), H))}`;
-  const dwell = `G4 P${fmtSeconds(profile.pen.settleSeconds)}`;
-  const up = toAsciiComment(profile.pen.upCmd);
-  const down = toAsciiComment(profile.pen.downCmd);
+  const dwell = (s: number) => `G4 P${fmtSeconds(s)}`;
+  const up = toAsciiComment(pen.upCmd);
+  const down = toAsciiComment(pen.downCmd);
+  const dynamic = meta.job.speedMode === "dynamic";
+  const descents = opts.part === undefined ? plan.descents : plan.descents.filter((d) => d.part === opts.part);
+  const parts = plan.stats.parts;
 
-  const mode =
-    meta.job.speedMode === "dynamic"
-      ? `dinamico - reta F${profile.feed.straight} / curva F${profile.feed.curve} / fechada F${profile.feed.tightCurve}`
-      : `fixo F${meta.job.fixedFeed}`;
-  push(`; Plotter Studio - ${toAsciiComment(meta.fileName)} - ${fmtDate(meta.date)}`);
+  const lift = () => {
+    const n = shield.enabled && shield.doubleLift ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      push(up);
+      push(dwell(pen.settleUpSeconds));
+    }
+  };
+
+  // ------------------------------------------------------------ cabeçalho
+  const mode = dynamic
+    ? `dinamico - reta F${profile.feed.straight} / curva F${profile.feed.curve} / fechada F${profile.feed.tightCurve}`
+    : `fixo F${meta.job.fixedFeed}`;
+  push(`; Plotter Studio - ${toAsciiComment(meta.fileName).slice(0, 28)} - ${fmtDate(meta.date)}`);
   push(`; modo: ${mode}`);
+  if (opts.part !== undefined) push(`; parte ${opts.part + 1} de ${parts}`);
   push("G21");
   push("G90");
-  push("G17");
   push(up);
-  push(dwell);
-
-  // Posição atual, já formatada. Começa DESCONHECIDA: o arquivo pode ser rodado com a máquina em
-  // qualquer lugar (ex.: logo depois do Home, em 810/385), então o primeiro G0 nunca pode ser omitido.
-  let pos: string | undefined;
-  let lastF: number | undefined;
-  let penDown = false;
-
-  const g1 = (p: Vec, f: number, si: number, pi: number) => {
-    const t = xy(p);
-    if (t === pos) return; // repetido depois de arredondar
-    push(`G1 ${t}${f !== lastF ? ` F${f}` : ""}`, si, pi);
-    lastF = f;
-    pos = t;
-  };
-  const g0 = (p: Vec) => {
-    const t = xy(p);
-    if (t !== pos) push(`G0 ${t}`);
-    pos = t;
-  };
-
-  plan.strokes.forEach((s, si) => {
-    const pts = s.points;
-    if (pts.length === 0) return;
-    if (!s.joinedToPrevious || !penDown) {
-      if (penDown) {
-        push(up);
-        push(dwell);
-      }
-      g0(pts[0]);
-      push(down, si, 0);
-      push(dwell, si, 0);
-      penDown = true;
-    } else {
-      g1(pts[0], s.feeds[0] ?? lastF ?? profile.feed.straight, si, 0);
+  push(dwell(HEADER_SETTLE_S));
+  if (shield.enabled && shield.warmupCycles > 0) {
+    push("; aquecimento do servo no ponto seguro");
+    push(up);
+    push(dwell(HEADER_SETTLE_S));
+    push(`G0 ${xy({ x: shield.safeX, y: shield.safeY })}`);
+    for (let i = 0; i < shield.warmupCycles; i++) {
+      push(down);
+      push(dwell(WARMUP_SETTLE_S));
+      push(up);
+      push(dwell(WARMUP_SETTLE_S));
     }
-    for (let j = 1; j < pts.length; j++) g1(pts[j], s.feeds[j - 1], si, j);
+    push(dwell(WARMUP_FINAL_S));
+  }
+
+  // ------------------------------------------------------------ descidas
+  descents.forEach((d, di) => {
+    // numa parte avulsa, a 1ª descida vem logo depois do aquecimento: sem descanso nem checkpoint
+    const firstOfFile = di === 0;
+    if (!firstOfFile || opts.part === undefined) {
+      if (d.waitS > 0.05) {
+        push("; descanso do servo");
+        push(dwell(Math.round(d.waitS * 10) / 10));
+      }
+      if (d.checkpoint !== undefined) {
+        push(`; CHECKPOINT ${d.checkpoint} (~${d.checkpointMin ?? 0} min) re-sincroniza servo`);
+        CHECKPOINT_DWELLS_S.forEach((s, i) => {
+          push(i % 2 === 0 ? down : up);
+          push(dwell(s));
+        });
+      }
+    }
+    const s0 = plan.strokes[d.first];
+    // o G0 sai sempre: o arquivo pode ser rodado com a máquina em qualquer lugar, e num corte
+    // de descida longa ele repete o ponto atual (mantém todo bloco com a mesma forma)
+    const startPoint = d.relift && d.first > 0 ? lastPointBefore(plan, d.first) : s0.points[0];
+    let pos = xy(startPoint);
+    push(`G0 ${pos}`);
+    push(down, d.first, 0);
+    push(dwell(firstOfFile && shield.enabled ? shield.firstSettleSeconds : pen.settleSeconds), d.first, 0);
+
+    let lastF = dynamic ? (s0.feeds[0] ?? profile.feed.straight) : meta.job.fixedFeed;
+    push(`G1 F${lastF}`, d.first, 0);
+    const move = (p: Vec, f: number, si: number, pi: number) => {
+      const t = xy(p);
+      if (t === pos) return; // repetido depois de arredondar
+      const feed = dynamic && f !== lastF ? ` F${f}` : "";
+      if (feed) lastF = f;
+      push(`${t}${feed}`, si, pi);
+      pos = t;
+    };
+    for (let si = d.first; si <= d.last; si++) {
+      const s = plan.strokes[si];
+      const pts = s.points;
+      if (pts.length === 0) continue;
+      // ligação da emenda: desenhada, com a caneta embaixo
+      move(pts[0], s.feeds[0] ?? lastF, si, 0);
+      for (let j = 1; j < pts.length; j++) move(pts[j], s.feeds[j - 1], si, j);
+    }
+    lift();
   });
 
-  if (penDown) {
-    push(up);
-    push(dwell);
+  // ------------------------------------------------------------ rodapé
+  if (shield.enabled) {
+    for (let i = 0; i < 2; i++) {
+      push(up);
+      push(dwell(FOOTER_SETTLE_S));
+    }
   }
-  g0(plan.end);
+  push(`G0 ${xy(plan.end)}`);
+  push("M2");
   return { lines, toText: () => lines.map((l) => l.text).join("\n") + "\n" };
+}
+
+/** Onde a caneta parou antes do traço `index` (para re-descer no mesmo ponto). */
+function lastPointBefore(plan: JobPlan, index: number): Vec {
+  for (let i = index - 1; i >= 0; i--) {
+    const pts = plan.strokes[i].points;
+    if (pts.length) return pts[pts.length - 1];
+  }
+  return plan.strokes[index].points[0];
 }

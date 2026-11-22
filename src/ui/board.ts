@@ -2,9 +2,9 @@ import type { Canvas } from "fabric";
 import type { MachineProfile } from "../core/machine";
 
 /**
- * Desenha a mesa (área útil, grade, gabaritos, origem) no canvas de baixo do Fabric,
- * no evento before:render. Não são objetos do Fabric: a grade fica sempre com 1 px,
- * em qualquer zoom, e nunca entra na seleção.
+ * Desenha a mesa no canvas de baixo do Fabric, no evento before:render: o tampo (curso da máquina),
+ * as réguas riscadas nele, a folha (zona de desenho), os gabaritos de papel e a origem.
+ * Não são objetos do Fabric: as linhas ficam sempre com 1 px, em qualquer zoom, e nunca entram na seleção.
  *
  * Tudo aqui é em mm da cena (Y para baixo). A grade é alinhada à origem da MÁQUINA
  * (canto inferior esquerdo), por isso as linhas horizontais ficam em y_cena = H − k·10.
@@ -24,36 +24,74 @@ export function installBoard(canvas: Canvas, getProfile: () => MachineProfile): 
   return () => canvas.off("before:render", handler);
 }
 
+// cores da mesa (as mesmas de --table e --paper em style.css)
+const TABLE = "#dcc09a";
+const TABLE_EDGE = "#8a6f48";
+const GRAPHITE = "74, 58, 38"; // lápis sobre a madeira
+const PAPER = "#ffffff";
+const PAPER_GRID = "20, 33, 61"; // tinta, bem fraca
+const PLAN = "#1b4fa8";
+const INK = "#14213d";
+const FONT = 'Bahnschrift, "DIN Alternate", "Segoe UI", system-ui, sans-serif';
+
 function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number) {
   const { width: W, height: H } = p.workArea;
+  const zone = p.drawZone;
   const px = 1 / z; // 1 pixel de tela, em mm
-
-  ctx.fillStyle = "#fbfaf7";
-  ctx.fillRect(0, 0, W, H);
-
   const line = (x1: number, y1: number, x2: number, y2: number) => {
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
   };
+
+  // ---------------------------------------------------------------- tampo
+  ctx.fillStyle = TABLE;
+  ctx.fillRect(0, 0, W, H);
   ctx.lineWidth = px;
-  if (z * 10 >= 4) {
+  if (z * 10 >= 5) {
     ctx.beginPath();
     for (let x = 10; x < W; x += 10) if (x % 50 !== 0) line(x, 0, x, H);
     for (let y = 10; y < H; y += 10) if (y % 50 !== 0) line(0, H - y, W, H - y);
-    ctx.strokeStyle = "#ece8de";
+    ctx.strokeStyle = `rgba(${GRAPHITE}, 0.13)`;
     ctx.stroke();
   }
   ctx.beginPath();
   for (let x = 50; x < W; x += 50) line(x, 0, x, H);
   for (let y = 50; y < H; y += 50) line(0, H - y, W, H - y);
-  ctx.strokeStyle = "#d6d1c4";
+  ctx.strokeStyle = `rgba(${GRAPHITE}, 0.3)`;
   ctx.stroke();
 
-  // gabaritos de papel (em mm da máquina → cena)
+  // ---------------------------------------------------------------- folha (zona de desenho)
+  const zx = zone.minX, zy = H - zone.maxY, zw = zone.maxX - zone.minX, zh = zone.maxY - zone.minY;
+  ctx.fillStyle = "rgba(60, 44, 20, 0.22)";
+  ctx.fillRect(zx + 2.5 * px, zy + 3 * px, zw, zh); // sombra da folha no tampo
+  ctx.fillStyle = PAPER;
+  ctx.fillRect(zx, zy, zw, zh);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(zx, zy, zw, zh);
+  ctx.clip();
+  if (z * 10 >= 5) {
+    ctx.beginPath();
+    for (let x = 10; x < W; x += 10) if (x % 50 !== 0) line(x, 0, x, H);
+    for (let y = 10; y < H; y += 10) if (y % 50 !== 0) line(0, H - y, W, H - y);
+    ctx.strokeStyle = `rgba(${PAPER_GRID}, 0.05)`;
+    ctx.stroke();
+  }
+  ctx.beginPath();
+  for (let x = 50; x < W; x += 50) line(x, 0, x, H);
+  for (let y = 50; y < H; y += 50) line(0, H - y, W, H - y);
+  ctx.strokeStyle = `rgba(${PAPER_GRID}, 0.1)`;
+  ctx.stroke();
+  ctx.restore();
+  ctx.lineWidth = px;
+  ctx.strokeStyle = `rgba(${PAPER_GRID}, 0.35)`;
+  ctx.strokeRect(zx, zy, zw, zh);
+
+  // ---------------------------------------------------------------- gabaritos de papel
+  ctx.font = `${12 * px}px ${FONT}`;
   ctx.setLineDash([6 * px, 4 * px]);
-  ctx.strokeStyle = "#4a7bd0";
-  ctx.fillStyle = "#4a7bd0";
-  ctx.font = `${12 * px}px system-ui, "Segoe UI", sans-serif`;
+  ctx.strokeStyle = PLAN;
+  ctx.fillStyle = PLAN;
   ctx.textBaseline = "top";
   ctx.textAlign = "right";
   for (const t of p.paperTemplates) {
@@ -63,37 +101,72 @@ function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number) 
   }
   ctx.setLineDash([]);
 
-  // borda da área útil
-  ctx.lineWidth = 1.5 * px;
-  ctx.strokeStyle = "#333";
+  // ---------------------------------------------------------------- réguas (números a cada 50 mm, se couberem)
+  if (z * 50 >= 34) {
+    ctx.fillStyle = `rgba(${GRAPHITE}, 0.85)`;
+    ctx.font = `${11 * px}px ${FONT}`;
+    ctx.textBaseline = "bottom";
+    ctx.textAlign = "left";
+    for (let x = 50; x < W; x += 50) ctx.fillText(String(x), x + 3 * px, H - 2 * px);
+    for (let y = 50; y < H; y += 50) ctx.fillText(String(y), 3 * px, H - y - 2 * px);
+  }
+
+  // ---------------------------------------------------------------- borda do tampo
+  ctx.lineWidth = 2 * px;
+  ctx.strokeStyle = TABLE_EDGE;
   ctx.strokeRect(0, 0, W, H);
 
-  // origem da máquina: setas X+ (direita) e Y+ (para cima na tela = para longe do operador)
+  // ---------------------------------------------------------------- legendas
+  ctx.font = `${12 * px}px ${FONT}`;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "right";
+  ctx.fillStyle = `rgba(${GRAPHITE}, 0.9)`;
+  ctx.fillText(`curso da máquina ${W} × ${H} mm`, W - 6 * px, 5 * px);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = `rgba(${PAPER_GRID}, 0.55)`;
+  ctx.fillText(`folha ${fmt(zw)} × ${fmt(zh)} mm`, zx + 5 * px, zy + 4 * px);
+
+  // ---------------------------------------------------------------- ponto seguro do aquecimento do servo
+  if (p.shield.enabled && p.shield.warmupCycles > 0) {
+    const sx = p.shield.safeX, sy = H - p.shield.safeY;
+    const r = 5 * px;
+    ctx.lineWidth = 1.5 * px;
+    ctx.strokeStyle = INK;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    line(sx - r * 1.7, sy, sx + r * 1.7, sy);
+    line(sx, sy - r * 1.7, sx, sy + r * 1.7);
+    ctx.stroke();
+  }
+
+  // ---------------------------------------------------------------- origem: X+ (direita) e Y+ (para longe do operador)
   const a = 30 * px;
   const head = 6 * px;
   ctx.lineWidth = 2 * px;
-  ctx.strokeStyle = ctx.fillStyle = "#b03a2e";
+  ctx.strokeStyle = ctx.fillStyle = "#c0362c";
   ctx.beginPath();
   line(0, H, a, H);
   line(a, H, a - head, H - head / 1.5);
   line(a, H, a - head, H + head / 1.5);
   ctx.stroke();
-  ctx.strokeStyle = ctx.fillStyle = "#2e7d32";
+  ctx.strokeStyle = "#12805c";
   ctx.beginPath();
   line(0, H, 0, H - a);
   line(0, H - a, -head / 1.5, H - a + head);
   line(0, H - a, head / 1.5, H - a + head);
   ctx.stroke();
-
-  ctx.textBaseline = "bottom";
+  ctx.font = `600 ${12 * px}px ${FONT}`;
+  ctx.textBaseline = "top";
   ctx.textAlign = "left";
-  ctx.fillStyle = "#b03a2e";
-  ctx.fillText("(0,0)", 4 * px, H - 4 * px);
-  ctx.fillText("X+", a + 3 * px, H + 5 * px);
-  ctx.fillStyle = "#2e7d32";
-  ctx.fillText("Y+", 4 * px, H - a);
-
+  ctx.fillStyle = "#c0362c";
+  ctx.fillText("X+", a + 3 * px, H + 3 * px);
+  ctx.fillStyle = INK;
+  ctx.fillText("(0,0)", -2 * px, H + 16 * px);
+  ctx.textBaseline = "bottom";
   ctx.textAlign = "right";
-  ctx.fillStyle = "#777";
-  ctx.fillText(`${W} × ${H} mm`, W - 6 * px, H - 4 * px);
+  ctx.fillStyle = "#12805c";
+  ctx.fillText("Y+", -5 * px, H - a + 4 * px);
 }
+
+const fmt = (v: number) => (Math.round(v * 10) / 10).toLocaleString("pt-BR");

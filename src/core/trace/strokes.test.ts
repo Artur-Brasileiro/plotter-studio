@@ -220,6 +220,7 @@ describe.skipIf(!import.meta.env.VITE_TRACE_PERF)("tempo: esqueleto de ~1 milhã
     const sets = {
       traceFine: { tol: 0.18, cL: 1.6, cdeg: 50, gap: 0.8, smooth: 0.3, presmooth: 0.25 },
       traceBold: { tol: 0.18, cL: 2.4, cdeg: 50, gap: 1.1, smooth: 0.55, presmooth: 0.25 },
+      "traceBold + régua": { tol: 0.18, cL: 2.4, cdeg: 50, gap: 1.1, smooth: 0.55, presmooth: 0.25, straighten: 0.6 },
       padrao: {},
     };
     for (const [name, opts] of Object.entries(sets)) {

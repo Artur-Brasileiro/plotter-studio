@@ -15,6 +15,9 @@ import type { Mask, Polyline } from "./types";
  *  5. em cada junção, emparelha os ramos que continuam um ao outro quase em linha reta, corta os
  *     pontos de dentro da junção (onde o esqueleto entorta) e põe no lugar um ponto de junção limpo;
  *  6. monta os traços seguindo os pares; o que sobra muito curto vira ponto.
+ *
+ * Cada etapa é uma função pequena de propósito: além de mais fácil de ler, o V8 só otimiza bem os
+ * laços longos (um por pixel do esqueleto) quando eles estão em funções curtas.
  */
 export interface StrokeOptions {
   /** Folga da poda de rebarbas, em px da imagem original. Padrão 1,0. */
@@ -31,14 +34,6 @@ export interface StrokeResult {
   polylines: Polyline[];
   /** Pontos isolados: x0, y0, x1, y1, ... */
   dots: Float64Array;
-}
-
-/** Aresta do grafo de traços: liga os nós `a` e `b`; `pts` vai de `a` até `b`, em px da máscara. */
-interface Edge {
-  a: number;
-  b: number;
-  pts: Float64Array;
-  alive: boolean;
 }
 
 /** Lista de inteiros que cresce (as cadeias de pixels de todos os traços ficam numa lista só). */
@@ -60,6 +55,10 @@ class IntList {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 1. Grafo de pixels
+// ---------------------------------------------------------------------------------------------
+
 interface PixelGraph {
   count: number;
   /** Coordenadas de cada pixel do esqueleto, na ordem linha a linha. */
@@ -71,42 +70,62 @@ interface PixelGraph {
 }
 
 /**
- * Numera os pixels do esqueleto linha a linha e lista os vizinhos de cada um. Só guarda três linhas
- * de números por vez (a de cima, a atual e a de baixo), então a memória depende da quantidade de
- * pixels do esqueleto e não do tamanho da imagem.
+ * Posições (y·W + x) dos pixels acesos, em ordem. Onde dá, lê 4 bytes de cada vez: o esqueleto é
+ * quase todo vazio, e assim a imagem inteira (dezenas de milhões de pixels) passa em poucos ms.
+ */
+function litPixels(data: Uint8Array, total: number): Int32Array {
+  const out = new IntList(4096);
+  let i = 0;
+  if (data.byteOffset % 4 === 0) {
+    const words = new Uint32Array(data.buffer, data.byteOffset, total >> 2);
+    for (let w = 0; w < words.length; w++) {
+      if (words[w] === 0) continue;
+      const b = 4 * w;
+      if (data[b]) out.push(b);
+      if (data[b + 1]) out.push(b + 1);
+      if (data[b + 2]) out.push(b + 2);
+      if (data[b + 3]) out.push(b + 3);
+    }
+    i = 4 * words.length;
+  }
+  for (; i < total; i++) if (data[i]) out.push(i);
+  return out.data.subarray(0, out.length);
+}
+
+/**
+ * Numera os pixels do esqueleto linha a linha e lista os vizinhos de cada um. O custo e a memória
+ * dependem da quantidade de pixels do esqueleto, não do tamanho da imagem: fora a varredura inicial,
+ * só existem três linhas de números por vez (a de cima, a atual e a de baixo).
  */
 function buildPixelGraph(skel: Mask): PixelGraph {
   const { width: W, height: H, data } = skel;
-  let count = 0;
-  for (let i = 0, len = W * H; i < len; i++) if (data[i]) count++;
+  const lit = litPixels(data, Math.min(W * H, data.length));
+  const count = lit.length;
   const xs = new Int32Array(count);
   const ys = new Int32Array(count);
+  const rowStart = new Int32Array(H + 2); // os pixels da linha y são rowStart[y] .. rowStart[y+1]-1
+  for (let p = 0, y = 0; p < count; p++) {
+    while (lit[p] >= (y + 1) * W) rowStart[++y] = p;
+    ys[p] = y;
+    xs[p] = lit[p] - y * W;
+    if (p === count - 1) for (let r = y + 1; r < H + 2; r++) rowStart[r] = count;
+  }
   const off = new Int32Array(count + 1);
   let nb = new Int32Array(2 * count + 64);
   // linhas de números com uma coluna de folga de cada lado; -1 = sem pixel
   let above = new Int32Array(W + 2).fill(-1);
   let cur = new Int32Array(W + 2).fill(-1);
   let below = new Int32Array(W + 2).fill(-1);
-  let nextId = 0;
-  const numberRow = (row: Int32Array, y: number): void => {
-    row.fill(-1);
-    if (y >= H) return;
-    const base = y * W;
-    for (let x = 0; x < W; x++) {
-      if (data[base + x]) {
-        xs[nextId] = x;
-        ys[nextId] = y;
-        row[x + 1] = nextId++;
-      }
-    }
+  /** Escreve (ou apaga) os números da linha y na linha de trabalho; só toca onde há pixel. */
+  const stamp = (row: Int32Array, y: number, write: boolean): void => {
+    if (y < 0 || y >= H) return;
+    for (let q = rowStart[y]; q < rowStart[y + 1]; q++) row[xs[q] + 1] = write ? q : -1;
   };
-  numberRow(cur, 0);
+  stamp(cur, 0, true);
   let m = 0;
-  let p = 0;
   for (let y = 0; y < H; y++) {
-    const rowEnd = nextId; // os pixels desta linha são p .. rowEnd-1
-    numberRow(below, y + 1);
-    for (; p < rowEnd; p++) {
+    stamp(below, y + 1, true);
+    for (let p = rowStart[y]; p < rowStart[y + 1]; p++) {
       if (m + 8 > nb.length) {
         const bigger = new Int32Array(nb.length * 2);
         bigger.set(nb);
@@ -127,6 +146,8 @@ function buildPixelGraph(skel: Mask): PixelGraph {
       if (down < 0 && left < 0 && below[x - 1] >= 0) nb[m++] = below[x - 1];
       if (down < 0 && right < 0 && below[x + 1] >= 0) nb[m++] = below[x + 1];
     }
+    // a linha de cima não serve mais: é limpa e passa a ser a próxima linha de baixo
+    stamp(above, y - 1, false);
     const t = above;
     above = cur;
     cur = below;
@@ -136,11 +157,172 @@ function buildPixelGraph(skel: Mask): PixelGraph {
   return { count, xs, ys, off, nb };
 }
 
+// ---------------------------------------------------------------------------------------------
+// 2. Cadeias, laços e pontos
+// ---------------------------------------------------------------------------------------------
+
+interface Chains {
+  /** Pixels de todas as cadeias, uma atrás da outra; a cadeia c ocupa `pix[start[c] .. start[c+1])`. */
+  pix: Int32Array;
+  start: Int32Array;
+  count: number;
+  /** Laços puros (todos os pixels de grau 2), cada um como a lista dos seus pixels. */
+  loops: Int32Array[];
+}
+
+/** Cadeias entre pixels-nó (grau ≠ 2), cada uma com os dois nós nas pontas; e os laços que sobram. */
+function traceChains(g: PixelGraph): Chains {
+  const { count: N, off, nb } = g;
+  const pix = new IntList(N + 1024);
+  const start = new IntList(1024);
+  start.push(0);
+  const visited = new Uint8Array(off[N]); // (p → vizinho) já percorrido, por posição em `nb`
+  const seen = new Uint8Array(N);
+  for (let p = 0; p < N; p++) {
+    if (off[p + 1] - off[p] === 2) continue;
+    seen[p] = 1;
+    for (let e = off[p]; e < off[p + 1]; e++) {
+      if (visited[e]) continue;
+      pix.push(p);
+      pix.push(nb[e]);
+      let prev = p;
+      let cur = nb[e];
+      seen[cur] = 1;
+      while (off[cur + 1] - off[cur] === 2) {
+        const first = nb[off[cur]];
+        const nxt = first !== prev ? first : nb[off[cur] + 1];
+        pix.push(nxt);
+        seen[nxt] = 1;
+        prev = cur;
+        cur = nxt;
+      }
+      visited[e] = 1;
+      for (let f = off[cur]; f < off[cur + 1]; f++) {
+        if (nb[f] === prev) {
+          visited[f] = 1; // o mesmo caminho visto da outra ponta
+          break;
+        }
+      }
+      start.push(pix.length);
+    }
+  }
+  // o que sobrou sem visitar só tem pixels de grau 2: laços puros
+  const loops: Int32Array[] = [];
+  for (let p = 0; p < N; p++) {
+    if (seen[p]) continue;
+    const loop = new IntList(64);
+    loop.push(p);
+    let prev = -1;
+    let cur = p;
+    for (let guard = 0; guard < N + 2; guard++) {
+      const first = nb[off[cur]];
+      const nxt = first !== prev ? first : nb[off[cur] + 1];
+      if (nxt === p) break;
+      loop.push(nxt);
+      seen[nxt] = 1;
+      prev = cur;
+      cur = nxt;
+    }
+    seen[p] = 1;
+    loops.push(loop.data.subarray(0, loop.length));
+  }
+  return { pix: pix.data, start: start.data, count: start.length - 1, loops };
+}
+
+// ---------------------------------------------------------------------------------------------
+// 3. Nós e arestas
+// ---------------------------------------------------------------------------------------------
+
+interface Nodes {
+  count: number;
+  /** Nó de cada pixel-nó (-1 nos outros pixels). */
+  of: Int32Array;
+  /** Posição (x, y) de cada nó: média dos pixels que o formam. */
+  pos: Float64Array;
+  /** Raio do traço em cada nó: a maior distância à borda entre os pixels que o formam. */
+  rad: Float64Array;
+  /** Cadeias que viram aresta (as curtas entre dois pixels de junção só servem para uni-los). */
+  kept: number[];
+}
+
+/** Une os pixels de junção vizinhos (union-find) e monta os nós do grafo de traços. */
+function buildNodes(g: PixelGraph, chains: Chains, dist: Float32Array, W: number): Nodes {
+  const { count: N, xs, ys, off } = g;
+  const uf = new Int32Array(N);
+  for (let p = 0; p < N; p++) uf[p] = p;
+  const find = (a: number): number => {
+    while (uf[a] !== a) {
+      uf[a] = uf[uf[a]];
+      a = uf[a];
+    }
+    return a;
+  };
+  const kept: number[] = [];
+  for (let c = 0; c < chains.count; c++) {
+    const a = chains.pix[chains.start[c]];
+    const b = chains.pix[chains.start[c + 1] - 1];
+    if (off[a + 1] - off[a] >= 3 && off[b + 1] - off[b] >= 3) {
+      const steps = chains.start[c + 1] - chains.start[c] - 1;
+      if (steps <= Math.max(2.0, dist[ys[a] * W + xs[a]] + dist[ys[b] * W + xs[b]])) {
+        const ra = find(a);
+        const rb = find(b);
+        if (ra !== rb) uf[ra] = rb;
+        continue;
+      }
+    }
+    kept.push(c);
+  }
+  // grupos na ordem em que o primeiro pixel de cada um aparece
+  const members = new Map<number, number[]>();
+  for (let p = 0; p < N; p++) {
+    const d = off[p + 1] - off[p];
+    if (d === 2 || d === 0) continue;
+    const root = find(p);
+    const lst = members.get(root);
+    if (lst) lst.push(p);
+    else members.set(root, [p]);
+  }
+  const count = members.size;
+  const of = new Int32Array(N).fill(-1);
+  const pos = new Float64Array(2 * count);
+  const rad = new Float64Array(count);
+  let nid = 0;
+  for (const mem of members.values()) {
+    let sx = 0;
+    let sy = 0;
+    let r = -Infinity;
+    for (const p of mem) {
+      of[p] = nid;
+      sx += xs[p];
+      sy += ys[p];
+      const d = dist[ys[p] * W + xs[p]];
+      if (d > r) r = d;
+    }
+    pos[2 * nid] = sx / mem.length;
+    pos[2 * nid + 1] = sy / mem.length;
+    rad[nid] = r;
+    nid++;
+  }
+  return { count, of, pos, rad, kept };
+}
+
+/** Aresta do grafo de traços: liga os nós `a` e `b`; `pts` vai de `a` até `b`, em px da máscara. */
+interface Edge {
+  a: number;
+  b: number;
+  pts: Float64Array;
+  alive: boolean;
+}
+
+/** Rascunho de `polylineLength`, reaproveitado entre chamadas (ela é chamada uma vez por traço). */
+let lengthScratch = new Float64Array(256);
+
 /** `_polylen`: comprimento da polilinha (segmentos por `np.hypot`, soma em pares como o NumPy). */
 function polylineLength(pts: Float64Array): number {
   const n = pts.length >> 1;
   if (n < 2) return 0;
-  const seg = new Float64Array(n - 1);
+  if (lengthScratch.length < n - 1) lengthScratch = new Float64Array(Math.max(n - 1, 2 * lengthScratch.length));
+  const seg = lengthScratch;
   for (let i = 0; i < n - 1; i++) {
     const dx = pts[2 * i + 2] - pts[2 * i];
     const dy = pts[2 * i + 3] - pts[2 * i + 1];
@@ -148,6 +330,30 @@ function polylineLength(pts: Float64Array): number {
   }
   return pairwiseSum(seg, 0, n - 1);
 }
+
+function buildEdges(g: PixelGraph, chains: Chains, nodes: Nodes): Edge[] {
+  const { xs, ys } = g;
+  const edges: Edge[] = [];
+  for (const c of nodes.kept) {
+    const lo = chains.start[c];
+    const len = chains.start[c + 1] - lo;
+    const pts = new Float64Array(2 * len);
+    for (let t = 0; t < len; t++) {
+      const p = chains.pix[lo + t];
+      pts[2 * t] = xs[p];
+      pts[2 * t + 1] = ys[p];
+    }
+    const a = nodes.of[chains.pix[lo]];
+    const b = nodes.of[chains.pix[lo + len - 1]];
+    if (a === b && polylineLength(pts) < 2.5 * nodes.rad[a] + 2) continue; // lacinho colado na própria junção
+    edges.push({ a, b, pts, alive: true });
+  }
+  return edges;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 4. Poda das rebarbas
+// ---------------------------------------------------------------------------------------------
 
 /** Pontas de aresta em cada nó, na ordem em que aparecem; cada ponta é `2·aresta + lado` (0 = a, 1 = b). */
 function incidence(edges: readonly Edge[]): Map<number, number[]> {
@@ -212,162 +418,11 @@ function dissolve(edges: Edge[]): void {
 }
 
 /**
- * Traços de linha única a partir do esqueleto de uma máscara ampliada `k` vezes.
- *
- * `skel`: esqueleto de 1 pixel de espessura (o `skeletonize` do scikit-image). `dist`: transformada
- * de distância euclidiana da máscara ORIGINAL (antes de afinar), linha a linha, do mesmo tamanho;
- * só é lida nos pixels do esqueleto e dá o raio do traço em cada junção. A saída sai em px da
- * imagem original: `(x_ampliado + 0,5) / k`.
+ * Tira as rebarbas (aresta com exatamente uma ponta solta, mais curta que o raio da junção +
+ * `spurAbs`) e funde o que sobra em nós de grau 2. Até 4 rodadas, porque podar revela novas pontas.
  */
-export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts: StrokeOptions = {}): StrokeResult {
-  const spurPx = opts.spurPx ?? 1.0;
-  const pairDeg = opts.pairDeg ?? 42.0;
-  const dotPx = opts.dotPx ?? 0.6;
-  const junctionClean = opts.junctionClean ?? true;
-  const W = skel.width;
-
-  const { count: N, xs, ys, off, nb } = buildPixelGraph(skel);
-  if (N === 0) return { polylines: [], dots: new Float64Array(0) };
-  const radiusAt = (p: number): number => dist[ys[p] * W + xs[p]];
-
-  // ---- cadeias entre pixels-nó (grau != 2)
-  const chainPix = new IntList(N + 1024);
-  const chainOff: number[] = [0]; // a cadeia c ocupa chainPix[chainOff[c] .. chainOff[c+1])
-  const visited = new Uint8Array(off[N]); // (p → vizinho) já percorrido, por posição em `nb`
-  const seen = new Uint8Array(N);
-  for (let p = 0; p < N; p++) {
-    if (off[p + 1] - off[p] === 2) continue;
-    seen[p] = 1;
-    for (let e = off[p]; e < off[p + 1]; e++) {
-      if (visited[e]) continue;
-      chainPix.push(p);
-      chainPix.push(nb[e]);
-      let prev = p;
-      let cur = nb[e];
-      seen[cur] = 1;
-      while (off[cur + 1] - off[cur] === 2) {
-        const first = nb[off[cur]];
-        const nxt = first !== prev ? first : nb[off[cur] + 1];
-        chainPix.push(nxt);
-        seen[nxt] = 1;
-        prev = cur;
-        cur = nxt;
-      }
-      visited[e] = 1;
-      for (let f = off[cur]; f < off[cur + 1]; f++) {
-        if (nb[f] === prev) {
-          visited[f] = 1; // o mesmo caminho visto da outra ponta
-          break;
-        }
-      }
-      chainOff.push(chainPix.length);
-    }
-  }
-  const chainCount = chainOff.length - 1;
-
-  // ---- laços puros: o que sobrou sem visitar só tem pixels de grau 2
-  const loops: Int32Array[] = [];
-  for (let p = 0; p < N; p++) {
-    if (seen[p]) continue;
-    const loop = new IntList(64);
-    loop.push(p);
-    let prev = -1;
-    let cur = p;
-    for (let guard = 0; guard < N + 2; guard++) {
-      const first = nb[off[cur]];
-      const nxt = first !== prev ? first : nb[off[cur] + 1];
-      if (nxt === p) break;
-      loop.push(nxt);
-      seen[nxt] = 1;
-      prev = cur;
-      cur = nxt;
-    }
-    seen[p] = 1;
-    loops.push(loop.data.subarray(0, loop.length));
-  }
-
-  // pontos isolados, em px da máscara (convertidos no fim)
-  const rawDots: number[] = [];
-  for (let p = 0; p < N; p++) if (off[p + 1] === off[p]) rawDots.push(xs[p], ys[p]);
-
-  // ---- une pixels de junção próximos (union-find)
-  const uf = new Int32Array(N);
-  for (let p = 0; p < N; p++) uf[p] = p;
-  const find = (a: number): number => {
-    while (uf[a] !== a) {
-      uf[a] = uf[uf[a]];
-      a = uf[a];
-    }
-    return a;
-  };
-  const kept: number[] = [];
-  for (let c = 0; c < chainCount; c++) {
-    const a = chainPix.data[chainOff[c]];
-    const b = chainPix.data[chainOff[c + 1] - 1];
-    if (off[a + 1] - off[a] >= 3 && off[b + 1] - off[b] >= 3) {
-      const steps = chainOff[c + 1] - chainOff[c] - 1;
-      if (steps <= Math.max(2.0, radiusAt(a) + radiusAt(b))) {
-        const ra = find(a);
-        const rb = find(b);
-        if (ra !== rb) uf[ra] = rb;
-        continue;
-      }
-    }
-    kept.push(c);
-  }
-
-  // ---- nós: cada grupo de pixels-nó unidos; posição = média, raio = maior distância à borda
-  const members = new Map<number, number[]>();
-  for (let p = 0; p < N; p++) {
-    const d = off[p + 1] - off[p];
-    if (d === 2 || d === 0) continue;
-    const root = find(p);
-    const lst = members.get(root);
-    if (lst) lst.push(p);
-    else members.set(root, [p]);
-  }
-  const nodeCount = members.size;
-  const nodeOf = new Int32Array(N).fill(-1);
-  const npos = new Float64Array(2 * nodeCount);
-  const nrad = new Float64Array(nodeCount);
-  let nid = 0;
-  for (const mem of members.values()) {
-    let sx = 0;
-    let sy = 0;
-    let r = -Infinity;
-    for (const p of mem) {
-      nodeOf[p] = nid;
-      sx += xs[p];
-      sy += ys[p];
-      const d = radiusAt(p);
-      if (d > r) r = d;
-    }
-    npos[2 * nid] = sx / mem.length;
-    npos[2 * nid + 1] = sy / mem.length;
-    nrad[nid] = r;
-    nid++;
-  }
-
-  // ---- arestas
-  let edges: Edge[] = [];
-  for (const c of kept) {
-    const lo = chainOff[c];
-    const len = chainOff[c + 1] - lo;
-    const pts = new Float64Array(2 * len);
-    for (let t = 0; t < len; t++) {
-      const p = chainPix.data[lo + t];
-      pts[2 * t] = xs[p];
-      pts[2 * t + 1] = ys[p];
-    }
-    const a = nodeOf[chainPix.data[lo]];
-    const b = nodeOf[chainPix.data[lo + len - 1]];
-    if (a === b && polylineLength(pts) < 2.5 * nrad[a] + 2) continue; // lacinho colado na própria junção
-    edges.push({ a, b, pts, alive: true });
-  }
-
-  // ---- poda das rebarbas
-  const spurAbs = spurPx * k;
-  const degree = new Int32Array(nodeCount);
+function pruneSpurs(edges: Edge[], nodes: Nodes, spurAbs: number): Edge[] {
+  const degree = new Int32Array(nodes.count);
   for (let round = 0; round < 4; round++) {
     degree.fill(0);
     for (const e of edges) {
@@ -380,9 +435,9 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
       if (!e.alive || e.a === e.b) continue;
       const la = degree[e.a] === 1;
       const lb = degree[e.b] === 1;
-      if (la === lb) continue; // rebarba = exatamente uma ponta solta
+      if (la === lb) continue;
       const jn = la ? e.b : e.a;
-      if (degree[jn] >= 3 && polylineLength(e.pts) < nrad[jn] + spurAbs) {
+      if (degree[jn] >= 3 && polylineLength(e.pts) < nodes.rad[jn] + spurAbs) {
         e.alive = false;
         removed = true;
       }
@@ -390,22 +445,37 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
     dissolve(edges);
     if (!removed) break;
   }
-  edges = edges.filter((e) => e.alive);
-  const edgeCount = edges.length;
+  return edges.filter((e) => e.alive);
+}
 
-  // ---- junções: emparelha as continuações suaves e limpa a geometria
-  const partner = new Int32Array(2 * edgeCount).fill(-1); // ponta → ponta que a continua
-  const cut = new Int32Array(2 * edgeCount); // ponta → quantos pontos descartar nessa ponta
-  const hasJunctionPoint = new Uint8Array(nodeCount);
-  const junctionPoint = new Float64Array(2 * nodeCount);
+// ---------------------------------------------------------------------------------------------
+// 5. Junções
+// ---------------------------------------------------------------------------------------------
+
+interface Junctions {
+  /** Ponta de aresta → ponta que a continua do outro lado da junção (-1 = nenhuma). */
+  partner: Int32Array;
+  /** Ponta de aresta → quantos pontos descartar nessa ponta (os de dentro da junção). */
+  cut: Int32Array;
+  /** Nós que são junção (3 pontas ou mais) e o ponto de junção de cada um. */
+  has: Uint8Array;
+  point: Float64Array;
+}
+
+/** Em cada junção: emparelha as continuações suaves e calcula o ponto de junção limpo. */
+function pairJunctions(edges: readonly Edge[], nodes: Nodes, pairDeg: number, junctionClean: boolean): Junctions {
+  const partner = new Int32Array(2 * edges.length).fill(-1);
+  const cut = new Int32Array(2 * edges.length);
+  const has = new Uint8Array(nodes.count);
+  const point = new Float64Array(2 * nodes.count);
   const cosThr = Math.cos(pairDeg * (Math.PI / 180));
   for (const [nd, lst] of incidence(edges)) {
     const m = lst.length;
     if (m < 3) continue;
-    const px = npos[2 * nd];
-    const py = npos[2 * nd + 1];
-    const rho = 1.5 * nrad[nd] + 1.0; // dentro deste raio o esqueleto não é confiável
-    const rhoFar = rho + Math.max(4.0, 2 * nrad[nd]); // onde se mede a direção do ramo
+    const px = nodes.pos[2 * nd];
+    const py = nodes.pos[2 * nd + 1];
+    const rho = 1.5 * nodes.rad[nd] + 1.0; // dentro deste raio o esqueleto não é confiável
+    const rhoFar = rho + Math.max(4.0, 2 * nodes.rad[nd]); // onde se mede a direção do ramo
     const dirs = new Float64Array(2 * m);
     const cutPts = new Float64Array(2 * m);
     for (let j = 0; j < m; j++) {
@@ -524,23 +594,26 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
         jy = firstY;
       }
     }
-    hasJunctionPoint[nd] = 1;
-    junctionPoint[2 * nd] = jx;
-    junctionPoint[2 * nd + 1] = jy;
+    has[nd] = 1;
+    point[2 * nd] = jx;
+    point[2 * nd + 1] = jy;
   }
+  return { partner, cut, has, point };
+}
 
-  // ---- pontos finais de cada aresta: ponto de junção + miolo + ponto de junção
-  const finalPts: Float64Array[] = new Array(edgeCount);
-  for (let i = 0; i < edgeCount; i++) {
+/** Pontos finais de cada aresta: ponto de junção + miolo + ponto de junção. */
+function finalEdgePoints(edges: readonly Edge[], jn: Junctions, junctionClean: boolean): Float64Array[] {
+  const finalPts: Float64Array[] = new Array(edges.length);
+  for (let i = 0; i < edges.length; i++) {
     const e = edges[i];
     const n = e.pts.length >> 1;
-    const head = hasJunctionPoint[e.a] === 1;
-    const tail = hasJunctionPoint[e.b] === 1;
+    const head = jn.has[e.a] === 1;
+    const tail = jn.has[e.b] === 1;
     let lo: number;
     let hi: number; // miolo = pts[lo .. hi)
     if (junctionClean) {
-      const c0 = head ? cut[2 * i] : 0;
-      const c1 = tail ? cut[2 * i + 1] : 0;
+      const c0 = head ? jn.cut[2 * i] : 0;
+      const c1 = tail ? jn.cut[2 * i + 1] : 0;
       if (c0 + c1 < n) {
         lo = c0;
         hi = n - c1;
@@ -555,19 +628,32 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
     const out = new Float64Array(2 * ((head ? 1 : 0) + (hi - lo) + (tail ? 1 : 0)));
     let o = 0;
     if (head) {
-      out[o++] = junctionPoint[2 * e.a];
-      out[o++] = junctionPoint[2 * e.a + 1];
+      out[o++] = jn.point[2 * e.a];
+      out[o++] = jn.point[2 * e.a + 1];
     }
     out.set(e.pts.subarray(2 * lo, 2 * hi), o);
     o += 2 * (hi - lo);
     if (tail) {
-      out[o++] = junctionPoint[2 * e.b];
-      out[o++] = junctionPoint[2 * e.b + 1];
+      out[o++] = jn.point[2 * e.b];
+      out[o++] = jn.point[2 * e.b + 1];
     }
     finalPts[i] = out;
   }
+  return finalPts;
+}
 
-  // ---- monta os traços seguindo os pares
+// ---------------------------------------------------------------------------------------------
+// 6. Traços
+// ---------------------------------------------------------------------------------------------
+
+interface Stroke {
+  pts: Float64Array;
+  closed: boolean;
+}
+
+/** Monta os traços seguindo os pares das junções; por último entram os laços puros. Em px da máscara. */
+function assembleStrokes(finalPts: readonly Float64Array[], partner: Int32Array, g: PixelGraph, loops: readonly Int32Array[]): Stroke[] {
+  const edgeCount = finalPts.length;
   const usedEdge = new Uint8Array(edgeCount);
   /** Segue os pares a partir da ponta `sd` da aresta `i`; devolve os pontos emendados. */
   const walk = (i: number, sd: number): Float64Array => {
@@ -600,10 +686,10 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
     }
     return out;
   };
-  const endGap = (pts: Float64Array): number =>
-    mathHypot(pts[0] - pts[pts.length - 2], pts[1] - pts[pts.length - 1]);
+  const endGap = (pts: Float64Array): number => mathHypot(pts[0] - pts[pts.length - 2], pts[1] - pts[pts.length - 1]);
 
-  const strokes: { pts: Float64Array; closed: boolean }[] = [];
+  const strokes: Stroke[] = [];
+  // primeiro, quem tem ponta sem par: começa dela
   for (let i = 0; i < edgeCount; i++) {
     if (usedEdge[i]) continue;
     for (let sd = 0; sd < 2; sd++) {
@@ -629,13 +715,41 @@ export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts:
     if (loop.length < 4) continue;
     const pts = new Float64Array(2 * loop.length);
     for (let t = 0; t < loop.length; t++) {
-      pts[2 * t] = xs[loop[t]];
-      pts[2 * t + 1] = ys[loop[t]];
+      pts[2 * t] = g.xs[loop[t]];
+      pts[2 * t + 1] = g.ys[loop[t]];
     }
     strokes.push({ pts, closed: true });
   }
+  return strokes;
+}
 
-  // ---- converte para px da imagem original; o que é curto demais vira ponto
+/**
+ * Traços de linha única a partir do esqueleto de uma máscara ampliada `k` vezes.
+ *
+ * `skel`: esqueleto de 1 pixel de espessura (o `skeletonize` do scikit-image). `dist`: transformada
+ * de distância euclidiana da máscara ORIGINAL (antes de afinar), linha a linha, do mesmo tamanho;
+ * só é lida nos pixels do esqueleto e dá o raio do traço em cada junção. A saída sai em px da
+ * imagem original: `(x_ampliado + 0,5) / k`.
+ */
+export function skeletonStrokes(skel: Mask, dist: Float32Array, k: number, opts: StrokeOptions = {}): StrokeResult {
+  const spurPx = opts.spurPx ?? 1.0;
+  const pairDeg = opts.pairDeg ?? 42.0;
+  const dotPx = opts.dotPx ?? 0.6;
+  const junctionClean = opts.junctionClean ?? true;
+
+  const g = buildPixelGraph(skel);
+  if (g.count === 0) return { polylines: [], dots: new Float64Array(0) };
+  const chains = traceChains(g);
+  const nodes = buildNodes(g, chains, dist, skel.width);
+  const edges = pruneSpurs(buildEdges(g, chains, nodes), nodes, spurPx * k);
+  const junctions = pairJunctions(edges, nodes, pairDeg, junctionClean);
+  const strokes = assembleStrokes(finalEdgePoints(edges, junctions, junctionClean), junctions.partner, g, chains.loops);
+
+  // pontos isolados (pixels sem vizinho), em px da máscara; os traços de 1 ponto entram depois deles
+  const rawDots: number[] = [];
+  for (let p = 0; p < g.count; p++) if (g.off[p + 1] === g.off[p]) rawDots.push(g.xs[p], g.ys[p]);
+
+  // converte para px da imagem original; o que é curto demais vira ponto
   const polylines: Polyline[] = [];
   const shortDots: number[] = [];
   for (const { pts, closed } of strokes) {

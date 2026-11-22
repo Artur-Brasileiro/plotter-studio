@@ -569,12 +569,34 @@ function endTangent(Q: Float64Array, n: number, twArc: number, fromEnd: boolean)
 
 /** Memória de trabalho de um trecho (evita alocar a cada divisão). */
 interface FitScratch {
+  /** Parâmetro de cada ponto, de 0 a 1. */
   u: Float64Array;
+  /** Polinômios de Bernstein em u[i] (ver `bernstein`): valem enquanto `u` não mudar. */
+  b0: Float64Array;
+  b1: Float64Array;
+  b2: Float64Array;
+  b3: Float64Array;
+  /** Parcelas das somas do `genBezier` (o NumPy soma tudo de uma vez, em pares). */
   c00: Float64Array;
   c01: Float64Array;
   c11: Float64Array;
   x0: Float64Array;
   x1: Float64Array;
+}
+
+/**
+ * Os quatro pesos da cúbica em cada u[i]. São usados três vezes por rodada (alças, erro e
+ * reparametrização) com exatamente as mesmas contas do Python, então são calculados uma vez só.
+ */
+function bernstein(w: FitScratch, n: number): void {
+  for (let i = 0; i < n; i++) {
+    const t = w.u[i];
+    const mt = 1 - t;
+    w.b0[i] = cube(mt);
+    w.b1[i] = 3 * mt * mt * t;
+    w.b2[i] = 3 * mt * t * t;
+    w.b3[i] = cube(t);
+  }
 }
 
 /**
@@ -597,14 +619,11 @@ function genBezier(
   const p0y = Q[o + 1];
   const p3x = Q[o + 2 * n - 2];
   const p3y = Q[o + 2 * n - 1];
-  const u = w.u;
   for (let i = 0; i < n; i++) {
-    const t = u[i];
-    const mt = 1 - t;
-    const b0 = cube(mt);
-    const b1 = 3 * mt * mt * t;
-    const b2 = 3 * mt * t * t;
-    const b3 = cube(t);
+    const b0 = w.b0[i];
+    const b1 = w.b1[i];
+    const b2 = w.b2[i];
+    const b3 = w.b3[i];
     const a1x = b1 * t1x;
     const a1y = b1 * t1y;
     const a2x = b2 * t2x;
@@ -660,18 +679,12 @@ function genBezier(
 }
 
 /** Maior erro (ao quadrado) entre a cúbica em u[i] e os pontos; `at` = índice do pior ponto. */
-function maxError(Q: Float64Array, o: number, n: number, u: Float64Array, bez: Float64Array): { err: number; at: number } {
+function maxError(Q: Float64Array, o: number, n: number, w: FitScratch, bez: Float64Array): { err: number; at: number } {
   let err = -Infinity;
   let at = 0;
   for (let i = 0; i < n; i++) {
-    const t = u[i];
-    const mt = 1 - t;
-    const b0 = cube(mt);
-    const b1 = 3 * mt * mt * t;
-    const b2 = 3 * mt * t * t;
-    const b3 = cube(t);
-    const dx = b0 * bez[0] + b1 * bez[2] + b2 * bez[4] + b3 * bez[6] - Q[o + 2 * i];
-    const dy = b0 * bez[1] + b1 * bez[3] + b2 * bez[5] + b3 * bez[7] - Q[o + 2 * i + 1];
+    const dx = w.b0[i] * bez[0] + w.b1[i] * bez[2] + w.b2[i] * bez[4] + w.b3[i] * bez[6] - Q[o + 2 * i];
+    const dy = w.b0[i] * bez[1] + w.b1[i] * bez[3] + w.b2[i] * bez[5] + w.b3[i] * bez[7] - Q[o + 2 * i + 1];
     const e = dx * dx + dy * dy;
     if (e > err) {
       err = e;
@@ -681,8 +694,9 @@ function maxError(Q: Float64Array, o: number, n: number, u: Float64Array, bez: F
   return { err, at };
 }
 
-/** `_reparam`: um passo de Newton em cada parâmetro u[i], no lugar. */
-function reparameterize(Q: Float64Array, o: number, n: number, u: Float64Array, bez: Float64Array): void {
+/** `_reparam`: um passo de Newton em cada parâmetro u[i], no lugar (depois é preciso refazer `bernstein`). */
+function reparameterize(Q: Float64Array, o: number, n: number, w: FitScratch, bez: Float64Array): void {
+  const u = w.u;
   const d10x = 3 * (bez[2] - bez[0]);
   const d10y = 3 * (bez[3] - bez[1]);
   const d11x = 3 * (bez[4] - bez[2]);
@@ -696,12 +710,8 @@ function reparameterize(Q: Float64Array, o: number, n: number, u: Float64Array, 
   for (let i = 0; i < n; i++) {
     const t = u[i];
     const mt = 1 - t;
-    const b0 = cube(mt);
-    const b1 = 3 * mt * mt * t;
-    const b2 = 3 * mt * t * t;
-    const b3 = cube(t);
-    const dx = b0 * bez[0] + b1 * bez[2] + b2 * bez[4] + b3 * bez[6] - Q[o + 2 * i];
-    const dy = b0 * bez[1] + b1 * bez[3] + b2 * bez[5] + b3 * bez[7] - Q[o + 2 * i + 1];
+    const dx = w.b0[i] * bez[0] + w.b1[i] * bez[2] + w.b2[i] * bez[4] + w.b3[i] * bez[6] - Q[o + 2 * i];
+    const dy = w.b0[i] * bez[1] + w.b1[i] * bez[3] + w.b2[i] * bez[5] + w.b3[i] * bez[7] - Q[o + 2 * i + 1];
     const k0 = mt * mt;
     const k1 = 2 * mt * t;
     const k2 = t * t;
@@ -734,6 +744,10 @@ function schneider(
   const out: { i0: number; bez: Float64Array }[] = [];
   const w: FitScratch = {
     u: new Float64Array(nq),
+    b0: new Float64Array(nq),
+    b1: new Float64Array(nq),
+    b2: new Float64Array(nq),
+    b3: new Float64Array(nq),
     c00: new Float64Array(2 * nq),
     c01: new Float64Array(2 * nq),
     c11: new Float64Array(2 * nq),
@@ -784,14 +798,16 @@ function schneider(
       continue;
     }
     for (let i = 0; i < n; i++) u[i] /= total;
+    bernstein(w, n);
     genBezier(Q, o, n, w, tax, tay, tbx, tby, bez);
-    let e = maxError(Q, o, n, u, bez);
+    let e = maxError(Q, o, n, w, bez);
     let ok = e.err < err2;
     if (!ok && e.err < err2 * 16) {
       for (let it = 0; it < 4; it++) {
-        reparameterize(Q, o, n, u, bez);
+        reparameterize(Q, o, n, w, bez);
+        bernstein(w, n);
         genBezier(Q, o, n, w, tax, tay, tbx, tby, bez);
-        e = maxError(Q, o, n, u, bez);
+        e = maxError(Q, o, n, w, bez);
         if (e.err < err2) {
           ok = true;
           break;
@@ -951,13 +967,11 @@ export function fitPolyline(points: Float64Array, closed: boolean, opts: FitOpti
       continue;
     }
     if (straighten > 0) {
-      // régua: se o trecho tem partes retas, quem ajusta é straight.ts (as curvas dele voltam para cá)
-      const ruled = fitPieceStraight(
-        Q,
-        nq,
-        { snap: straighten, tol, twArc, tw, lineTol, t1: piece.t1, t2: piece.t2 },
-        { schneider, endTangent },
-      );
+      // Régua: se o trecho tem partes retas, quem ajusta é straight.ts (as curvas dele voltam para cá).
+      // Como no Python (`piece_fitter(Q, tol, tw_arc, tw)`), as tangentes já conhecidas de uma curva
+      // fechada sem cantos (piece.t1/t2) NÃO são repassadas: a régua estima as dela. Para repassar,
+      // basta incluir `t1: piece.t1, t2: piece.t2` aqui, mas aí o resultado deixa de bater com o Python.
+      const ruled = fitPieceStraight(Q, nq, { snap: straighten, tol, twArc, tw, lineTol }, { schneider, endTangent });
       if (ruled) {
         for (const s of ruled) segments.push(s);
         continue;

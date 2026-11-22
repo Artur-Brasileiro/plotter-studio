@@ -55,6 +55,7 @@ const NOISE_TIES: Record<string, string> = {
   // TypeScript 24 = −3.3031011744197616, 36 e 48 = −3.303101174419762 → cantos [13, 36, 59].
   // A nota do 36 muda 1 ulp porque Math.atan2 (V8) e atan2 (libc do Python) arredondam diferente.
   "syn_zigzag_close / traceBold": "empate entre cantos candidatos; último bit do atan2",
+  "syn_zigzag_close / rulerBold": "o mesmo empate (mesmas opções, com a régua)",
   // Traço com simetria de espelho: o erro do ajuste nos dois pontos espelhados é igual até o 13º dígito.
   // Python e[13] = 0.033978286813059616 > e[43] = 0.03397828681305836 → divide no 13;
   // TypeScript e[13] = 0.033978286813059616 < e[43] = 0.03397828681306106 → divide no 43.
@@ -236,7 +237,7 @@ describe("fitPolyline: propriedades", () => {
   it("régua desligada (straighten 0) não muda nada", () => {
     for (const name of ["syn_stair_k4_shallow", "syn_L_open", "syn_circle_r10", "syn_star5"]) {
       const c = syn(name);
-      for (const opts of Object.values(fixtures.optionSets)) {
+      for (const { straighten: _ruler, ...opts } of Object.values(fixtures.optionSets)) {
         expect(fitPolyline(casePoints(c), c.closed, { ...opts, straighten: 0 }), name).toEqual(fitPolyline(casePoints(c), c.closed, opts));
       }
     }

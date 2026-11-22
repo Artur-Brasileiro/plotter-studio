@@ -2,8 +2,9 @@
 Gera os dados de paridade de `src/core/trace/strokes.ts` e `src/core/trace/fit.ts`.
 
 Roda a referencia de verdade (`vec.skeleton_strokes`, `vec.fit_polyline`, `vec.path_length`,
-`vec.path_flatten`) sobre mascaras e polilinhas SINTETICAS (desenhadas aqui mesmo) e grava entradas
-e saidas em `src/core/trace/__fixtures__/strokes/`. Os testes do vitest leem esses arquivos e comparam.
+`vec.path_flatten`; com a regua, `straight.fit_piece_straight` como `piece_fitter`) sobre mascaras e
+polilinhas SINTETICAS (desenhadas aqui mesmo) e grava entradas e saidas em
+`src/core/trace/__fixtures__/strokes/`. Os testes do vitest leem esses arquivos e comparam.
 
 Uso (na raiz do repositorio):
     "D:\\Programacao\\Projetos Python\\vetorizador\\.venv\\Scripts\\python.exe" lab/python/fixtures_strokes.py
@@ -19,6 +20,13 @@ Formato: JSON; vetores grandes vao em base64 dos bytes crus, little-endian (i4, 
 
 `skeleton_strokes` so le a transformada de distancia nos pixels do esqueleto, entao so esses valores
 sao gravados (o teste monta o mapa inteiro com zero no resto).
+
+Os dados dependem do ultimo bit da matematica da maquina que os gerou (np.hypot, pow, exp, atan2 da
+libc; ordem dos empates do np.argsort). O porte em TypeScript foi acertado com a referencia rodando
+em Windows (CPython 3.14, numpy 2.4, scipy 1.17). Gerados em outro sistema, os numeros continuam
+batendo dentro da tolerancia, mas alguns casos de EMPATE (formas simetricas) podem cair para o outro
+lado; ai o teste aponta o caso (ver NOISE_TIES em src/core/trace/fit.test.ts). `generatedWith`, nos
+arquivos, diz com que versoes eles foram feitos.
 """
 from __future__ import annotations
 
@@ -35,6 +43,7 @@ from skimage.morphology import skeletonize
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import straight  # noqa: E402
 import vec  # noqa: E402
 
 OUT = HERE.parent.parent / "src" / "core" / "trace" / "__fixtures__" / "strokes"
@@ -42,6 +51,26 @@ OUT = HERE.parent.parent / "src" / "core" / "trace" / "__fixtures__" / "strokes"
 
 def b64(a, dtype) -> str:
     return base64.b64encode(np.ascontiguousarray(a, dtype=dtype).tobytes()).decode("ascii")
+
+
+def header() -> dict:
+    import platform
+
+    import scipy
+    import skimage
+
+    return {
+        "version": 1,
+        "generator": "lab/python/fixtures_strokes.py",
+        "generatedWith": {
+            "python": platform.python_version(),
+            "platform": platform.system(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "opencv": cv2.__version__,
+            "scikit-image": skimage.__version__,
+        },
+    }
 
 
 # =====================================================================
@@ -260,6 +289,31 @@ def sc_grid(k):
     return c.m
 
 
+def sc_cycles(k):
+    """Lacos que passam por juncoes (ciclo de arestas emparelhadas) e arcos que so se encostam."""
+    c = Canvas(64, 24, k, g=1.0)
+    c.ring((11, 12), 8, 0.8)                                 # anel cortado por uma reta: 2 cruzamentos
+    c.line((0, 10), (22, 14), 0.8)
+    c.ring((32, 12), 8, 0.8)                                 # teta: o diametro encosta por dentro (2 T)
+    c.line((32, 4), (32, 20), 0.8)
+    c.ring((53, 12), 8, 0.8)                                 # anel com dois riscos atravessando
+    c.line((42, 9), (64, 13), 0.8)
+    c.line((50, 1), (55, 23), 0.8)
+    return c.m
+
+
+def sc_lace(k):
+    """Traco grosso todo furado: esqueleto rendado, com lacinhos e juncoes grudadas umas nas outras."""
+    c = Canvas(30, 18, k, g=1.0)
+    c.line((3, 5), (27, 5), 3.0)
+    c.line((4, 13), (26, 11), 2.2)
+    c.line((15, 4), (15, 13), 2.0)
+    m = c.m
+    holes = np.random.default_rng(7).random(m.shape) < 0.012
+    m[holes] = 0
+    return m
+
+
 def sc_full(k):
     return np.ones((10 * k, 16 * k), np.uint8)
 
@@ -328,6 +382,8 @@ SCENES = [
     ("full", sc_full, {4: [D0], 6: [D0]}),
     ("empty", sc_empty, {4: [D0]}),
     ("ties", sc_ties, {3: [D0], 4: [D0], 5: [D0], 6: [D0]}),
+    ("cycles", sc_cycles, {4: [D0, dict(junction_clean=False)], 6: [D0]}),
+    ("lace", sc_lace, {4: [D0, dict(pair_deg=89.0)], 6: [D0, dict(pair_deg=89.0, spur_px=0.0)]}),
 ]
 
 STROKE_OPT_NAMES = {"spur_px": "spurPx", "pair_deg": "pairDeg", "dot_px": "dotPx", "junction_clean": "junctionClean"}
@@ -460,7 +516,7 @@ def synthetic_polylines():
     add("noisy_circle", nc + rng.normal(0, 0.06, nc.shape), True)
     nl = resample([(0, 0), (30, 9)], 0.25, False)
     add("noisy_line", nl + rng.normal(0, 0.05, nl.shape), False)
-    w = np.cumsum(rng.normal(0, 0.35, (250, 2)), 0)
+    w = np.cumsum(rng.normal(0, 0.35, (250, 2))[:110], 0)   # so os 110 primeiros: e o caso que mais ocupa espaco
     add("random_walk", w, False)
     add("uneven_spacing", np.stack([np.cumsum(rng.uniform(0.02, 1.2, 90)), 3 * np.sin(np.arange(90) / 9)], 1), False)
     add("spiral", np.array([((0.3 + 0.25 * a) * math.cos(a), (0.3 + 0.25 * a) * math.sin(a)) for a in np.linspace(0, 26, 450)]), False)
@@ -494,18 +550,33 @@ FIT_SETS = {
     "noSharpen": dict(sharpen=False, tol=0.1, presmooth=0.4),
     "loose": dict(tol=0.5, cL=3.0, cdeg=35, cratio=0.5, lineTol=0.12, gap=1.4),
     "heavySmooth": dict(tol=0.05, smooth=1.2, presmooth=0.9, lineTol=0.01),
+    # com a regua (straight.py); `straighten` = snap. Sao as tres formas como o app chama o ajuste.
+    "rulerFine": dict(tol=0.18, cL=1.6, cdeg=50, gap=0.8, smooth=0.3, presmooth=0.25, straighten=0.6),
+    "rulerBold": dict(tol=0.18, cL=2.4, cdeg=50, gap=1.1, smooth=0.55, presmooth=0.25, straighten=0.6),
+    "rulerOutline": dict(tol=0.13, cL=2.0, cdeg=55, gap=0.9, sharpen=False, straighten=0.6),
+    "rulerTight": dict(straighten=0.3, lineTol=0.02),
 }
 ALL_SETS = list(FIT_SETS)
-REAL_SETS_ALWAYS = ["default", "traceFine", "traceBold"]
+# polilinhas vindas de skeleton_strokes: estes sempre, e mais um dos outros (em rodizio)
+REAL_SETS_ALWAYS = ["traceFine", "traceBold", "rulerBold"]
+REAL_SETS_ROTATE = [s for s in ALL_SETS if s not in REAL_SETS_ALWAYS]
+# casos escolhidos a dedo: aqui dois cantos candidatos vizinhos empatam na nota e o np.argsort (nao
+# estavel) decide; fica nos dados para o teste exercitar o campo `stableSort`
+REAL_SETS_EXTRA = {"busy_k4_p2": ["loose"]}
 # path_flatten so em alguns casos (a saida e grande): nome -> passo
-FLATTEN = {"circle_r10": 0.5, "rect_round": 0.2, "s_curve": 0.5, "star5": 1.0, "teardrop": 0.1, "L_open": 0.5,
+FLATTEN = {"circle_r10": 0.5, "rect_round": 0.35, "s_curve": 0.5, "star5": 1.0, "teardrop": 0.1, "L_open": 0.5,
            "tiny_loop": 0.05, "line_2pt": 0.5}
 
 
 def py_fit_kwargs(o):
+    """Opcoes com os nomes do TypeScript -> argumentos de vec.fit_polyline."""
     kw = dict(o)
     if "lineTol" in kw:
         kw["line_tol"] = kw.pop("lineTol")
+    snap = kw.pop("straighten", 0)
+    if snap > 0:
+        line_tol = kw.get("line_tol", 0.04)
+        kw["piece_fitter"] = lambda Q, tol, tw_arc, tw: straight.fit_piece_straight(Q, tol, tw_arc, tw, snap=snap, line_tol=line_tol)
     return kw
 
 
@@ -574,7 +645,7 @@ def main():
             scenes.append(fx)
             for pi, (q, cl) in enumerate(polys):
                 real.append((si, pi, q, cl))
-    text = json.dumps({"version": 1, "generator": "lab/python/fixtures_strokes.py", "scenes": scenes}, separators=(",", ":"))
+    text = json.dumps({**header(), "scenes": scenes}, separators=(",", ":"))
     (OUT / "skeleton_strokes.json").write_text(text, encoding="ascii")
     size_a = len(text)
     print(f"skeleton_strokes.json: {len(scenes)} cenas, {sum(len(s['runs']) for s in scenes)} rodadas, {size_a / 1024:.0f} KB")
@@ -615,15 +686,15 @@ def main():
     n_syn = len(cases)
     for k in (4, 6):
         for i, P in enumerate(outline_polylines(k)):
-            add_case({"name": f"outline_k{k}_{i}", "points": b64(P, "<f8")}, P, True, ["outline", "default", "traceFine"])
+            add_case({"name": f"outline_k{k}_{i}", "points": b64(P, "<f8")}, P, True, ["outline", "rulerOutline", "default", "traceFine"])
     n_out = len(cases) - n_syn
     for j, (si, pi, q, cl) in enumerate(real):
-        sets = list(REAL_SETS_ALWAYS)
-        sets += [s for n, s in enumerate(ALL_SETS[3:]) if (j + n) % 5 == 0]
-        add_case({"name": f"{scenes[si]['name']}_p{pi}", "ref": [si, pi]}, q, cl, sets)
+        name = f"{scenes[si]['name']}_p{pi}"
+        sets = REAL_SETS_ALWAYS + [REAL_SETS_ROTATE[j % len(REAL_SETS_ROTATE)]]
+        sets += [s for s in REAL_SETS_EXTRA.get(name, []) if s not in sets]
+        add_case({"name": name, "ref": [si, pi]}, q, cl, sets)
 
-    text = json.dumps({"version": 1, "generator": "lab/python/fixtures_strokes.py", "optionSets": FIT_SETS, "cases": cases},
-                      separators=(",", ":"))
+    text = json.dumps({**header(), "optionSets": FIT_SETS, "cases": cases}, separators=(",", ":"))
     (OUT / "fit_polyline.json").write_text(text, encoding="ascii")
     size_b = len(text)
     print(f"fit_polyline.json: {len(cases)} polilinhas ({n_syn} sinteticas, {n_out} contornos, {len(real)} de skeleton_strokes), "

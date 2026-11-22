@@ -320,7 +320,7 @@ export function validateProfile(p: MachineProfile): string[] {
   }
 
   range(p.servo.avgPerMin, 1, 200, "Média de ciclos do servo por minuto");
-  range(p.servo.peakPer60s, 1, 400, "Pico de ciclos do servo em 60 s");
+  range(p.servo.peakPer60s, 5, 400, "Pico de ciclos do servo em 60 s");
   if (p.servo.peakPer60s < p.servo.avgPerMin) e.push("O pico do servo em 60 s não pode ser menor que a média por minuto.");
   range(p.servo.maxDescentMm, 10, 100000, "Traço máximo por descida (mm)");
   range(p.join.searchMm, 0, 50, "Distância de busca para emendar (mm)");
@@ -347,6 +347,8 @@ export function validateProfile(p: MachineProfile): string[] {
   const sh = p.shield;
   // o aquecimento também são ciclos do servo, um a cada 0,8 s: muitos seguidos estouram o próprio limite
   range(sh.warmupCycles, 0, 20, "Ciclos de aquecimento");
+  // as batidas do aquecimento saem todas em poucos segundos: sozinhas, não podem passar do pico
+  if (sh.enabled && sh.warmupCycles > p.servo.peakPer60s - 1) e.push(`O aquecimento (${sh.warmupCycles} ciclos) não cabe no pico do servo (${p.servo.peakPer60s} em 60 s): diminua os ciclos ou aumente o pico.`);
   if (!(sh.safeX >= 0 && sh.safeX <= p.workArea.width && sh.safeY >= 0 && sh.safeY <= p.workArea.height)) {
     e.push("O ponto seguro do aquecimento tem que ficar dentro do curso da máquina.");
   }

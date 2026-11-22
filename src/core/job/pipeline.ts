@@ -78,7 +78,7 @@ function planLayer(
   const orderStart = crosses ? crosses.first.points[crosses.first.points.length - 1] : start;
 
   const wrap = (body: readonly OrderedStroke[]): OrderedStroke[] => (crosses ? [crosses.first, ...body, crosses.last] : [...body]);
-  const unoptimized = wrap(keepOrder(mine, pen));
+  const unoptimized = keepOrder(mine, pen);
   let strokes: readonly Stroke[] = mine;
   let hiddenDropped = 0;
   let ordered = unoptimized;
@@ -102,16 +102,14 @@ function planLayer(
       hiddenDropped = dropped.size;
       if (dropped.size) strokes = mine.filter((_, i) => !dropped.has(i));
     }
-    ordered = wrap(
-      orderStrokes(strokes, {
-        start: orderStart,
-        joinGapMm: pen,
-        allowReverse: true,
-        rotateClosed: true,
-        searchMm: profile.join.searchMm,
-        bridgeHidden: ink ? (a, b) => bridgeIsHidden(ink, a, b, pen) : undefined,
-      }),
-    );
+    ordered = orderStrokes(strokes, {
+      start: orderStart,
+      joinGapMm: pen,
+      allowReverse: true,
+      rotateClosed: true,
+      searchMm: profile.join.searchMm,
+      bridgeHidden: ink ? (a, b) => bridgeIsHidden(ink, a, b, pen) : undefined,
+    });
   }
   // Correção da ponta (seção 7): a caneta risca `offset` além de onde a máquina acha que está, então a
   // camada INTEIRA (cruzes incluídas) é comandada com a correção contrária.
@@ -119,7 +117,8 @@ function planLayer(
   // Regra 5: "~2 min por descida". O limite em mm foi medido a F500 (o F fixo do perfil): num trabalho
   // mais lento a descida encurta na mesma proporção, para o tempo com a caneta embaixo não crescer.
   const slower = job.speedMode === "fixed" && job.fixedFeed > 0 ? Math.min(1, job.fixedFeed / profile.feed.fixed) : 1;
-  const capped = capDescents(ordered, profile.servo.maxDescentMm * slower).map(shifted);
+  // (o corte vale para o desenho; as cruzes de registro entram depois, inteiras: cada uma é uma descida só)
+  const capped = wrap(capDescents(ordered, profile.servo.maxDescentMm * slower)).map(shifted);
   const planned = capped.map((s) => assignFeeds(s, job, profile));
   const sched = scheduleJob(planned, start, end, profile, job.speedMode === "fixed" ? job.fixedFeed : undefined);
 
@@ -164,7 +163,7 @@ function planLayer(
     stats: {
       drawMm: drawMm + joinInkMm,
       travelMm: travelLength(capped, start, end),
-      travelMmUnoptimized: travelLength(unoptimized.map(shifted), start, end),
+      travelMmUnoptimized: travelLength(wrap(unoptimized).map(shifted), start, end),
       penLifts: sched.descents.length,
       segments,
       estimate: sched.estimate,

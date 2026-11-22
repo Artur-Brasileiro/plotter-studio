@@ -2,7 +2,8 @@ import type { Vec } from "../geometry/vec";
 import type { MachineProfile } from "../machine";
 import type { JobSettings } from "../store";
 import { REGISTRATION_ID } from "./layers";
-import { CHECKPOINT_DWELLS_S, FOOTER_SETTLE_S, HEADER_SETTLE_S, tokensAfterWarmup, WARMUP_FINAL_S, WARMUP_SETTLE_S } from "./schedule";
+import { chainTimes, makeBlock } from "./estimate";
+import { servoBucket, shieldDwells, tokensAfterWarmup, WARMUP_FINAL_S } from "./schedule";
 import type { JobPlan } from "./types";
 
 export interface GcodeMeta {
@@ -138,11 +139,12 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   const mode = dynamic
     ? `dinamico - reta F${fmtFeed(profile.feed.straight)} / curva F${fmtFeed(profile.feed.curve)} / fechada F${fmtFeed(profile.feed.tightCurve)}`
     : `fixo F${fmtFeed(job.fixedFeed)}`;
+  const warm = shield.enabled && shield.warmupCycles > 0;
   if (resume) {
     const at = plan.strokes[plan.descents[from].first]?.points[0];
     push(`; RETOMADA: continua da descida ${from + 1} de ${plan.descents.length}`);
-    push(`; 1o: aquecimento do servo${redoCross ? "; 2o: cruz EM CIMA da ja feita" : ""}`);
-    if (at) push(`; ${redoCross ? "3o" : "2o"}: continua do traco que comeca em ${xy(at)}`);
+    const steps = [warm ? "aquecimento do servo" : "", redoCross ? "cruz EM CIMA da ja feita" : "", at ? `continua do traco que comeca em ${xy(at)}` : ""].filter(Boolean);
+    steps.forEach((s, i) => push(`; ${i + 1}o: ${s}`));
   }
   push(`; Plotter Studio - ${toAsciiComment(meta.fileName).slice(0, 28)} - ${fmtDate(meta.date)}`);
   push(`; modo: ${mode}`);
@@ -162,50 +164,78 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     }
   }
   if (part !== undefined) push(`; parte ${part + 1} de ${parts}`);
+  const dw = shieldDwells(profile);
+  const safe: Vec = { x: shield.safeX, y: shield.safeY };
+  const tap = () => {
+    push(down);
+    push(dwell(dw.warmDown));
+    push(up);
+    push(dwell(dw.warmUp));
+  };
   push("G21");
   push("G90");
   push(up);
-  push(dwell(HEADER_SETTLE_S));
-  if (shield.enabled && shield.warmupCycles > 0) {
+  push(dwell(dw.header));
+  if (warm) {
     push("; aquecimento do servo no ponto seguro");
     push(up);
-    push(dwell(HEADER_SETTLE_S));
-    push(`G0 ${xy({ x: shield.safeX, y: shield.safeY })}`);
-    for (let i = 0; i < shield.warmupCycles; i++) {
-      push(down);
-      push(dwell(WARMUP_SETTLE_S));
-      push(up);
-      push(dwell(WARMUP_SETTLE_S));
-    }
+    push(dwell(dw.header));
+    push(`G0 ${xy(safe)}`);
+    for (let i = 0; i < shield.warmupCycles; i++) tap();
     push(dwell(WARMUP_FINAL_S));
   }
-  // Arquivo que começa no meio do trabalho (uma parte, uma retomada): a agenda contava com a folga
-  // do servo acumulada até ali, e este arquivo começa do zero, logo depois do aquecimento. Descansa
-  // o que falta para a conta do servo (regra 3) continuar valendo daqui para a frente.
+  // Arquivo que começa no meio do trabalho (uma parte, uma retomada): a agenda contava com a folga do
+  // servo acumulada até ali, e este arquivo começa do zero, logo depois do aquecimento. Aqui a conta do
+  // balde (regra 3) é refeita para o começo deste arquivo, ficha por ficha: descansa o que falta, e
+  // tudo o que o servo bate antes do desenho (reaquecimento, cruz refeita) é pago.
+  /** Descanso (s) entre a cruz refeita e o desenho, e depois da 1ª descida do desenho */
+  let restAfterCross = 0, restAfterFirst = 0;
   if ((part !== undefined || resume) && descents.length && profile.servo.onOverload === "wait") {
-    const { avgPerMin, peakPer60s } = profile.servo;
-    const full = Math.max(1, peakPer60s - avgPerMin - 1);
-    const need = (descents[redoCross ? 1 : 0] ?? descents[0]).bucket ?? full;
-    const have = tokensAfterWarmup(profile) - (redoCross ? 1 : 0);
-    const rate = avgPerMin / 60;
-    const restFor = (tokens: number) => Math.ceil(((tokens - have) / rate) * 10 - 1e-9) / 10;
-    // Um descanso longo esfria o que o aquecimento acabou de fazer (regra 10: o 1º traço saía sem
-    // tinta). Então, depois dele, o servo bate mais duas vezes no ar, e o descanso paga essas duas.
-    const rewarm = restFor(need) > REWARM_AFTER_REST_S && shield.enabled && shield.warmupCycles > 0;
-    const rest = restFor(need + (rewarm ? 2 : 0));
-    if (rest > 0.05) {
-      push("; servo descansa antes de recomecar");
-      push(dwell(rest));
-      if (rewarm) {
-        push("; reaquece o servo");
-        for (let i = 0; i < 2; i++) {
-          push(down);
-          push(dwell(WARMUP_SETTLE_S));
-          push(up);
-          push(dwell(WARMUP_SETTLE_S));
-        }
+    const { capacity, ratePerS } = servoBucket(profile);
+    const first = descents[redoCross ? 1 : 0] ?? descents[0];
+    const need = first.bucket ?? capacity;
+    let tok = tokensAfterWarmup(profile);
+    /** Descansa até o balde ter `target` fichas (ou encher) e devolve os segundos, arredondados para cima. */
+    const restUntil = (target: number): number => {
+      const goal = Math.min(capacity, target);
+      if (goal - tok <= 1e-9) return 0;
+      const s = Math.ceil(((goal - tok) / ratePerS) * 10 - 1e-9) / 10;
+      tok = goal;
+      return s;
+    };
+    const say = (s: number) => {
+      if (s > 0.05) {
+        push("; servo descansa antes de recomecar");
+        push(dwell(s));
       }
+    };
+    const before = need + (redoCross ? 1 : 0); // o que o balde precisa ter antes do 1º risco deste arquivo
+    // Um descanso longo esfria o que o aquecimento acabou de fazer (regra 10: o 1º traço saía sem
+    // tinta). Então, depois dele, o servo bate mais duas vezes no ar; essas duas também saem do balde.
+    if (warm && (Math.min(capacity, before) - tok) / ratePerS > REWARM_AFTER_REST_S) {
+      say(restUntil(before + 2));
+      push("; reaquece o servo");
+      tap();
+      tap();
+      tok -= 2;
     }
+    say(restUntil(before));
+    if (redoCross) {
+      tok -= 1;
+      restAfterCross = restUntil(need);
+    }
+    // A agenda contou, para a descida seguinte, com o tempo do deslocamento até esta (vindo do traço
+    // anterior). Neste arquivo a caneta vem de outro lugar (do ponto seguro, da cruz, ou de onde o
+    // arquivo não diz): o que faltar desse tempo vira descanso depois da 1ª descida.
+    const start0 = plan.strokes[first.first]?.points[0];
+    const credit = (a: Vec | undefined, b: Vec | undefined): number => {
+      const blk = a && b ? makeBlock(a, b, "rapid", profile) : undefined;
+      return blk && a && b ? Math.min(chainTimes([blk], profile)[0], Math.hypot(b.x - a.x, b.y - a.y) / (TRAVEL_FEED_SCRIPT / 60)) : 0;
+    };
+    const scheduled = first.relift || first.first === 0 ? 0 : credit(lastPointBefore(plan, first.first), start0);
+    const crossEnd = redoCross ? lastPoint(plan.strokes[plan.descents[0].last]?.points) : undefined;
+    const actual = redoCross ? credit(crossEnd, start0) : warm ? credit(safe, start0) : 0;
+    if (scheduled > actual) restAfterFirst = Math.ceil((scheduled - actual) * 10 - 1e-9) / 10;
   }
 
   // ------------------------------------------------------------ descidas
@@ -213,14 +243,20 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
     // numa parte avulsa, a 1ª descida vem logo depois do aquecimento: sem descanso nem checkpoint
     const firstOfFile = di === 0;
     const afterWarmup = di < lead && (part !== undefined || resume);
+    if (afterWarmup && di === 1 && restAfterCross > 0.05) {
+      push("; servo descansa antes de recomecar");
+      push(dwell(restAfterCross));
+    }
     if (!afterWarmup) {
-      if (d.waitS > 0.05) {
+      const wait = Math.round(d.waitS * 10) / 10 + (di === lead ? restAfterFirst : 0);
+      if (wait > 0.05) {
         push("; descanso do servo");
-        push(dwell(Math.round(d.waitS * 10) / 10));
+        push(dwell(Math.round(wait * 10) / 10));
       }
       if (d.checkpoint !== undefined) {
-        push(`; CHECKPOINT ${d.checkpoint} (~${d.checkpointMin ?? 0} min) re-sincroniza servo`);
-        CHECKPOINT_DWELLS_S.forEach((s, i) => {
+        // (sem "~" antes dos minutos: para o GRBL esse caractere é "continuar", até num comentário)
+        push(`; CHECKPOINT ${d.checkpoint} (${d.checkpointMin ?? 0} min) re-sincroniza servo`);
+        dw.checkpoint.forEach((s, i) => {
           push(i % 2 === 0 ? down : up);
           push(dwell(s));
         });
@@ -262,13 +298,18 @@ export function generateGcode(plan: JobPlan, profile: MachineProfile, meta: Gcod
   if (shield.enabled) {
     for (let i = 0; i < 2; i++) {
       push(up);
-      push(dwell(FOOTER_SETTLE_S));
+      push(dwell(dw.footer));
     }
   }
   push(`G0 ${xy(plan.end)}`);
   push("M2");
   return { lines, toText: () => lines.map((l) => l.text).join("\n") + "\n" };
 }
+
+/** Deslocamento na conta do script de blindagem e da auditoria (mm/min). */
+const TRAVEL_FEED_SCRIPT = 3000;
+
+const lastPoint = (pts: readonly Vec[] | undefined): Vec | undefined => (pts && pts.length ? pts[pts.length - 1] : undefined);
 
 /** Onde a caneta parou antes do traço `index` (para re-descer no mesmo ponto). */
 function lastPointBefore(plan: JobPlan, index: number): Vec {

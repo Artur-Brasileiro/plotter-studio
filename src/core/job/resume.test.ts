@@ -90,6 +90,9 @@ describe("G-code de retomada", () => {
     expect(g[0]).toBe("; RETOMADA: continua da descida 26 de 40");
     expect(g[1]).toBe("; 1o: aquecimento do servo");
     expect(g[2]).toMatch(/^; 2o: continua do traco que comeca em X\d+\.\d\d Y\d+\.\d\d$/);
+    // sem aquecimento no perfil, o cabeçalho não promete um
+    const cold = { ...P, shield: { ...P.shield, warmupCycles: 0 } };
+    expect(generateGcode(plan, cold, META, { fromDescent: 25 }).lines[1].text).toMatch(/^; 1o: continua do traco/);
     expect(g).toContain("; aquecimento do servo no ponto seguro");
     const a = auditGcode(g, P, auditOptionsOf(plan));
     expect(a.warmupCycles).toBe(P.shield.warmupCycles);
@@ -125,9 +128,10 @@ describe("retomada numa camada com cruzes de registro", () => {
 
   it("refaz a 1ª cruz (em cima da que já está no papel) e depois continua", () => {
     const g = text(plan, { fromDescent: 10 });
-    expect(g.slice(0, 3)).toEqual([
+    expect(g.slice(0, 4)).toEqual([
       "; RETOMADA: continua da descida 11 de 26",
-      "; 1o: aquecimento do servo; 2o: cruz EM CIMA da ja feita",
+      "; 1o: aquecimento do servo",
+      "; 2o: cruz EM CIMA da ja feita",
       expect.stringMatching(/^; 3o: continua do traco que comeca em X/),
     ]);
     const starts = descentStarts(g);
@@ -207,9 +211,11 @@ describe("servo no começo de uma parte ou de uma retomada", () => {
     expect(g[i + 1]).toMatch(/^G4 P\d+(\.\d)?$/);
     expect(Number(g[i + 1].slice(4))).toBeGreaterThan(3);
     expect(g.slice(i + 2, i + 11)).toEqual(["; reaquece o servo", "M3 S220", "G4 P0.4", "M5", "G4 P0.4", "M3 S220", "G4 P0.4", "M5", "G4 P0.4"]);
+    // o balde estava cheio: as 2 batidas saíram dele, e o servo descansa mais 4 s (2 fichas a 30/min)
+    expect(g.slice(i + 11, i + 13)).toEqual(["; servo descansa antes de recomecar", "G4 P4"]);
     // e o desenho vem em seguida, com a pausa longa da 1ª descida
-    expect(g[i + 11]).toMatch(/^G0 X/);
-    expect(g.slice(i + 12, i + 14)).toEqual(["M3 S220", "G4 P0.6"]);
+    expect(g[i + 13]).toMatch(/^G0 X/);
+    expect(g.slice(i + 14, i + 16)).toEqual(["M3 S220", "G4 P0.6"]);
     const a = auditGcode(g, P);
     expect(a.warmupCycles).toBe(10); // 8 do aquecimento + 2 do reaquecimento
     expect(a.peakCyclesPer60s).toBeLessThanOrEqual(P.servo.peakPer60s);

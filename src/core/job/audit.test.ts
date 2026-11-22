@@ -82,7 +82,8 @@ describe("auditGcode", () => {
     const a = auditGcode([...head, ...dots], prof);
     expect(a.cycles).toBe(60);
     expect(a.peakCyclesPer60s).toBe(60);
-    expect(a.avgCyclesPerMin).toBeGreaterThan(100);
+    // arquivo de menos de um minuto: a média é "ciclos nesse minuto"
+    expect(a.avgCyclesPerMin).toBeCloseTo(60, 6);
     expect(a.shortDescentPct).toBe(100);
     expect(a.problems.map((p) => p.level)).toEqual(["warn", "warn"]);
     expect(a.ok).toBe(true);
@@ -97,7 +98,7 @@ describe("auditGcode", () => {
   });
 
   it("checkpoint conta como 2 ciclos do servo e é reconhecido pelo comentário", () => {
-    const cp = ["; CHECKPOINT 1 (~10 min) re-sincroniza servo", "M3 S220", "G4 P0.3", "M5", "G4 P0.3", "M3 S220", "G4 P0.3", "M5", "G4 P0.4"];
+    const cp = ["; CHECKPOINT 1 (10 min) re-sincroniza servo", "M3 S220", "G4 P0.3", "M5", "G4 P0.3", "M3 S220", "G4 P0.3", "M5", "G4 P0.4"];
     const a = auditGcode([...head, ...block(100, 100, [[110, 100]]), ...cp, ...block(120, 100, [[130, 100]])], P);
     expect(a.checkpoints).toBe(1);
     expect(a.cycles).toBe(4);

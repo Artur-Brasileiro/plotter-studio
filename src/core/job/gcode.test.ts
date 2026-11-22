@@ -6,7 +6,8 @@ import { formatCoord, generateGcode, MAX_LINE_LENGTH, toAsciiComment } from "./g
 import { makePlan, stroke } from "./testPlan";
 
 const P = DEFAULT_PROFILE;
-const NO_SHIELD: MachineProfile = { ...P, shield: { ...P.shield, enabled: false } };
+// (sem blindagem e sem espera do servo: estes testes olham só para o FORMATO dos blocos)
+const NO_SHIELD: MachineProfile = { ...P, shield: { ...P.shield, enabled: false }, servo: { ...P.servo, onOverload: "warn" } };
 const meta = { fileName: "x.svg", date: new Date(2026, 10, 14, 12, 0), job: DEFAULT_JOB_SETTINGS };
 const text = (p: ReturnType<typeof makePlan>, profile = P, m = meta) => generateGcode(p, profile, m).lines.map((l) => l.text);
 /** Só o miolo: sem cabeçalho/aquecimento e sem rodapé (perfil sem blindagem). */
@@ -228,7 +229,8 @@ describe("generateGcode: descanso do servo, checkpoints e partes", () => {
     expect(plan.stats.parts).toBeGreaterThanOrEqual(3);
     const lines = text(plan);
     const i = lines.findIndex((l) => l.startsWith("; CHECKPOINT 1 "));
-    expect(lines[i]).toMatch(/^; CHECKPOINT 1 \(~1\d min\) re-sincroniza servo$/);
+    // (sem "~" antes dos minutos: para o GRBL esse caractere é "continuar", até num comentário)
+    expect(lines[i]).toMatch(/^; CHECKPOINT 1 \(1\d min\) re-sincroniza servo$/);
     expect(lines.slice(i + 1, i + 9)).toEqual(["M3 S220", "G4 P0.3", "M5", "G4 P0.3", "M3 S220", "G4 P0.3", "M5", "G4 P0.4"]);
     expect(lines[i + 9]).toMatch(/^G0 /);
 

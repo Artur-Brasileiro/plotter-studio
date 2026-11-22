@@ -123,9 +123,20 @@ export function glyphFor(font: FontId, ch: string): Glyph | undefined {
       if (p.x > maxX) maxX = p.x;
     }
   }
-  // o "i" perde o pingo quando ganha acento
-  const strokes = comp[0] === "i" ? base.strokes.filter((s) => s.some((p) => p.y > -8)) : base.strokes;
-  if (comp[0] === "i") top = -5;
+  // O "i" perde o pingo quando ganha acento. O pingo é o traço pequeno e solto da letra (na Simples e
+  // na Futura fica lá em cima; na Cursiva, logo acima do corpo): acha-se pelo tamanho, não pela altura.
+  let strokes = base.strokes;
+  if (comp[0] === "i" && base.strokes.length > 1) {
+    const size = (s: readonly Vec[]) => {
+      const xs = s.map((q) => q.x), ys = s.map((q) => q.y);
+      return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    };
+    const dot = base.strokes.reduce((a, b) => (size(b) < size(a) ? b : a));
+    if (size(dot) <= 4) {
+      strokes = base.strokes.filter((s) => s !== dot);
+      top = Math.min(...strokes.flat().map((q) => q.y));
+    }
+  }
   const cx = comp[1] === "cedilla" ? (minX + maxX) / 2 : (minX + maxX) / 2 + (font === "cursiva" ? 2 : 0);
   return { left: base.left, right: base.right, strokes: [...strokes, ...markStrokes(comp[1], cx, Number.isFinite(top) ? top : CAP_TOP)] };
 }
@@ -161,8 +172,19 @@ export interface TextResult {
 /** Vértice de curva: a linha vira menos que isto. Acima disso é canto e fica vivo. */
 const SMOOTH_MAX_TURN = (55 * Math.PI) / 180;
 
-/** Polilinha → subcaminho. Com `smooth`, os vértices suaves ganham tangente contínua (Catmull-Rom). */
-export function polylineToSubPath(pts: readonly Vec[], smooth: boolean): SubPath {
+/**
+ * Segmento "longo", em unidades da fonte: as curvas das letras são feitas de passos de 2 a 4 unidades;
+ * daqui para cima é uma reta de verdade (a haste e os braços do Y têm 11 e 13).
+ */
+export const LONG_SEGMENT_UNITS = 7;
+
+/**
+ * Polilinha → subcaminho. Com `smooth`, os vértices suaves ganham tangente contínua (Catmull-Rom).
+ * Um vértice entre DUAS retas longas é canto, por menor que seja o ângulo (o encontro do braço com a
+ * haste do Y vira só 39°). `longLen` é o comprimento a partir do qual um segmento conta como reta
+ * longa, na unidade dos pontos.
+ */
+export function polylineToSubPath(pts: readonly Vec[], smooth: boolean, longLen: number = LONG_SEGMENT_UNITS): SubPath {
   const n = pts.length;
   const closed = n > 3 && Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 1e-9;
   if (!smooth || n < 3) return { start: pts[0], segments: pts.slice(1).map((to) => ({ kind: "line" as const, to })), closed: false };
@@ -179,6 +201,7 @@ export function polylineToSubPath(pts: readonly Vec[], smooth: boolean): SubPath
     const a = dir(prev, p), b = dir(p, next);
     const turn = Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y)));
     if (turn > SMOOTH_MAX_TURN) return undefined;
+    if (Math.hypot(p.x - prev.x, p.y - prev.y) > longLen && Math.hypot(next.x - p.x, next.y - p.y) > longLen) return undefined;
     return dir(prev, next);
   });
   const segments: Segment[] = [];
@@ -202,10 +225,14 @@ export function polylineToSubPath(pts: readonly Vec[], smooth: boolean): SubPath
 /** Monta o texto (com quebras de linha) como geometria em mm. */
 export function textGeometry(text: string, options: Partial<TextOptions> = {}): TextResult {
   const o = { ...DEFAULT_TEXT, ...options };
+  const empty: TextResult = { geometry: { subpaths: [] }, width: 0, height: 0, missing: [], strokes: 0 };
+  // medida que não é número (ou não é positiva) não tem desenho
+  if (!(o.capHeightMm > 0) || !Number.isFinite(o.capHeightMm) || !Number.isFinite(o.lineSpacing) || !Number.isFinite(o.letterSpacing)) return empty;
   const k = o.capHeightMm / CAP_UNITS;
   const extra = o.letterSpacing * CAP_UNITS;
   const missing = new Set<string>();
-  const clean = [...text.replace(/\r\n?/g, "\n")].map((ch) => REPLACE[ch] ?? ch).join("");
+  // NFC: texto colado de PDF ou vindo do macOS traz "a" + "~" separados; aqui voltam a ser uma letra só
+  const clean = [...text.normalize("NFC").replace(/\r\n?/g, "\n")].map((ch) => REPLACE[ch] ?? ch).join("");
   const rows = clean.split("\n").map((row) => {
     const items: { glyph: Glyph; x: number }[] = [];
     let x = 0;
@@ -230,11 +257,11 @@ export function textGeometry(text: string, options: Partial<TextOptions> = {}): 
         if (s.length === 0) continue;
         const pts = s.map((p) => ({ x: (p.x + it.x + dx) * k, y: (p.y + dy) * k }));
         // um ponto solto (não há nas fontes, mas um sinal poderia ter) vira um tracinho mínimo
-        subpaths.push(pts.length === 1 ? { start: pts[0], segments: [{ kind: "line", to: pts[0] }], closed: false } : polylineToSubPath(pts, o.smooth));
+        subpaths.push(pts.length === 1 ? { start: pts[0], segments: [{ kind: "line", to: pts[0] }], closed: false } : polylineToSubPath(pts, o.smooth, LONG_SEGMENT_UNITS * k));
       }
     }
   });
-  if (subpaths.length === 0) return { geometry: { subpaths }, width: 0, height: 0, missing: [...missing], strokes: 0 };
+  if (subpaths.length === 0) return { ...empty, missing: [...missing] };
   // a caixa é a da tinta de verdade (acentos e pernas incluídos), com o canto de cima à esquerda em (0, 0)
   let box = emptyBBox();
   for (const pl of flattenGeometry({ subpaths }, IDENTITY, Math.max(0.005, k * 0.02))) box = unionBBox(box, bboxOfPoints(pl.points));

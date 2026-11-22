@@ -3,6 +3,7 @@ import { isJobActive, type ControllerSnapshot, type JobState } from "../../core/
 import { RT } from "../../core/grbl/protocol";
 import { bboxOfPoints } from "../../core/geometry/path";
 import type { GcodeProgram } from "../../core/job/gcode";
+import { REGISTRATION_ID } from "../../core/job/layers";
 import { parseWhat, planSignature, resumeDescent, sendSpan, type SendWhat } from "../../core/job/resume";
 import type { JobPlan } from "../../core/job/types";
 import type { Store } from "../../core/store";
@@ -28,6 +29,8 @@ interface ActiveJob {
   readonly wholeLayer: boolean;
   /** Último traço em que a máquina esteve (índice em plan.strokes), para saber de onde retomar */
   lastStroke: number;
+  /** O que foi enviado: tudo, uma parte, ou uma retomada */
+  readonly kind: SendWhat["kind"];
 }
 
 const RESULT_TEXT: Record<RunRecord["result"], string> = { finished: "concluído", stopped: "parado", failed: "falhou" };
@@ -56,9 +59,10 @@ function saveResume(r: ResumePoint | undefined): void {
   }
 }
 
-/** Retângulo do desenho em mm da máquina (para o contorno). */
+/** Retângulo do desenho em mm da máquina (para o contorno). As cruzes de registro ficam de fora: o contorno mostra onde o DESENHO cai. */
 export function planBBox(plan: JobPlan) {
-  return bboxOfPoints(plan.strokes.flatMap((s) => s.points));
+  const body = plan.strokes.filter((s) => s.drawingId !== REGISTRATION_ID);
+  return bboxOfPoints((body.length ? body : plan.strokes).flatMap((s) => s.points));
 }
 
 export interface SendPanel {
@@ -218,7 +222,7 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     const layer = plan.layer;
     const name = (planner.jobName(plan) || "desenho") + (layer && layer.count > 1 ? ` [${layer.index + 1}/${layer.count} ${layer.penName}]` : "");
     const label = what.kind === "part" ? `${name} (parte ${what.part + 1})` : what.kind === "resume" ? `${name} (retomada)` : name;
-    job = { plan, program, name: label, ...sendSpan(plan, what), estAt: 0, recorded: false, wholeLayer: what.kind !== "part" || what.part === plan.stats.parts - 1, lastStroke: -1 };
+    job = { plan, program, name: label, ...sendSpan(plan, what), estAt: 0, recorded: false, wholeLayer: what.kind !== "part" || what.part === plan.stats.parts - 1, lastStroke: -1, kind: what.kind };
     nextBox.hidden = true;
     if (player.playing) player.stop();
     overlay.setPlan(plan, store.state.job.speedMode === "fixed");
@@ -307,15 +311,21 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     overlay.setProgress(undefined);
     // parou no meio: guarda de onde retomar (vale enquanto o desenho e os ajustes forem os mesmos)
     const sig = planSignature(job.plan);
-    if (j.state === "finished") {
-      if (job.wholeLayer && resumePoint?.sig === sig) saveResume((resumePoint = undefined));
-    } else {
+    const forget = () => {
+      if (resumePoint?.sig === sig) {
+        saveResume((resumePoint = undefined));
+        if (planner.plan === job!.plan) renderParts(job!.plan, "");
+      }
+    };
+    if (j.state === "finished") forget(); // terminou o que foi pedido: o ponto antigo não vale mais
+    else {
       const from = resumeDescent(job.plan, job.lastStroke);
       if (from !== undefined) {
         resumePoint = { sig, descent: from };
         saveResume(resumePoint);
         if (planner.plan === job.plan) renderParts(job.plan, `r${from}`);
-      }
+      } else if (job.kind !== "resume") forget(); // recomeçou do início e parou antes de desenhar: idem
+      // (uma retomada interrompida ainda no aquecimento deixa o ponto guardado como estava)
     }
     if (j.state === "finished") {
       const diff = est > 0 ? Math.round(((realS - est) / est) * 100) : 0;
@@ -454,9 +464,26 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   const schedule = () => {
     if (!raf) raf = requestAnimationFrame(() => ((raf = 0), render(session.snapshot)));
   };
-  session.subscribe(schedule);
+  // Fora do requestAnimationFrame: numa janela escondida ou minimizada ele não roda, e é justamente num
+  // desenho longo que a janela fica escondida. Onde a máquina está e o fim do trabalho são anotados aqui.
+  let trackedState: JobState = session.snapshot.job.state;
+  session.subscribe((s) => {
+    if (job && isJobActive(s.job.state)) {
+      const at = progressPoint(job.program, s.job.currentLine);
+      if (at && at.strokeIndex > job.lastStroke) job.lastStroke = at.strokeIndex;
+    }
+    if (s.job.state !== trackedState) {
+      if (!isJobActive(s.job.state) && isJobActive(trackedState)) finish(s);
+      trackedState = s.job.state;
+    }
+    schedule();
+  });
+  // ao trocar de camada, volta para "camada inteira": a parte escolhida era da outra caneta
+  let shownPen = planner.plan?.layer?.penId;
   planner.subscribe((plan) => {
-    renderParts(plan);
+    const pen = plan?.layer?.penId;
+    renderParts(plan, pen !== shownPen ? "" : undefined);
+    shownPen = pen;
     schedule();
   });
   renderParts(planner.plan);

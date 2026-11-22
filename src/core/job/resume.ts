@@ -22,17 +22,39 @@ export function sendSpan(plan: JobPlan, what: SendWhat): { t0: number; t1: numbe
 
 /**
  * Impressão digital de um plano: a retomada só vale para o MESMO desenho, no mesmo lugar, com os
- * mesmos ajustes. Se qualquer coisa mudar, as descidas mudam de número e o ponto guardado não serve.
+ * mesmos ajustes. Se qualquer coisa mudar, as descidas mudam de número ou de lugar e o ponto guardado
+ * não serve. Entra TODO ponto de todo traço (em centésimos de mm, como no arquivo), a ordem, as emendas
+ * e os cortes: contar traços e olhar só o primeiro e o último ponto não bastava (com cruzes de registro
+ * eles são sempre os mesmos, e um desenho inteiro podia mudar de lugar sem a assinatura mudar).
  */
+const signatures = new WeakMap<object, string>();
 export function planSignature(plan: JobPlan): string {
-  const s = plan.stats;
-  const first = plan.strokes[0]?.points[0];
-  const lastStroke = plan.strokes[plan.strokes.length - 1];
-  const last = lastStroke?.points[lastStroke.points.length - 1];
-  const at = (p: { x: number; y: number } | undefined) => (p ? `${p.x.toFixed(2)},${p.y.toFixed(2)}` : "");
-  return [plan.layer?.penId ?? "", plan.strokes.length, plan.descents.length, Math.round(s.drawMm * 10), Math.round(s.estimate.totalS), at(first), at(last)].join("|");
+  const hit = signatures.get(plan);
+  if (hit) return hit;
+  // dois FNV-1a de 32 bits com sementes diferentes: 64 bits no total
+  let h1 = 0x811c9dc5, h2 = 0x9747b28c;
+  const mix = (v: number) => {
+    const n = v | 0;
+    for (let k = 0; k < 4; k++) {
+      const byte = (n >>> (k * 8)) & 0xff;
+      h1 = Math.imul(h1 ^ byte, 0x01000193);
+      h2 = Math.imul(h2 ^ byte, 0x01000197);
+    }
+  };
+  for (const s of plan.strokes) {
+    mix(s.points.length);
+    mix((s.joinedToPrevious ? 1 : 0) | (s.relift ? 2 : 0));
+    for (const p of s.points) {
+      mix(Math.round(p.x * 100));
+      mix(Math.round(p.y * 100));
+    }
+  }
+  for (const d of plan.descents) mix(d.first);
+  const job = plan.job ? `${plan.job.speedMode}:${plan.job.fixedFeed}` : "";
+  const sig = [plan.layer?.penId ?? "", plan.strokes.length, plan.descents.length, (h1 >>> 0).toString(16), (h2 >>> 0).toString(16), job].join("|");
+  signatures.set(plan, sig);
+  return sig;
 }
-
 /**
  * De qual descida retomar, sabendo o último traço em que a máquina esteve (índice em `plan.strokes`).
  * Repete a descida anterior, por segurança: o que a máquina já tinha no planejador pode não ter saído.

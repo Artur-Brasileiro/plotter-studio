@@ -24,10 +24,41 @@ import type { Descent, PlannedStroke, TimeEstimate } from "./types";
 /** Deslocamento na conta do script de blindagem e da auditoria (mm/min). Igual a AUDIT_TRAVEL_FEED. */
 const SCRIPT_TRAVEL_FEED = 3000;
 
+/**
+ * O balde do servo: quantas fichas cabem e quantas entram por segundo.
+ * - Cabe o que sobra entre o pico e a média, menos uma de folga; nunca menos que o maior gasto de uma vez
+ *   (com checkpoints, 3: a descida e as duas batidas).
+ * - Em 60 s saem, no pior caso, o balde cheio mais o que entrou: `capacity + taxa × 60 <= pico − 1`.
+ *   Com o pico colado na média (20/20), quem cede é a taxa: o trabalho anda um pouco abaixo da média
+ *   pedida, e o pico vale.
+ */
+export function servoBucket(profile: MachineProfile): { capacity: number; ratePerS: number } {
+  const { servo, shield } = profile;
+  const burst = shield.enabled && shield.resyncMinutes > 0 ? 1 + CHECKPOINT_DWELLS_S.length / 2 : 1;
+  const capacity = Math.max(burst, servo.peakPer60s - servo.avgPerMin - 1);
+  const perMin = Math.max(1, Math.min(servo.avgPerMin, servo.peakPer60s - capacity - 1));
+  return { capacity, ratePerS: perMin / 60 };
+}
+
+/**
+ * Pausas dos ciclos da blindagem. Os tempos fixos são os dos arquivos que já rodaram na máquina; se o
+ * perfil pede mais tempo para o servo descer ou subir, vale o do perfil (senão o G0 seguinte sairia cedo).
+ */
+export function shieldDwells(profile: MachineProfile): { header: number; warmDown: number; warmUp: number; checkpoint: number[]; footer: number } {
+  const down = profile.pen.settleSeconds, up = profile.pen.settleUpSeconds;
+  return {
+    header: Math.max(HEADER_SETTLE_S, up),
+    warmDown: Math.max(WARMUP_SETTLE_S, down),
+    warmUp: Math.max(WARMUP_SETTLE_S, up),
+    checkpoint: CHECKPOINT_DWELLS_S.map((s, i) => Math.max(s, i % 2 === 0 ? down : up)),
+    footer: Math.max(FOOTER_SETTLE_S, up),
+  };
+}
+
 /** Fichas do balde logo depois do aquecimento, no começo de um arquivo. */
 export function tokensAfterWarmup(profile: MachineProfile): number {
-  const { servo, shield } = profile;
-  const capacity = Math.max(1, servo.peakPer60s - servo.avgPerMin - 1);
+  const { shield } = profile;
+  const { capacity } = servoBucket(profile);
   const warm = shield.enabled ? shield.warmupCycles : 0;
   // O aquecimento também são ciclos do servo. O arquivo começa com o balde no ponto em que, pagos os
   // ciclos do aquecimento, sobra uma ficha (com os 8 ciclos de sempre); com um aquecimento maior que
@@ -78,14 +109,17 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
   let tb = 0;
   let cur = start;
 
+  /** O 1º deslocamento do arquivo parte de um lugar que o arquivo não diz: não conta como descanso do servo */
+  let firstTravel = true;
   const travel = (to: Vec) => {
     const b = makeBlock(cur, to, "rapid", profile);
     if (b) {
       const dt = chainTimes([b], profile)[0];
       travelS += dt;
       t += dt;
-      tb += Math.min(dt, dist(cur, to) / (SCRIPT_TRAVEL_FEED / 60));
+      if (!firstTravel) tb += Math.min(dt, dist(cur, to) / (SCRIPT_TRAVEL_FEED / 60));
     }
+    firstTravel = false;
     cur = to;
   };
   const dwell = (s: number) => {
@@ -94,18 +128,18 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
     tb += s;
   };
 
-  dwell(HEADER_SETTLE_S); // cabeçalho: M5 + G4
+  const dw = shieldDwells(profile);
+  dwell(dw.header); // cabeçalho: M5 + G4
   if (shield.enabled && shield.warmupCycles > 0) {
-    dwell(HEADER_SETTLE_S);
+    dwell(dw.header);
     travel({ x: shield.safeX, y: shield.safeY });
-    dwell(shield.warmupCycles * 2 * WARMUP_SETTLE_S + WARMUP_FINAL_S);
+    dwell(shield.warmupCycles * (dw.warmDown + dw.warmUp) + WARMUP_FINAL_S);
   }
 
   // balde de fichas
   // Uma ficha de folga no balde e esperas arredondadas para cima (0,1 s): a máquina real e a
   // auditoria não marcam o tempo exatamente como esta conta, e o limite não pode estourar por 1.
-  const rate = servo.avgPerMin / 60;
-  const capacity = Math.max(1, servo.peakPer60s - servo.avgPerMin - 1);
+  const { capacity, ratePerS: rate } = servoBucket(profile);
   // Começa com uma ficha só (não com o balde cheio): assim a média do trabalho INTEIRO nunca passa
   // de avgPerMin. As rajadas até o pico são pagas com a folga acumulada nos traços longos.
   let tokens = tokensAfterWarmup(profile);
@@ -165,7 +199,7 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
         tokens = Math.min(tokens, fresh - 1);
       }
       lastCheckpointT = t;
-      dwell(CHECKPOINT_DWELLS_S.reduce((a, b) => a + b, 0));
+      dwell(dw.checkpoint.reduce((a, b) => a + b, 0));
     }
     if (!s0.relift) travel(s0.points[0]);
     const tDown = t;
@@ -219,7 +253,7 @@ export function scheduleJob(strokes: readonly PlannedStroke[], start: Vec, end: 
     descents.push({ first, last, waitS: wait, checkpoint, checkpointMin, part, tDownS: tDown, drawS: dDraw, lengthMm, relift: !!s0.relift, bucket: bucket0 });
   });
 
-  dwell(shield.enabled ? 2 * FOOTER_SETTLE_S : 0);
+  dwell(shield.enabled ? 2 * dw.footer : 0);
   travel(end);
   return {
     descents,

@@ -69,6 +69,10 @@ export interface AuditReport {
   readonly unknownLines: number;
   /** Linhas com comando "$" (mexem na configuração do GRBL; tem que ser 0) */
   readonly configLines: number;
+  /** Linhas com "?" ou "!", que o GRBL executa na hora mesmo num comentário (tem que ser 0) */
+  readonly realtimeLines: number;
+  /** Linhas com "~" (continuar): aviso */
+  readonly tildeLines: number;
   /** Descidas com o S (a altura do servo) diferente do comando de abaixar do perfil (tem que ser 0) */
   readonly wrongServoPosition: number;
   /** Pausas do servo que existem mas são mais curtas que a regra (aviso) */
@@ -90,6 +94,23 @@ export interface AuditOptions {
   readonly penOffset?: { x: number; y: number };
   /** O arquivo tem cruzes de registro: elas ficam fora da zona de propósito (REGRAS_GCODE.md, 2.2) */
   readonly registration?: boolean;
+}
+
+/**
+ * Tira os comentários como o GRBL (protocol.c): dentro de "( ... )" tudo é comentário, o ";" inclusive,
+ * e depois do ")" a linha CONTINUA; fora de parênteses, o ";" joga fora o resto da linha.
+ */
+export function stripComments(raw: string): string {
+  let out = "";
+  let paren = false;
+  for (const c of raw) {
+    if (paren) {
+      if (c === ")") paren = false;
+    } else if (c === "(") paren = true;
+    else if (c === ";") break;
+    else out += c;
+  }
+  return out;
 }
 
 /** As cruzes do plano: o que a auditoria precisa saber de uma camada. */
@@ -124,7 +145,7 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
   let drawS = 0, travelS = 0, dwellS = 0, restS = 0;
   let drawMm = 0, travelMm = 0;
   let rapidsPenDown = 0, penCmdsWithoutDwell = 0, outOfZone = 0, outOfArea = 0;
-  let unknownLines = 0, configLines = 0;
+  let unknownLines = 0, configLines = 0, realtimeLines = 0, tildeLines = 0;
   let firstUnknown = "";
   let warmupCycles = 0, checkpoints = 0;
   /** comando de caneta esperando o G4 (e qual foi) */
@@ -142,6 +163,8 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
   const descentDraw: number[] = [];
   const descentDown: number[] = [];
   let curDrawS = 0, curDrawMm = 0, curDownS = 0, curMoved = false, curStartOffZone = false, curT = 0, curX = NaN, curY = NaN;
+  /** a descida em curso entrou em modo de traço (G1): é desenho, mesmo que não risque nada (um ponto) */
+  let curHasG1 = false;
   let longestS = 0, longestMm = 0, penDownS = 0;
 
   // Aquecimento: as batidas no ar que ABREM o arquivo, no mesmo lugar, sem riscar nada. Duas ou mais
@@ -169,7 +192,8 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
     else for (const l of leading) account(l.t, 0, 0, l.downS, l.offZone); // uma batida só é um ponto do desenho
   };
   const endDescent = () => {
-    if (leadOpen && !curMoved && (leading.length === 0 || (same(curX, leadX) && same(curY, leadY)))) {
+    // (um ponto do desenho também é uma batida sem movimento, mas vem com o seu "G1 F...": não é aquecimento)
+    if (leadOpen && !curMoved && !curHasG1 && (leading.length === 0 || (same(curX, leadX) && same(curY, leadY)))) {
       leadX = curX;
       leadY = curY;
       leading.push({ t: curT, downS: curDownS, offZone: curStartOffZone });
@@ -189,12 +213,10 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
     if (raw.length > maxLineLength) maxLineLength = raw.length;
     if (/[^\x09\x20-\x7e]/.test(raw)) nonAscii++;
     if (/^\s*;\s*CHECKPOINT\b/i.test(raw)) checkpoints++;
-    // comentários: tudo depois de ";" e o que estiver entre parênteses (um "G4" citado ali não é pausa)
-    const code = raw
-      .split(";")[0]
-      .replace(/\([^)]*\)?/g, " ")
-      .trim()
-      .toUpperCase();
+    // "?", "!" e "~" o GRBL executa na hora, em qualquer lugar da linha, comentário incluído
+    if (/[?!]/.test(raw)) realtimeLines++;
+    else if (raw.includes("~")) tildeLines++;
+    const code = stripComments(raw).trim().toUpperCase();
     if (!code) continue;
     if (code[0] === "$") {
       configLines++;
@@ -217,8 +239,10 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
       switch (m[1]) {
         case "G":
           if (v === 0) motion = 0;
-          else if (v === 1) motion = 1;
-          else if (v === 4) isDwell = true;
+          else if (v === 1) {
+            motion = 1;
+            if (penDown) curHasG1 = true;
+          } else if (v === 4) isDwell = true;
           else if (v === 90) absolute = true;
           else if (v === 91) absolute = false;
           else if (!HARMLESS_G.has(v)) bad = true; // arcos, polegadas, G92, G28...: nada disso é conferido aqui
@@ -277,6 +301,7 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
         curDrawMm = 0;
         curDownS = 0;
         curMoved = false;
+        curHasG1 = false;
         // onde a caneta encosta também é traço
         curStartOffZone = !Number.isNaN(x) && offZone(x, y);
         // sem o S certo o servo vai para outra altura (com S0, depois de um reset, nem desce)
@@ -379,7 +404,9 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
   const peak = peakOf(allDowns);
   drawDowns.sort((a, b) => a - b);
   const totalS = t;
-  const avg = totalS > 0 ? cycles / (totalS / 60) : 0;
+  // Ciclos por minuto. Num arquivo de menos de um minuto a conta é "ciclos nesse minuto": um tracinho
+  // só, que leva 2 segundos, não são "30 ciclos por minuto" (quem cuida das rajadas é o pico).
+  const avg = totalS > 0 ? cycles / (Math.max(totalS, 60) / 60) : 0;
   // mesma conta do historico de REGRAS_GCODE.md: do M3 ao M5, com a pausa do servo (confere com os
   // 15% do "senna fina" e os 46% da "grossa v7")
   const short = descentDown.filter((s) => s < 1).length;
@@ -396,6 +423,9 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
   if (outOfZone) err(`${n(outOfZone)} ponto(s) de traço fora da zona de desenho.`);
   if (unknownLines) err(`${n(unknownLines)} linha(s) que a conferência não sabe ler (a 1ª: "${firstUnknown}"): não dá para garantir o que a máquina faria.`);
   if (configLines) err(`${n(configLines)} linha(s) com comando "$": mexem na configuração do GRBL e não podem estar num desenho.`);
+  if (realtimeLines) err(`${n(realtimeLines)} linha(s) com "?" ou "!": o GRBL executa esses caracteres na hora (relatório, pausa), até dentro de comentário.`);
+  // o "~" (continuar) só faz alguma coisa com a máquina em pausa; os arquivos blindados antigos o têm no comentário do checkpoint
+  if (tildeLines) warn(`${n(tildeLines)} linha(s) com "~": para o GRBL é "continuar", até dentro de comentário. Se a máquina estiver em pausa, ela volta a andar.`);
   if (wrongServoPosition) err(`${n(wrongServoPosition)} descida(s) com a altura do servo diferente de S${expectedS}: a caneta desceria errado, ou nem desceria.`);
   if (shortDwells) warn(`${n(shortDwells)} pausa(s) do servo mais curtas que a regra (${RULE_DWELL_DOWN_S} s depois de descer, ${RULE_DWELL_UP_S} s depois de subir).`);
   const over = servo.onOverload === "warn" ? warn : err;
@@ -433,6 +463,8 @@ export function auditGcode(text: string | readonly string[], profile: MachinePro
     outOfArea,
     unknownLines,
     configLines,
+    realtimeLines,
+    tildeLines,
     wrongServoPosition,
     shortDwells,
     problems,

@@ -110,7 +110,7 @@ const GROUPS: Group[] = [
     lead: "O que esquenta o servo é subir e descer sem parar, não ficar embaixo. Aqui ficam os limites e o que fazer quando um desenho passa deles.",
     fields: [
       { path: "servo.avgPerMin", label: "Média máxima (descidas por minuto)", help: "A regra original pede 20. Até ~30 tem rodado sem problema.", min: 1, max: 200 },
-      { path: "servo.peakPer60s", label: "Pico máximo em 60 s", help: "Acima de ~50 por minuto, com picos de 80, o servo já travou de quente.", min: 1, max: 400 },
+      { path: "servo.peakPer60s", label: "Pico máximo em 60 s", help: "Acima de ~50 por minuto, com picos de 80, o servo já travou de quente. Deixe pelo menos 5 acima da média, para o desenho não ficar esperando à toa.", min: 5, max: 400 },
       {
         path: "servo.onOverload",
         label: "Se o desenho passar do limite",

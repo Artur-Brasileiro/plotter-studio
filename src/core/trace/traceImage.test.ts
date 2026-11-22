@@ -501,3 +501,173 @@ describe("o traçador diz o que é cada traço e a largura da linha no original"
     expect([...ph.kinds].every((k) => k === STROKE_KIND.hatch)).toBe(true);
   });
 });
+
+/** Pinta um disco (ou, com `inner`, um anel) com borda suave: é assim que uma imagem de verdade chega. */
+function ring(img: GrayImage, cx: number, cy: number, outer: (angle: number) => number, inner?: (angle: number) => number): void {
+  for (let y = 0; y < img.height; y++)
+    for (let x = 0; x < img.width; x++) {
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      const rr = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
+      // cobertura do pixel pela tinta, com meio pixel de transição
+      const inside = Math.min(1, Math.max(0, outer(a) - rr + 0.5)) * (inner ? Math.min(1, Math.max(0, rr - inner(a) + 0.5)) : 1);
+      if (inside > 0) img.data[y * img.width + x] = Math.min(img.data[y * img.width + x], 255 * (1 - inside));
+    }
+}
+const segmentsOf = (r: TraceResult) => r.geometry.subpaths.reduce((n, sp) => n + sp.segments.length, 0);
+/** Desvio-padrão da distância dos pontos até um centro: quanto um círculo traçado "treme". */
+/** Quantas vezes o traço troca de "indo para fora" para "indo para dentro" em volta de um centro: o vai e vem. */
+const reversals = (subpaths: readonly SubPath[], cx: number, cy: number) => {
+  let n = 0;
+  for (const sp of subpaths) {
+    const d = points(sp).map((q) => Math.hypot(q.x - cx, q.y - cy));
+    let dir = 0, last = d[0];
+    for (const v of d) {
+      if (Math.abs(v - last) < 0.03) continue; // só conta o que anda de verdade
+      const now = v > last ? 1 : -1;
+      if (dir !== 0 && now !== dir) n++;
+      dir = now;
+      last = v;
+    }
+  }
+  return n;
+};
+const wobble = (subpaths: readonly SubPath[], cx: number, cy: number) => {
+  const d = subpaths.flatMap((sp) => points(sp).map((q) => Math.hypot(q.x - cx, q.y - cy)));
+  const mean = d.reduce((a, b) => a + b, 0) / d.length;
+  return { mean, std: Math.sqrt(d.reduce((a, b) => a + (b - mean) ** 2, 0) / d.length) };
+};
+
+describe("o traço é alisado na escala da caneta", () => {
+  // um anel fino (3 px) cuja linha treme um quarto de pixel para dentro e para fora a cada 4 px:
+  // é o tamanho do serrilhado de uma imagem de verdade
+  const TW = 200;
+  const shaky = blank(TW, TW);
+  const tremor = (base: number) => (a: number) => base + 0.25 * Math.sin(110 * a);
+  ring(shaky, 100, 100, tremor(71.5), tremor(68.5));
+  // a mesma imagem, com a caneta valendo 1 px e valendo 2,5 px
+  const smallPen = traceImage(shaky, { mode: "line", mmPerPx: 0.4, penMm: 0.4 });
+  const bigPen = traceImage(shaky, { mode: "line", mmPerPx: 0.16, penMm: 0.4 });
+
+  it("com a caneta do tamanho do pixel, o traço segue a imagem como sempre (o tremor fica)", () => {
+    expect(smallPen.stats.strokes).toBe(1);
+    expect(wobble(smallPen.geometry.subpaths, 100, 100).std).toBeGreaterThan(0.06);
+    expect(reversals(smallPen.geometry.subpaths, 100, 100)).toBeGreaterThan(60); // o vai e vem do tremor está lá
+  });
+
+  it("com a caneta valendo 2,5 px, esse tremor (um décimo da caneta: ela nem consegue mostrar) some", () => {
+    expect(bigPen.stats.strokes).toBe(1);
+    // o vai e vem acaba; o círculo pode fugir um pouco do ideal, sempre bem menos que a largura da caneta (2,5 px)
+    expect(reversals(bigPen.geometry.subpaths, 100, 100)).toBeLessThan(24);
+    const w = wobble(bigPen.geometry.subpaths, 100, 100);
+    expect(w.std).toBeLessThan(0.2);
+    expect(Math.abs(w.mean - 70)).toBeLessThan(0.3); // o círculo continua no lugar e do mesmo tamanho
+  });
+
+  it("alisado, o mesmo traço tem bem menos trechos: menos vai e vem para a máquina", () => {
+    expect(segmentsOf(bigPen)).toBeLessThan(0.6 * segmentsOf(smallPen));
+  });
+
+  it("um canto vivo continua canto: o alisamento não arredonda um quadrado", () => {
+    const sq = blank(TW, TW);
+    rect(sq, 50, 50, 150, 53);
+    rect(sq, 50, 147, 150, 150);
+    rect(sq, 50, 50, 53, 150);
+    rect(sq, 147, 50, 150, 150);
+    const r = traceImage(sq, { mode: "line", mmPerPx: 0.16, penMm: 0.4 });
+    // algum ponto do traço chega a menos de 1 px de cada canto do quadrado (o centro da linha passa em 51,5 e 148,5)
+    const all = r.geometry.subpaths.flatMap(points);
+    for (const [cx, cy] of [[51.5, 51.5], [148.5, 51.5], [51.5, 148.5], [148.5, 148.5]]) expect(Math.min(...all.map((q) => Math.hypot(q.x - cx, q.y - cy)))).toBeLessThan(1);
+  });
+
+  it("o contorno de uma área cheia não segue o serrilhado dos pixels: um disco sai redondo", () => {
+    const disc = blank(TW, TW);
+    ring(disc, 100, 100, () => 60);
+    const r = traceImage(disc, { mode: "ink", mmPerPx: 0.16, penMm: 0.4, hatchSpacingMm: 0 });
+    expect(r.stats.outlines).toBe(1);
+    // redondo (foge do círculo menos que um vigésimo da caneta) e com poucos trechos: nada de degrau em degrau
+    const w = wobble(r.geometry.subpaths, 100, 100);
+    expect(w.std).toBeLessThan(0.12);
+    expect(segmentsOf(r)).toBeLessThanOrEqual(12);
+    expect(Math.abs(w.mean - (60 - 1.25))).toBeLessThan(0.3); // a caneta anda meia largura (1,25 px) para dentro da borda
+  });
+});
+
+describe("Preto e branco: o que é traço e o que é área cheia", () => {
+  // caneta de 2 px (0,4 mm num desenho de 0,2 mm por pixel)
+  const PW = 220, PH = 120;
+  const ink = (img: GrayImage, o: Partial<TraceOptions> = {}) => traceImage(img, { mode: "ink", mmPerPx: 0.2, penMm: 0.4, hatchSpacingMm: 1, hatchMinMm: 1, ...o });
+  const bar = (thickness: number) => {
+    const img = blank(PW, PH);
+    rect(img, 20, 60 - Math.floor(thickness / 2), 200, 60 - Math.floor(thickness / 2) + thickness);
+    return img;
+  };
+
+  it("uma linha de 1,5 caneta de largura é um traço só, pelo meio (antes ganhava contorno dos dois lados)", () => {
+    const r = ink(bar(3));
+    expect(r.stats.outlines).toBe(0);
+    expect(r.stats.strokes).toBe(1);
+    expect(lengthOf(r.geometry.subpaths[0])).toBeGreaterThan(170);
+    for (const q of points(r.geometry.subpaths[0])) expect(Math.abs(q.y - 60.5)).toBeLessThan(0.8);
+  });
+
+  it("uma barra de 3,5 canetas é área cheia: contorno e hachura", () => {
+    const r = ink(bar(7));
+    expect(r.stats.outlines).toBe(1);
+    expect(r.stats.strokes).toBe(0);
+  });
+
+  it("o limite é ajustável: com 'área cheia a partir de 1,35 caneta', a linha de 1,5 volta a ser área", () => {
+    expect(ink(bar(3), { fillFromPens: 1.35 }).stats.outlines).toBe(1);
+  });
+
+  it("um nó numa linha fina (onde ela engrossa um pouco) não abre um furo: o traço passa direto", () => {
+    const img = bar(3);
+    ring(img, 110, 60.5, () => 3.2); // um engrossamento de 3 canetas de diâmetro no meio da linha
+    const r = ink(img);
+    expect(r.stats.outlines).toBe(0);
+    expect(r.stats.strokes).toBe(1);
+    expect(lengthOf(r.geometry.subpaths[0])).toBeGreaterThan(170); // inteiro, de ponta a ponta
+  });
+
+  /** Uma imagem com uma barra cheia num canto (para ter tinta de verdade) e um ponto de raio `radius` longe dela. */
+  const withDot = (radius: number) => {
+    const img = blank(PW, PH);
+    rect(img, 10, 10, 70, 24);
+    ring(img, 160, 80, () => radius);
+    return img;
+  };
+  /** O que foi desenhado perto do ponto (a barra do canto fica de fora). */
+  const nearDot = (r: TraceResult) => r.geometry.subpaths.filter((sp) => points(sp).every((q) => Math.hypot(q.x - 160, q.y - 80) < 14));
+
+  it("um ponto final (um disco de 3 canetas) é UMA descida, e sai do tamanho dele: uma espiral do centro à borda", () => {
+    const dot = nearDot(ink(withDot(3)));
+    expect(dot).toHaveLength(1);
+    const b = bbox(dot);
+    // o centro da caneta vai até 1,5 caneta de raio menos meia caneta: uns 2 px para cada lado
+    expect(b.maxX - b.minX).toBeGreaterThan(3);
+    expect(b.maxX - b.minX).toBeLessThan(5);
+    expect(Math.abs((b.minX + b.maxX) / 2 - 160)).toBeLessThan(0.6);
+    expect(Math.abs((b.minY + b.maxY) / 2 - 80)).toBeLessThan(0.6);
+  });
+
+  it("um pontinho da largura da caneta continua sendo um toque só", () => {
+    const r = ink(withDot(1.2));
+    const dot = nearDot(r);
+    expect(dot).toHaveLength(1);
+    expect(r.stats.dots).toBe(1);
+    const b = bbox(dot);
+    expect(b.maxX - b.minX).toBeLessThan(0.1);
+  });
+
+  it("as pontas agudas de uma área cheia não soltam tracinhos: um triângulo é só o contorno e a hachura", () => {
+    const tri = blank(PW, PH);
+    for (let y = 20; y < 100; y++) {
+      const half = ((y - 20) / 80) * 45; // ponta de uns 60° em cima, cantos de 60° embaixo
+      for (let x = Math.ceil(110 - half); x < 110 + half; x++) tri.data[y * PW + x] = 0;
+    }
+    const r = ink(tri);
+    expect(r.stats.outlines).toBe(1);
+    expect(r.stats.strokes).toBe(0);
+    expect(r.stats.dots).toBe(0);
+  });
+});

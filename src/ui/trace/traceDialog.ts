@@ -622,6 +622,16 @@ export function openTraceDialog(store: Store, file: File): void {
     check("Pintar o fundo", () => s.fillBackground, (v) => (s.fillBackground = v), "O fundo é a área cheia que encosta na borda da imagem. Desmarcado, fica só o contorno dele, e o desenho sai bem mais rápido."),
     range("Distância da hachura", 0, 4, 0.1, () => s.hatchSpacingMm, (v) => (s.hatchSpacingMm = v), (v) => (v === 0 ? "sem hachura" : mmFmt(v)), "Menor = mais escuro e mais demorado. 0 = só o contorno."),
     more(
+      range(
+        "Área cheia a partir de",
+        1.2,
+        3,
+        0.1,
+        () => s.fillFromPens,
+        (v) => (s.fillFromPens = v),
+        (v) => `${v.toLocaleString("pt-BR", { minimumFractionDigits: 1 })} canetas`,
+        "Uma linha mais larga que isto ganha contorno dos dois lados e hachura; mais fina, é um risco só pelo meio. Para a esquerda, o traço sai mais encorpado (como nanquim) e demora mais.",
+      ),
       check("Contornar a área", () => s.outline, (v) => (s.outline = v)),
       hatchAngle(),
       check("Hachura cruzada", () => s.hatchCross, (v) => (s.hatchCross = v), "Uma segunda hachura, a 90° da primeira"),

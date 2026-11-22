@@ -88,6 +88,12 @@ export interface TraceOptions {
   readonly minLineMm: number;
   /** Modo "ink": pinta (hachura) a área cheia que encosta na borda da imagem. Sem isso, fica só o contorno dela. */
   readonly fillBackground: boolean;
+  /**
+   * Modo "ink": a partir de quantas larguras de caneta uma linha deixa de ser traço (um risco pelo meio) e
+   * passa a ser área cheia (contorno dos dois lados e hachura). Com 2, os dois riscos do contorno encostam
+   * um no outro sem sobrar furo; abaixo disso eles se atropelam e a letra sai com furinhos.
+   */
+  readonly fillFromPens: number;
 }
 
 export const DEFAULT_TRACE: TraceOptions = {
@@ -119,6 +125,7 @@ export const DEFAULT_TRACE: TraceOptions = {
   photoBoost: 0.5,
   minLineMm: 0,
   fillBackground: true,
+  fillFromPens: 2,
 };
 
 export interface TraceStats {
@@ -192,17 +199,33 @@ function polylineLength(p: Float64Array, closed: boolean): number {
   return L;
 }
 
-/** Ajuste de um traço de linha única: mais fiel nos pequenos (estrelas, janelas), mais liso nos longos. */
-function strokeFit(length: number, o: TraceOptions): FitOptions {
-  const small = length < 40;
+/**
+ * Quantos pixels da imagem cabem no menor detalhe que a caneta consegue mostrar (nunca menos de 1).
+ * Uma imagem nítida traçada para uma caneta que vale 2 px tem tremores de meio pixel que não aparecem no
+ * papel mas viram centenas de trechinhos de vai e vem para a máquina. As tolerâncias do ajuste das curvas
+ * crescem com este fator; com a caneta do tamanho do pixel (ou menor) ele vale 1 e nada muda.
+ */
+export function penDetail(penMm: number, mmPerPx: number): number {
+  const penPx = penMm / mmPerPx;
+  return Number.isFinite(penPx) ? Math.max(1, penPx / 1.1) : 1;
+}
+
+/**
+ * Ajuste de um traço de linha única: mais fiel nos pequenos (estrelas, janelas), mais liso nos longos.
+ * `fine` é o `penDetail`: o erro tolerado e a régua crescem com ele; as medidas que guardam a FORMA (o braço
+ * que acha os cantos, as suavizações) crescem só com a raiz, para letra pequena não perder o desenho.
+ */
+function strokeFit(length: number, o: TraceOptions, fine: number): FitOptions {
+  const small = length < 40 * fine;
+  const shape = Math.sqrt(fine);
   return {
-    tol: 0.18,
-    cL: small ? 1.6 : 2.4,
+    tol: 0.18 * fine,
+    cL: (small ? 1.6 : 2.4) * shape,
     cdeg: 50,
-    gap: small ? 0.8 : 1.1,
-    smooth: Math.min(0.55, Math.max(0.2, length / 100)) * (o.smooth / 0.5),
-    presmooth: 0.25,
-    straighten: o.straighten,
+    gap: (small ? 0.8 : 1.1) * shape,
+    smooth: Math.min(0.55, Math.max(0.2, length / (100 * fine))) * (o.smooth / 0.5) * shape,
+    presmooth: 0.25 * shape,
+    straighten: o.straighten * fine,
   };
 }
 
@@ -263,6 +286,79 @@ function dotSubPath(x: number, y: number): SubPath {
 }
 
 /**
+ * Ponto largo (um ponto final, o pingo de um "i" gordo): uma espiral do centro até a borda, numa descida só.
+ * Um toque da caneta deixaria o ponto pequeno demais, e um contorno em volta deixaria um furo no meio.
+ * `widthPx` é o diâmetro do ponto e `penPx` a largura da caneta, em px da imagem.
+ */
+function fatDotSubPath(x: number, y: number, widthPx: number, penPx: number): SubPath {
+  const R = Math.max(0, (widthPx - penPx) / 2); // até onde o CENTRO da caneta vai
+  const pitch = 0.9 * penPx; // uma volta avança quase uma caneta: as voltas encostam
+  const turns = R / pitch + 1; // a última volta é um círculo inteiro na borda
+  const steps = Math.max(8, Math.ceil(turns * 16));
+  const at = (i: number) => {
+    const th = (2 * Math.PI * turns * i) / steps;
+    const rho = Math.min(R, (pitch * th) / (2 * Math.PI));
+    return { x: x + rho * Math.cos(th), y: y + rho * Math.sin(th) };
+  };
+  const segments: Segment[] = [];
+  for (let i = 1; i <= steps; i++) segments.push({ kind: "line", to: at(i) });
+  return { start: at(0), segments, closed: false };
+}
+
+/** Área cheia com menos que isto (× raio da caneta ao quadrado) não vale contorno: é um nó de linha ou um ponto. */
+const SMALL_FILL = 40;
+/** Sobra de traço fino colada numa área cheia, com menos que isto (× raio²), é resto de canto agudo. */
+const LEFTOVER = 10;
+
+/**
+ * Tira do "fino" as sobras das pontas agudas das áreas cheias. A ponta redonda da caneta não entra num canto
+ * vivo, então sobra ali um caquinho de tinta que não é traço de nada: ele fica inteiro colado na área cheia.
+ * Um componente do fino que vai longe da área cheia é traço de verdade (um fio que sai dela) e fica.
+ */
+function withoutCornerLeftovers(thin: Uint8Array, thick: Uint8Array, W: number, H: number, reach: number, r: number): Uint8Array {
+  const notThick = new Uint8Array(W * H);
+  let any = false;
+  for (let i = 0; i < notThick.length; i++) {
+    if (thick[i]) any = true;
+    else notThick[i] = 1;
+  }
+  if (!any) return thin;
+  const toThick = distanceTransform({ width: W, height: H, data: notThick });
+  const far = 3 * reach;
+  const kept = new Uint8Array(W * H);
+  const stack: number[] = [];
+  for (let i = 0; i < kept.length; i++) {
+    if (thin[i] && toThick[i] > far) {
+      kept[i] = 1;
+      stack.push(i);
+    }
+  }
+  while (stack.length) {
+    const i = stack.pop()!;
+    const x = i % W, y = (i - x) / W;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= H) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if (xx < 0 || xx >= W) continue;
+        const j = yy * W + xx;
+        if (thin[j] && !kept[j]) {
+          kept[j] = 1;
+          stack.push(j);
+        }
+      }
+    }
+  }
+  // o que ficou só perto da área cheia: pedaço grande é traço, pedaço pequeno é sobra de canto
+  const near = new Uint8Array(W * H);
+  for (let i = 0; i < near.length; i++) if (thin[i] && !kept[i]) near[i] = 1;
+  const big = cleanMask({ width: W, height: H, data: near }, LEFTOVER * r * r).data;
+  for (let i = 0; i < kept.length; i++) if (big[i]) kept[i] = 1;
+  return kept;
+}
+
+/**
  * `color` são os pixels coloridos da mesma imagem; só o modo "illus" usa (para enxergar a borda entre
  * duas cores de mesma luminância). Sem ele, o modo "illus" trabalha só com o cinza.
  */
@@ -292,6 +388,8 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     return cleanMask(fieldToMask(field), Math.max(2, o.speckPx * k * k));
   };
 
+  /** O ajuste das curvas na escala da caneta (ver `penDetail`). No modo "illus" a imagem de trabalho já tem 1 px = 1 caneta. */
+  const fine = penDetail(o.penMm, o.mmPerPx);
   const subpaths: SubPath[] = [];
   const kinds: number[] = [];
   const widths: number[] = [];
@@ -315,8 +413,9 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     m: Mask,
     from: number,
     to: number,
-    c: { k?: number; spurPx?: number; dots?: boolean; minLength?: number; out?: (sp: SubPath) => SubPath; outScale?: number } = {},
+    c: { k?: number; spurPx?: number; dots?: boolean; minLength?: number; out?: (sp: SubPath) => SubPath; outScale?: number; fine?: number; fatDots?: boolean } = {},
   ) => {
+    const cf = c.fine ?? fine;
     progress(from, "Afinando os traços");
     const dist = distanceTransform(m);
     const skel = skeletonize(m);
@@ -343,7 +442,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     res.polylines.forEach((pl: Polyline, i: number) => {
       const len = polylineLength(pl.points, pl.closed);
       if (len < (c.minLength ?? 0)) return;
-      const sp = fitPolyline(pl.points, pl.closed, strokeFit(len, o));
+      const sp = fitPolyline(pl.points, pl.closed, strokeFit(len, o, cf));
       if (sp) {
         add(c.out ? c.out(sp) : sp, STROKE_KIND.stroke, widthOf(pl.points));
         strokes++;
@@ -351,8 +450,12 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
       }
       if (i % 400 === 0) progress(from + (to - from) * (0.6 + (0.4 * i) / Math.max(1, total)), "Ajustando as curvas");
     });
+    const penPx = o.penMm / o.mmPerPx;
     for (let i = 0; (c.dots ?? o.dots) && i < res.dots.length; i += 2) {
-      add(dotSubPath(res.dots[i], res.dots[i + 1]), STROKE_KIND.dot, widthAt(res.dots[i], res.dots[i + 1]));
+      const x = res.dots[i], y = res.dots[i + 1];
+      const w = widthAt(x, y);
+      // no Preto e branco, um ponto bem mais largo que a caneta é preenchido em espiral (senão sairia miúdo)
+      add(c.fatDots && w >= 1.8 * penPx ? fatDotSubPath(x, y, w, penPx) : dotSubPath(x, y), STROKE_KIND.dot, w);
       dots++;
     }
   };
@@ -454,7 +557,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     usedScale = kw;
     const field = inkField(art.gray, kw, { win: 5, cmin: lerp(70, 14, 0.3), cmax: lerp(110, 38, 0.3), blur: 0.22 });
     const ink = cleanMask(fieldToMask(field), 2 * kw * kw);
-    centerlines(ink, 0.56, 0.98, { k: kw, spurPx: 2.5, dots: false, minLength: o.minStrokeMm / workMm, out: back, outScale: width / ww });
+    centerlines(ink, 0.56, 0.98, { k: kw, spurPx: 2.5, dots: false, minLength: o.minStrokeMm / workMm, out: back, outScale: width / ww, fine: 1 });
   } else if (o.mode === "line") {
     centerlines(findInk(), 0.2, 0.98, { minLength: o.minLineMm / o.mmPerPx });
   } else {
@@ -463,7 +566,8 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     // --- separa o grosso do fino pela largura da caneta
     progress(0.2, "Medindo a largura dos traços");
     const r = (o.penMm / o.mmPerPx) * k * 0.5; // raio da ponta, em px ampliados
-    const reach = r * 1.35; // área precisa ser ~35% mais larga que a caneta para valer contorno
+    // meia largura a partir da qual a linha é área cheia: com 2 canetas de largura, os dois riscos do contorno encostam
+    const reach = r * Math.max(1, o.fillFromPens);
     const dInk = distanceTransform(ink);
     const notCore = new Uint8Array(W * H);
     let hasCore = false;
@@ -481,18 +585,32 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
         if (dInk[i] >= reach || toCore[i] <= reach + 0.5) thick[i] = 1;
         else thinData[i] = 1;
       }
-      // sobras nos cantos vivos (onde a ponta redonda não entra) são menores que meia caneta²
-      thin = cleanMask({ width: W, height: H, data: thinData }, Math.max(2, 0.5 * (2 * r) * (2 * r)));
+      // área cheia pequena demais para valer contorno (o nó de uma letra, um ponto final) volta a ser traço:
+      // senão a linha que passa por ali ficaria com um furo, ou um ponto viraria um anel
+      const bigFill = cleanMask({ width: W, height: H, data: thick }, SMALL_FILL * r * r).data;
+      for (let i = 0; i < thick.length; i++) {
+        if (thick[i] && !bigFill[i]) {
+          thick[i] = 0;
+          thinData[i] = 1;
+        }
+      }
+      // sobras nas pontas agudas das áreas cheias, e depois a sujeira miúda de sempre
+      const tidy = withoutCornerLeftovers(thinData, thick, W, H, reach, r);
+      thin = cleanMask({ width: W, height: H, data: tidy }, Math.max(2, 0.5 * (2 * r) * (2 * r)));
 
       progress(0.32, "Contornando as áreas cheias");
       const dThick = distanceTransform({ width: W, height: H, data: thick });
+      // o contorno sai de um campo levemente borrado: a distância medida numa máscara de pixels tem degraus,
+      // e sem isso a borda reta de uma letra sai serrilhada (centenas de trechinhos de vai e vem)
+      const dContour = gaussianBlur({ width: W, height: H, data: dThick }, 0.8).data;
+      const shape = Math.sqrt(fine);
       if (o.outline) {
-        for (const loop of findContours(dThick, W, H, r)) {
+        for (const loop of findContours(dContour, W, H, r)) {
           if (Math.abs(loopArea(loop)) < 2 * r * r) continue;
           const pts = new Float64Array(loop.length);
           for (let i = 0; i < loop.length; i++) pts[i] = (loop[i] + 0.5) / k;
           if (polylineLength(pts, true) * o.mmPerPx < o.minLineMm) continue; // manchinha: não vale a descida
-          const sp = fitPolyline(pts, true, { tol: 0.13, cL: 2.0, cdeg: 55, gap: 0.9, sharpen: false, straighten: o.straighten });
+          const sp = fitPolyline(pts, true, { tol: 0.13 * fine, cL: 2.0 * shape, cdeg: 55, gap: 0.9 * shape, sharpen: false, straighten: o.straighten * fine });
           if (sp) {
             add(sp, STROKE_KIND.outline);
             outlines++;
@@ -526,7 +644,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
         }
       }
     }
-    centerlines(thin, 0.55, 0.98, { minLength: o.minLineMm / o.mmPerPx });
+    centerlines(thin, 0.55, 0.98, { minLength: o.minLineMm / o.mmPerPx, fatDots: true });
   }
 
   progress(1, "Pronto");

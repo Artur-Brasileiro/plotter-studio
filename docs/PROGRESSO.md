@@ -214,6 +214,43 @@ O que ainda falta:
   o jeito é baixar "Linhas claras" à mão.
 - **Nada disso rodou na máquina.**
 
+## Acrescentado em 23/11/2026, à noite: traço alisado na escala da caneta, e letra sem furinho
+
+No Preto e branco a planta do reator ficou legível, mas o Artur viu, com zoom, que as linhas saíam onduladas e que
+as letras tinham "micro-espaços em branco" por dentro: na máquina, um vai e vem desgastante. Pediu um
+pós-processamento que alinhasse as linhas e juntasse os pontos.
+
+Eram duas causas, e as duas foram corrigidas no traçador:
+
+- **Letra um pouco mais grossa que a caneta era tratada como área cheia.** Uma linha de 1,35 caneta de largura já
+  ganhava contorno dos dois lados: dois riscos que se atropelam, com furinhos onde a letra engrossa. Agora a área
+  cheia começa em 2 canetas (aí os dois riscos encostam sem sobrar furo); abaixo disso é um risco só, pelo meio. O
+  limite é ajustável ("Área cheia a partir de", em Mais ajustes): para a esquerda o traço volta a sair encorpado,
+  como nanquim. O nó de uma letra (onde ela engrossa) não abre mais um furo no traço; um ponto final largo vira
+  uma espiral do centro à borda, numa descida só; e as pontas agudas de uma área cheia não soltam mais tracinhos.
+- **O ajuste das curvas seguia o serrilhado dos pixels.** As tolerâncias eram fixas em pixels da imagem. Numa
+  imagem nítida em que a caneta vale 2 px, um tremor de um quarto de pixel (que no papel não aparece) virava
+  centenas de trechinhos. Agora as tolerâncias crescem com a largura da caneta em pixels (`penDetail`), e o
+  contorno das áreas cheias sai de um campo levemente borrado. Com a caneta do tamanho do pixel nada muda: o
+  desenho de linhas que o Artur aprovou sai idêntico (mesmos 4.462 traços e 148 pontos).
+
+Medido na folha inteira, caneta 0,4. Todos passam nas regras.
+
+| Imagem (Preto e branco) | Antes | Agora | Descidas |
+|---|---|---|---|
+| Planta do reator | 3 h 45 min | 2 h 14 min | 5.762 → 3.154 |
+| Mangá | 5 h 30 min | 4 h 05 min | 7.963 → 6.276 |
+| Cartaz (papel branco, como abre) | 9 h 23 min | 7 h 17 min | 12.149 → 8.770 |
+
+Na planta do reator o G-code caiu de umas 122 mil para umas 62 mil linhas, e a tinta de 55,6 m para 43,0 m.
+
+O que muda no visual, e o que falta:
+
+- **O traço sai mais fino onde o original é "meio grosso"** (entre 1,35 e 2 canetas): um risco em vez de dois. No
+  mangá isso tira um pouco do peso do nanquim. Quem quiser o peso de volta baixa "Área cheia a partir de".
+- **Emendar pontas próximas** continua sendo trabalho do planejador (passo Conferir), que já faz isso até 3 mm.
+- **Nada disso rodou na máquina.**
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -238,8 +275,9 @@ O que ainda falta:
 | 8. Cores em camadas, papel e caneta, apagar traços, tempo de máquina na tela de vetorizar | pronto em 22/11, à noite (ver acima) |
 | 9. Traço fino e grosso em camadas, conjuntos na mesa, telas mais enxutas | pronto em 23/11 (ver acima) |
 | 10. Tipo indicado para desenho de linhas, grade do fundo retirada, precisão | pronto em 23/11 (ver acima) |
+| 11. Traço alisado na escala da caneta; Preto e branco sem furinho nas letras | pronto em 23/11, à noite (ver acima) |
 
-Testes automáticos: 1.613 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.625 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

@@ -291,3 +291,149 @@ describe("modo traço (o que já existia continua igual)", () => {
     for (const q of p) expect(Math.abs(q.y - 20.5)).toBeLessThan(0.6);
   });
 });
+
+/** Tinta (em amostras de meio pixel) que cai em cada uma de `n` faixas verticais iguais. */
+function inkByBand(r: TraceResult, width: number, n: number): number[] {
+  const ink = new Array<number>(n).fill(0);
+  for (const sp of r.geometry.subpaths) {
+    const p = points(sp);
+    for (let i = 1; i < p.length; i++) {
+      const steps = Math.max(1, Math.ceil(Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y) / 0.5));
+      for (let k = 0; k < steps; k++) {
+        const x = p[i - 1].x + ((p[i].x - p[i - 1].x) * (k + 0.5)) / steps;
+        const band = Math.floor((x / width) * n);
+        if (band >= 0 && band < n) ink[band]++;
+      }
+    }
+  }
+  return ink;
+}
+const totalLength = (r: TraceResult) => r.geometry.subpaths.reduce((s, sp) => s + lengthOf(sp), 0);
+const rect = (img: GrayImage, x0: number, y0: number, x1: number, y1: number, v = 0) => {
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) img.data[y * img.width + x] = v;
+};
+const blank = (w: number, h: number, v = 255) => gray(w, h, new Float32Array(w * h).fill(v));
+
+describe("modo foto: realce dos tons (imagem escura, de pouco contraste)", () => {
+  // "cena noturna": quase tudo muito escuro, clareando rápido só no fim (cinza = 255·t⁴, t de 0 a 1)
+  const NW = 240, NH = 120;
+  const night = gray(NW, NH);
+  for (let y = 0; y < NH; y++) for (let x = 0; x < NW; x++) night.data[y * NW + x] = Math.round(255 * Math.pow(x / (NW - 1), 4));
+  const photo = (img: GrayImage, o: Partial<TraceOptions>) => traceImage(img, { mode: "photo", mmPerPx: 0.5, penMm: 0.4, photoSmoothMm: 0.3, hatchMinMm: 0.5, ...o });
+
+  it("desenhando o claro: sem realce só o brilho ganha hachura; com realce a penumbra também aparece", () => {
+    const plain = photo(night, { invert: true, photoBoost: 0 });
+    const boosted = photo(night, { invert: true, photoBoost: 0.8 });
+    expect(totalLength(boosted)).toBeGreaterThan(1.4 * totalLength(plain));
+    // o meio da imagem (cinza 16 de 255) fica vazio sem realce e ganha tinta com ele
+    expect(inkByBand(plain, NW, 6)[2]).toBe(0);
+    expect(inkByBand(boosted, NW, 6)[2]).toBeGreaterThan(0);
+  });
+
+  it("o realce não troca a ordem dos tons: onde a imagem é mais clara continua indo mais tinta", () => {
+    const ink = inkByBand(photo(night, { invert: true, photoBoost: 0.8 }), NW, 4);
+    expect(ink[1]).toBeGreaterThan(ink[0]);
+    expect(ink[2]).toBeGreaterThan(ink[1]);
+    expect(ink[3]).toBeGreaterThan(ink[2]);
+  });
+
+  it("numa imagem de tons bem distribuídos o realce quase não muda nada", () => {
+    const ramp = gray(NW, NH);
+    for (let y = 0; y < NH; y++) for (let x = 0; x < NW; x++) ramp.data[y * NW + x] = Math.round((255 * x) / (NW - 1));
+    const a = totalLength(photo(ramp, { photoBoost: 0 })), b = totalLength(photo(ramp, { photoBoost: 0.8 }));
+    expect(Math.abs(b - a) / a).toBeLessThan(0.12);
+  });
+
+  it("o realce já vem ligado pela metade", () => {
+    const def = totalLength(photo(night, { invert: true }));
+    expect(def).toBeGreaterThan(1.2 * totalLength(photo(night, { invert: true, photoBoost: 0 })));
+    expect(def).toBeLessThan(totalLength(photo(night, { invert: true, photoBoost: 1 })));
+  });
+});
+
+describe("traço mínimo nos tipos Traço e Preto e branco", () => {
+  // uma linha longa (100 px), três tracinhos de 8 px e um pontinho solto
+  const LW = 120, LH = 60;
+  const ticks = blank(LW, LH);
+  rect(ticks, 10, 10, 110, 12);
+  for (const x of [10, 40, 70]) rect(ticks, x, 30, x + 8, 32);
+  rect(ticks, 100, 45, 102, 47);
+  const run = (o: Partial<TraceOptions>) => traceImage(ticks, { mode: "line", mmPerPx: 0.5, penMm: 0.4, ...o });
+
+  it("no zero (o padrão), fica tudo: a linha, os três tracinhos e o pontinho", () => {
+    const r = run({});
+    expect(r.stats.strokes).toBe(4);
+    expect(r.stats.dots).toBe(1);
+  });
+
+  it("com 5 mm, os tracinhos de 4 mm somem e a linha de 50 mm fica", () => {
+    const r = run({ minLineMm: 5 });
+    expect(r.stats.strokes).toBe(1);
+    expect(lengthOf(r.geometry.subpaths[0])).toBeGreaterThan(90);
+  });
+
+  it("com 2 mm, os tracinhos de 4 mm ficam", () => {
+    expect(run({ minLineMm: 2 }).stats.strokes).toBe(4);
+  });
+
+  it("o pontinho solto não depende do traço mínimo: tem a caixinha própria", () => {
+    expect(run({ minLineMm: 5 }).stats.dots).toBe(1);
+    expect(run({ minLineMm: 5, dots: false }).stats.dots).toBe(0);
+  });
+
+  it("no Preto e branco, o contorno de uma mancha pequena também some; a área grande continua contornada", () => {
+    const blobs = blank(LW, LH);
+    rect(blobs, 10, 10, 50, 50); // 20 × 20 mm
+    rect(blobs, 80, 20, 85, 25); // 2,5 × 2,5 mm: contorno de uns 8 mm
+    const ink = (o: Partial<TraceOptions>) => traceImage(blobs, { mode: "ink", mmPerPx: 0.5, penMm: 0.4, hatchSpacingMm: 0, ...o });
+    expect(ink({}).stats.outlines).toBe(2);
+    const cut = ink({ minLineMm: 12 });
+    expect(cut.stats.outlines).toBe(1);
+    expect(bbox(cut.geometry.subpaths).maxX).toBeLessThan(55);
+  });
+});
+
+describe("modo preto e branco: pintar ou não o fundo", () => {
+  // fundo preto até as quatro bordas; um quadro branco; dentro dele, um quadrado preto
+  const FW = 140, FH = 110;
+  const framed = blank(FW, FH, 0);
+  rect(framed, 25, 20, 115, 90, 255);
+  rect(framed, 55, 40, 85, 70, 0);
+  const ink = (o: Partial<TraceOptions>) => traceImage(framed, { mode: "ink", mmPerPx: 0.5, penMm: 0.4, hatchSpacingMm: 1.5, hatchMinMm: 1, ...o });
+  const hatchesOfInk = (r: TraceResult) => r.geometry.subpaths.slice(r.stats.outlines, r.stats.outlines + r.stats.hatches);
+  const SQUARE = [54, 39, 86, 71] as const;
+  const inSquare = (sp: SubPath) => points(sp).every((p) => p.x >= SQUARE[0] && p.x <= SQUARE[2] && p.y >= SQUARE[1] && p.y <= SQUARE[3]);
+
+  it("pintando (o padrão), a hachura cobre o fundo e o quadrado", () => {
+    const h = hatchesOfInk(ink({}));
+    expect(h.some(inSquare)).toBe(true);
+    expect(h.some((sp) => !inSquare(sp))).toBe(true);
+    expect(pointsIn(h, 0, 0, FW, 15)).toBeGreaterThan(0); // a faixa de cima é fundo
+  });
+
+  it("sem pintar o fundo, a hachura fica só no quadrado de dentro", () => {
+    const h = hatchesOfInk(ink({ fillBackground: false }));
+    expect(h.length).toBeGreaterThan(0);
+    expect(h.every(inSquare)).toBe(true);
+  });
+
+  it("sem pintar o fundo, o contorno do quadro continua lá (é ele que mostra onde o fundo acaba)", () => {
+    const withFill = ink({}), noFill = ink({ fillBackground: false });
+    expect(noFill.stats.outlines).toBe(withFill.stats.outlines);
+    // a borda do quadro branco fica em x = 25: tem contorno passando ali nos dois casos
+    expect(pointsIn(noFill.geometry.subpaths.slice(0, noFill.stats.outlines), 22, 30, 26, 80)).toBeGreaterThan(0);
+  });
+
+  it("numa imagem de fundo claro a opção não muda nada", () => {
+    const light = blank(FW, FH);
+    rect(light, 55, 40, 85, 70);
+    const a = traceImage(light, { mode: "ink", mmPerPx: 0.5, penMm: 0.4 }), b = traceImage(light, { mode: "ink", mmPerPx: 0.5, penMm: 0.4, fillBackground: false });
+    expect(b.stats).toEqual(a.stats);
+  });
+
+  it("uma mancha que só encosta num canto da imagem não é fundo: continua pintada", () => {
+    const corner = blank(FW, FH);
+    rect(corner, 0, 0, 30, 30);
+    expect(traceImage(corner, { mode: "ink", mmPerPx: 0.5, penMm: 0.4, hatchMinMm: 1, fillBackground: false }).stats.hatches).toBeGreaterThan(0);
+  });
+});

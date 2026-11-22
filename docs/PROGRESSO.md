@@ -79,6 +79,69 @@ O que esses testes mostram que ainda falta:
 - **Mangá no Preto e branco é pesado**: milhares de tracinhos de hachura do original viram descidas da caneta.
 - **Ilustração no padrão perde detalhe fino** em gravura detalhada; é preciso subir o Detalhe e as Linhas fracas.
 
+## Acrescentado em 22/11/2026, à noite: cores em camadas, papel e caneta, apagar traços, e os quatro pontos fracos
+
+O Artur trouxe um cartaz que ele vai mesmo plotar (fundo preto, nove quadros em preto e branco, letreiro vermelho)
+e pediu: ver o resultado em papel branco com caneta preta **ou** em papel preto com caneta branca; separar as cores
+da imagem em camadas, cada uma com a caneta que ele escolher; apagar à mão um traço que não ficou bom; e atacar os
+quatro pontos fracos da rodada anterior.
+
+**Cores em camadas** (`src/core/trace/colors.ts`). A tela de vetorizar acha as cores de caneta da imagem e diz de
+que cor é cada traço. Aparece a lista "Cores da imagem": uma linha por cor, com a caneta que vai desenhá-la (a do
+desenho, outra do estojo, "Criar uma caneta desta cor" ou "Não desenhar esta cor"). Do jeito que vem, tudo sai com
+uma caneta só, como antes. Cada caneta escolhida vira um desenho próprio na mesa; eles chegam selecionados juntos.
+Preto, cinza e branco contam como a mesma caneta. No cartaz: preto e vermelho. No robô: preto, laranja, azul (as
+lentes) e verde (a plantinha).
+
+**Papel e caneta.** A cor do papel (branco, preto, kraft ou qualquer outra) fica na barra de cima e na tela de
+vetorizar; a mesa, a prévia e a tela de apagar traços mostram o desenho na cor do papel e das canetas. É só para a
+tela: o G-code não muda. "A caneta desenha: o escuro da imagem / o claro da imagem" substitui a caixinha "A imagem
+tem fundo escuro". Em papel escuro o padrão é desenhar o claro (o fundo escuro vira o próprio papel); se a caneta
+escolhida não aparece no papel, a tela avisa e oferece criar uma caneta branca. Desenhando o claro, o que conta é
+quanto cada pixel se destaca do fundo, e não a luminância: senão o vermelho do letreiro sumia ao lado do branco.
+
+**Apagar traços** (`src/core/strokeEdit.ts`, `src/ui/strokeEditor.ts`). Botão "Apagar traços…" no passo Desenho, ou
+dois cliques no desenho. Clique marca um traço, arrastar marca vários, "Marcar os curtos" marca tudo abaixo de um
+tamanho, Delete apaga, Ctrl+Z traz de volta. "Concluir" vira uma mudança só no desenho, que o Ctrl+Z da mesa
+desfaz. Funciona em vários desenhos de uma vez (as camadas de cor).
+
+**Tempo de máquina na tela de vetorizar.** O mesmo planejador do passo Conferir roda sobre o traçado, num worker, e
+mostra o tempo de verdade no rodapé da tela, com as descidas da caneta e a espera do servo. Cada ajuste agora
+responde em tempo de máquina, sem precisar colocar na mesa para descobrir.
+
+Os quatro pontos fracos da rodada anterior:
+
+| Ponto fraco | O que foi feito | Medido |
+|---|---|---|
+| Imagem escura e de pouco contraste | Foto: "Realçar os tons" (já vem em 50%) espalha os tons pela escala toda. E papel preto com caneta clara: o escuro vira papel | Dragão: antes, 19 m de tinta e irreconhecível. Agora 42 m, 1 h 50 min, e dá para reconhecer. Continua sendo hachura grossa, não um retrato fino |
+| Mangá no Preto e branco pesado | "Traço mínimo" nos tipos Traço e Preto e branco: tracinho e contorno mais curtos que o valor somem | Mangá: 5 h 30 → 4 h 23 (1,5 mm) → 4 h 02 (2 mm, sem pontinhos). Metade das descidas eram traços de menos de 2 mm, com 4% da tinta |
+| Foto lenta | Não tem atalho: numa foto o tempo é a tinta (1 m ≈ 2 min a F500). O que mudou foi a tela mostrar o tempo de verdade a cada ajuste | Retrato no padrão: 3 h 11 min (era 3 h 18) |
+| Ilustração perde detalhe fino | Três estilos de um clique: Limpo, Equilibrado, Detalhado | Castelo no Detalhado: 1 h 05 min só linhas, 1 h 55 min com sombras |
+
+O cartaz, na folha inteira (509 × 335 mm), caneta 0,4. Todas as combinações passam nas regras.
+
+| Como | Tempo | Descidas |
+|---|---|---|
+| Papel branco, como abre (pinta o fundo preto) | 9 h 23 min | 12.149 |
+| Papel branco, Traço mínimo 2 mm | 6 h 38 min | 7.001 |
+| Papel branco, Traço mínimo 2 mm, sem pintar o fundo | 5 h 22 min | 6.665 |
+| Papel preto, caneta branca, Traço mínimo 2 mm | 5 h 51 min | 6.862 |
+
+O que ainda falta, e que esses testes mostraram:
+
+- **O cartaz continua longo** (mais de 5 horas) mesmo com os cortes: é um desenho muito cheio numa folha grande. O
+  que encurta de verdade é o tamanho no papel ou a distância da hachura. A decisão é do Artur.
+- **O programa não escolhe o estilo da Ilustração sozinho.** Medi a quantidade de traço fino nas nove imagens e o
+  número do castelo (gravura) é igual ao do robô (pintura cheia de textura): não dá para distinguir sem errar.
+- **A cor é do traço inteiro.** Um traço que passa por duas cores fica com a que ocupa a maior parte dele; ele não
+  é cortado no meio.
+- **Só o escuro é tinta em papel claro.** Uma área amarela clara num papel branco não vira hachura amarela: ela é
+  "papel". No tipo Ilustração ela ganha contorno (que pode ir para a caneta amarela), mas não preenchimento.
+- **As camadas de cor são desenhos separados na mesa.** Se um for movido sozinho, as cores desencontram.
+- **A hachura da Foto continua sendo uma descida por linha.** Emendar as linhas em zigue-zague pouparia uns 10% do
+  tempo, mas desenharia o contorno das manchas; não foi feito.
+- **Nada disso rodou na máquina.**
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.
@@ -100,8 +163,9 @@ O que esses testes mostram que ainda falta:
 | 5. Várias canetas (camadas, cruzes de registro, correção da ponta) e retomar | pronto |
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 | 7. Tipo Ilustração (imagem colorida → contornos + sombras) e tons da Foto | pronto em 22/11, de manhã (ver acima) |
+| 8. Cores em camadas, papel e caneta, apagar traços, tempo de máquina na tela de vetorizar | pronto em 22/11, à noite (ver acima) |
 
-Testes automáticos: 1.462 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
+Testes automáticos: 1.558 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 
 ## O que cada passo da tela faz
 

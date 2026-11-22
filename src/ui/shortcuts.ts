@@ -4,7 +4,7 @@ import { isTyping } from "./dom";
 import { deleteSelection, duplicateSelection } from "./panels/propertiesPanel";
 
 /**
- * Atalhos de edição (ignorados enquanto o foco está num campo de texto):
+ * Atalhos de edição (ignorados enquanto o foco está num campo de texto ou há uma tela aberta por cima da mesa):
  * Delete apaga, Ctrl+D duplica, setas movem 1 mm (Shift: 10 mm), Ctrl+Z/Ctrl+Y desfaz/refaz,
  * Ctrl+A seleciona tudo, Esc limpa a seleção.
  * `arrowsEnabled` permite à v2 usar as setas para o jog quando a aba da máquina estiver ativa.
@@ -12,6 +12,9 @@ import { deleteSelection, duplicateSelection } from "./panels/propertiesPanel";
 export function installShortcuts(store: Store, opts: { arrowsEnabled?: () => boolean } = {}): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (isTyping()) return;
+    // com uma tela aberta por cima (vetorizar, apagar traços, configurações) as teclas são dela:
+    // sem isto, Delete lá dentro apagaria o desenho selecionado na mesa
+    if (document.querySelector("dialog[open]")) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key;
     let handled = true;

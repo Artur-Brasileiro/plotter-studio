@@ -15,3 +15,6 @@ Os testes de `src/core/trace` comparam a versao TypeScript com dados gerados por
 (`src/core/trace/__fixtures__`). Os scripts que geram esses dados ficam em `lab/python/fixtures_*.py`
 (`fixtures_raster.py`, `fixtures_strokes.py` e `fixtures_illus.py`).
 Imagens de terceiros nao entram no repositorio: os dados de teste sao sinteticos.
+
+Nem tudo em `src/core/trace` tem referencia aqui. As cores em camadas (`colors.ts`), o realce de tons da Foto
+(`tone.ts`) e o modo Foto inteiro so existem em TypeScript, com testes de propriedade.

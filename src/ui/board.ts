@@ -1,5 +1,7 @@
 import type { Canvas } from "fabric";
+import { isDark } from "../core/color";
 import type { MachineProfile } from "../core/machine";
+import { paperColor } from "./paper";
 
 /**
  * Desenha a mesa no canvas de baixo do Fabric, no evento before:render: o tampo (curso da máquina),
@@ -28,8 +30,8 @@ export function installBoard(canvas: Canvas, getProfile: () => MachineProfile, s
 const TABLE = "#dcc09a";
 const TABLE_EDGE = "#8a6f48";
 const GRAPHITE = "74, 58, 38"; // lápis sobre a madeira
-const PAPER = "#ffffff";
-const PAPER_GRID = "20, 33, 61"; // tinta, bem fraca
+const PAPER_GRID = "20, 33, 61"; // tinta, bem fraca (em papel escuro a grade é clara)
+const PAPER_GRID_LIGHT = "236, 240, 248";
 const PLAN = "#1b4fa8";
 const INK = "#14213d";
 const FONT = 'Bahnschrift, "DIN Alternate", "Segoe UI", system-ui, sans-serif';
@@ -64,7 +66,10 @@ function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number, 
   const zx = zone.minX, zy = H - zone.maxY, zw = zone.maxX - zone.minX, zh = zone.maxY - zone.minY;
   ctx.fillStyle = "rgba(60, 44, 20, 0.22)";
   ctx.fillRect(zx + 2.5 * px, zy + 3 * px, zw, zh); // sombra da folha no tampo
-  ctx.fillStyle = PAPER;
+  // a folha tem a cor do papel escolhido (src/ui/paper.ts): caneta branca em papel preto aparece como vai sair
+  const paper = paperColor();
+  const grid = isDark(paper) ? PAPER_GRID_LIGHT : PAPER_GRID;
+  ctx.fillStyle = paper;
   ctx.fillRect(zx, zy, zw, zh);
   ctx.save();
   ctx.beginPath();
@@ -74,13 +79,13 @@ function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number, 
     ctx.beginPath();
     for (let x = 10; x < W; x += 10) if (x % 50 !== 0) line(x, 0, x, H);
     for (let y = 10; y < H; y += 10) if (y % 50 !== 0) line(0, H - y, W, H - y);
-    ctx.strokeStyle = `rgba(${PAPER_GRID}, 0.05)`;
+    ctx.strokeStyle = `rgba(${grid}, 0.05)`;
     ctx.stroke();
   }
   ctx.beginPath();
   for (let x = 50; x < W; x += 50) line(x, 0, x, H);
   for (let y = 50; y < H; y += 50) line(0, H - y, W, H - y);
-  ctx.strokeStyle = `rgba(${PAPER_GRID}, 0.1)`;
+  ctx.strokeStyle = `rgba(${grid}, 0.1)`;
   ctx.stroke();
   ctx.restore();
   ctx.lineWidth = px;
@@ -124,7 +129,7 @@ function drawBoard(ctx: CanvasRenderingContext2D, p: MachineProfile, z: number, 
   ctx.fillText(`curso da máquina ${W} × ${H} mm`, W - 6 * px, 5 * px);
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillStyle = `rgba(${PAPER_GRID}, 0.55)`;
+  ctx.fillStyle = `rgba(${grid}, 0.55)`;
   ctx.fillText(`folha ${fmt(zw)} × ${fmt(zh)} mm`, zx + 5 * px, zy + 4 * px);
 
   // ---------------------------------------------------------------- ponto seguro do aquecimento do servo

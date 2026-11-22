@@ -3,6 +3,8 @@ import { fabricMatrixFromModel } from "../core/coords";
 import type { Drawing, DrawingId } from "../core/document";
 import type { Mat2D } from "../core/geometry/mat2d";
 import { bboxCenter, type BBox, type Geometry } from "../core/geometry/path";
+import { isDark } from "../core/color";
+import { paperColor } from "./paper";
 
 const ACCENT = "#1b4fa8"; // azul de planta (--plan em style.css)
 
@@ -109,7 +111,9 @@ export class DrawingObject extends FabricObject {
     ctx.lineWidth = Math.max(1.25 * dpr, penPx) / scale;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = this.outOfArea ? "#c0362c" : DrawingObject.dimmed ? "#c5cbd6" : pen.color;
+    // apagado (com o caminho por cima): quase da cor do papel, para o caminho aparecer
+    const dim = isDark(paperColor()) ? "#4b5160" : "#c5cbd6";
+    ctx.strokeStyle = this.outOfArea ? "#c0362c" : DrawingObject.dimmed ? dim : pen.color;
     ctx.stroke(pathFor(this.geometry));
     ctx.restore();
   }

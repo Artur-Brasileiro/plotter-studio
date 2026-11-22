@@ -13,7 +13,7 @@ import {
 import type { BBox } from "../../core/geometry/path";
 import { penOf } from "../../core/machine";
 import type { Store } from "../../core/store";
-import { append, clear, h } from "../dom";
+import { append, clear, h, toast } from "../dom";
 
 /** Lê número digitado com vírgula ou ponto. */
 export function parseNum(s: string): number | undefined {
@@ -45,6 +45,21 @@ export function duplicateSelection(store: Store): void {
 export function deleteSelection(store: Store): void {
   const ids = store.state.selection;
   if (ids.length) store.commit(ids.length > 1 ? `Apagar ${ids.length} desenhos` : "Apagar", (doc) => removeDrawings(doc, ids));
+}
+
+/**
+ * Abre a tela de apagar traços soltos para os desenhos selecionados (o botão "Apagar traços…" e os dois
+ * cliques na mesa chegam aqui). A tela é carregada sob demanda, como a de vetorizar.
+ */
+export function editStrokesOfSelection(store: Store): void {
+  const ids = store.state.selection;
+  if (!ids.length) return;
+  void import("../strokeEditor")
+    .then((m) => m.openStrokeEditor(store, ids))
+    .catch((e) => {
+      console.error(e);
+      toast("Não consegui abrir a tela de apagar traços.", "error");
+    });
 }
 
 /**
@@ -235,9 +250,10 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
         { class: "row" },
         h("button", { title: "Ctrl+D", onclick: () => duplicateSelection(store) }, "Duplicar"),
         h("button", { title: "Delete", onclick: () => deleteSelection(store) }, "Apagar"),
+        h("button", { title: "Marcar traços soltos e tirar só eles do desenho (ou dois cliques no desenho)", onclick: () => editStrokesOfSelection(store) }, "Apagar traços…"),
         h("button", { class: "quiet", title: "Esc", onclick: () => store.setSelection([]) }, "Soltar seleção"),
       ),
-      h("p", { class: "hint" }, "Setas movem 1 mm (Shift: 10 mm). Ctrl+Z desfaz, Ctrl+Y refaz."),
+      h("p", { class: "hint" }, "Setas movem 1 mm (Shift: 10 mm). Ctrl+Z desfaz, Ctrl+Y refaz. Dois cliques no desenho abrem “Apagar traços”."),
     );
     fill(ids.length);
   };

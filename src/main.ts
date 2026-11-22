@@ -11,9 +11,11 @@ import { DrawingObject } from "./ui/drawingObject";
 import { h, toast } from "./ui/dom";
 import { createHelpDialog } from "./ui/helpDialog";
 import { createMenu, installImport } from "./ui/importer";
+import { onPaperChange } from "./ui/paper";
+import { createPaperPicker } from "./ui/paperPicker";
 import { getLayout } from "./ui/layout";
 import { createJobPanel } from "./ui/panels/jobPanel";
-import { createPropertiesPanel } from "./ui/panels/propertiesPanel";
+import { createPropertiesPanel, editStrokesOfSelection } from "./ui/panels/propertiesPanel";
 import { createSettingsDialog } from "./ui/panels/settingsDialog";
 import { fmtDuration, Planner } from "./ui/planner";
 import { Overlay, Player } from "./ui/overlay";
@@ -107,11 +109,15 @@ layout.toolbar.append(
   undoBtn,
   redoBtn,
   h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ver a mesa toda"),
+  h("span", { class: "sep" }),
+  createPaperPicker().el,
   h("span", { class: "spacer" }),
   createConnectControls(session),
   h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações"),
   h("button", { title: "Os três passos, do desenho ao papel", onclick: () => help.open() }, "Como usar"),
 );
+// a cor do papel é só da tela: a folha da mesa é redesenhada com ela (o G-code não muda)
+onPaperChange(() => canvas.requestRenderAll());
 const updateUndo = () => {
   const hist = store.state.history;
   undoBtn.disabled = !canUndo(hist);
@@ -162,6 +168,13 @@ const view = new CanvasView(canvas, store, (n) =>
 );
 installEmergencyKey(session); // antes dos atalhos: Esc com a máquina andando é emergência, não "limpar seleção"
 installShortcuts(store, { arrowsEnabled: () => !jog.keysActive() });
+// dois cliques num desenho abrem a tela de apagar traços soltos (o primeiro clique já selecionou o desenho)
+canvas.on("mouse:dblclick", (opt) => {
+  const t = opt.target;
+  if (!t) return;
+  if (t instanceof DrawingObject && !store.state.selection.includes(t.drawingId)) store.setSelection([t.drawingId]);
+  editStrokesOfSelection(store);
+});
 
 DrawingObject.penStyle = (id) => penOf(profile(), id);
 store.subscribe((s, prev) => {

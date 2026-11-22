@@ -6,6 +6,7 @@ import { hatchField } from "./hatch";
 import { lineArt, lineArtParams, resample, rgbFromGray, rgbFromRgba, toneDarkness, type RgbImage } from "./illus";
 import { cleanMask, fieldToMask, inkField } from "./inkField";
 import { gaussianBlur, percentile, resizeBicubic } from "./raster";
+import { equalizeTones } from "./tone";
 import { distanceTransform, skeletonize } from "./skeleton";
 import { skeletonStrokes } from "./strokes";
 import { gray, type GrayImage, type Mask, type Polyline, type RgbaImage } from "./types";
@@ -78,6 +79,15 @@ export interface TraceOptions {
   readonly shade: number;
   /** Modo "illus": distância entre as linhas da hachura de sombra (mm) */
   readonly shadeSpacingMm: number;
+  /**
+   * Modo "photo": 0 a 1, quanto os tons são redistribuídos para ocupar a escala inteira. Numa imagem
+   * escura e de pouco contraste quase tudo cai no mesmo tom; com o realce, a penumbra ganha degraus.
+   */
+  readonly photoBoost: number;
+  /** Modos "line" e "ink": traços e contornos mais curtos que isto (mm) somem. Cada um é uma descida da caneta. */
+  readonly minLineMm: number;
+  /** Modo "ink": pinta (hachura) a área cheia que encosta na borda da imagem. Sem isso, fica só o contorno dela. */
+  readonly fillBackground: boolean;
 }
 
 export const DEFAULT_TRACE: TraceOptions = {
@@ -106,6 +116,9 @@ export const DEFAULT_TRACE: TraceOptions = {
   minStrokeMm: 2.5,
   shade: 0.5,
   shadeSpacingMm: 2,
+  photoBoost: 0.5,
+  minLineMm: 0,
+  fillBackground: true,
 };
 
 export interface TraceStats {
@@ -180,6 +193,49 @@ function polylineToSubPath(p: Float64Array, k: number): SubPath | undefined {
   const segments: Segment[] = [];
   for (let i = 1; i < p.length / 2; i++) segments.push({ kind: "line", to: at(i) });
   return { start: at(0), segments, closed: false };
+}
+
+/**
+ * A área cheia que é o FUNDO da imagem: tudo o que está ligado à borda, quando a maior parte da borda é
+ * área cheia. Uma mancha que só encosta num canto não é fundo. Devolve undefined se não houver fundo.
+ */
+function backgroundRegion(m: Uint8Array, W: number, H: number): Uint8Array | undefined {
+  const out = new Uint8Array(W * H);
+  const stack: number[] = [];
+  let border = 0, dark = 0;
+  const seed = (i: number) => {
+    border++;
+    if (!m[i]) return;
+    dark++;
+    if (!out[i]) {
+      out[i] = 1;
+      stack.push(i);
+    }
+  };
+  for (let x = 0; x < W; x++) {
+    seed(x);
+    seed((H - 1) * W + x);
+  }
+  for (let y = 1; y < H - 1; y++) {
+    seed(y * W);
+    seed(y * W + W - 1);
+  }
+  if (dark < 0.5 * border) return undefined;
+  const visit = (j: number) => {
+    if (m[j] && !out[j]) {
+      out[j] = 1;
+      stack.push(j);
+    }
+  };
+  while (stack.length) {
+    const i = stack.pop()!;
+    const x = i % W;
+    if (x > 0) visit(i - 1);
+    if (x < W - 1) visit(i + 1);
+    if (i >= W) visit(i - W);
+    if (i < W * (H - 1)) visit(i + W);
+  }
+  return out;
 }
 
 /** Ponto: um traço minúsculo (a caneta encosta e sobe). */
@@ -267,7 +323,9 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     const gamma = 1.3 * Math.pow(2, -o.ink / 60);
     const kp = Math.min(k, 3);
     const dark = new Float32Array(src.data.length);
-    for (let i = 0; i < dark.length; i++) dark[i] = Math.pow(Math.min(1, Math.max(0, (hi - src.data[i]) / Math.max(hi - lo, 1e-6))), gamma);
+    for (let i = 0; i < dark.length; i++) dark[i] = Math.min(1, Math.max(0, (hi - src.data[i]) / Math.max(hi - lo, 1e-6)));
+    equalizeTones(dark, o.photoBoost);
+    for (let i = 0; i < dark.length; i++) dark[i] = Math.pow(dark[i], gamma);
     const up = resizeBicubic({ width, height, data: dark }, kp);
     const tone = gaussianBlur(up, Math.max(0.6, (o.photoSmoothMm / o.mmPerPx) * kp));
     const penPx = (o.penMm / o.mmPerPx) * kp;
@@ -355,7 +413,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
     const ink = cleanMask(fieldToMask(field), 2 * kw * kw);
     centerlines(ink, 0.56, 0.98, { k: kw, spurPx: 2.5, dots: false, minLength: o.minStrokeMm / workMm, out: back, outScale: width / ww });
   } else if (o.mode === "line") {
-    centerlines(findInk(), 0.2, 0.98);
+    centerlines(findInk(), 0.2, 0.98, { minLength: o.minLineMm / o.mmPerPx });
   } else {
     const ink = findInk();
     const W = ink.width, H = ink.height;
@@ -390,6 +448,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
           if (Math.abs(loopArea(loop)) < 2 * r * r) continue;
           const pts = new Float64Array(loop.length);
           for (let i = 0; i < loop.length; i++) pts[i] = (loop[i] + 0.5) / k;
+          if (polylineLength(pts, true) * o.mmPerPx < o.minLineMm) continue; // manchinha: não vale a descida
           const sp = fitPolyline(pts, true, { tol: 0.13, cL: 2.0, cdeg: 55, gap: 0.9, sharpen: false, straighten: o.straighten });
           if (sp) {
             subpaths.push(sp);
@@ -403,8 +462,15 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
         const spacing = (o.hatchSpacingMm / o.mmPerPx) * k;
         const link = Math.max((2 / o.mmPerPx) * k, 1.6 * spacing); // regra 1: ligação curta dentro da hachura
         const angles = o.hatchCross ? [o.hatchAngleDeg, o.hatchAngleDeg + 90] : [o.hatchAngleDeg];
+        // sem pintar o fundo: a área cheia ligada à borda da imagem fica só com o contorno
+        let toHatch = dThick;
+        const background = o.fillBackground ? undefined : backgroundRegion(thick, W, H);
+        if (background) {
+          toHatch = Float32Array.from(dThick);
+          for (let i = 0; i < toHatch.length; i++) if (background[i]) toHatch[i] = 0;
+        }
         for (const angleDeg of angles) {
-          for (const z of hatchField(dThick, W, H, r, { angleDeg, spacing, link, minLength: r })) {
+          for (const z of hatchField(toHatch, W, H, r, { angleDeg, spacing, link, minLength: r })) {
             // hachura curtinha gasta uma descida do servo e quase não põe tinta: o contorno já resolve
             if ((polylineLength(z, false) / k) * o.mmPerPx < o.hatchMinMm) continue;
             const sp = polylineToSubPath(z, k);
@@ -417,7 +483,7 @@ export function traceImage(img: GrayImage, opts: Partial<TraceOptions> = {}, pro
         }
       }
     }
-    centerlines(thin, 0.55, 0.98);
+    centerlines(thin, 0.55, 0.98, { minLength: o.minLineMm / o.mmPerPx });
   }
 
   progress(1, "Pronto");

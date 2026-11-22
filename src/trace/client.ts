@@ -1,5 +1,6 @@
 import type { TraceOptions, TraceResult } from "../core/trace/traceImage";
 import type { GrayImage } from "../core/trace/types";
+import type { LayerTime, PlanReply, PlanRequest } from "./planWorker";
 import type { TraceReply, TraceRequest } from "./worker";
 
 /** Lado maior aceito: imagens maiores são reduzidas ao abrir (o traçado amplia por dentro de qualquer jeito). */
@@ -111,5 +112,52 @@ export class CancelledError extends Error {
   constructor() {
     super("cancelado");
     this.name = "CancelledError";
+  }
+}
+
+/**
+ * O tempo de máquina de um traçado, calculado num worker pelo mesmo planejador do passo Conferir.
+ * Uma chamada nova cancela a anterior.
+ */
+export class PlanEstimator {
+  private worker: Worker | undefined;
+  private seq = 0;
+  private rejectCurrent: ((e: Error) => void) | undefined;
+
+  run(req: Omit<PlanRequest, "id">): Promise<readonly LayerTime[]> {
+    this.cancel();
+    const id = ++this.seq;
+    const worker = new Worker(new URL("./planWorker.ts", import.meta.url), { type: "module" });
+    this.worker = worker;
+    return new Promise((resolve, reject) => {
+      this.rejectCurrent = reject;
+      const finish = () => {
+        this.rejectCurrent = undefined;
+        worker.terminate();
+        if (this.worker === worker) this.worker = undefined;
+      };
+      worker.onmessage = (e: MessageEvent<PlanReply>) => {
+        const m = e.data;
+        if (m.id !== id) return;
+        finish();
+        if (m.type === "done") resolve(m.layers);
+        else reject(new Error(m.message));
+      };
+      worker.onerror = (e) => {
+        finish();
+        reject(new Error(e.message || "Não consegui calcular o tempo."));
+      };
+      worker.postMessage({ ...req, id } satisfies PlanRequest);
+    });
+  }
+
+  cancel(): void {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = undefined;
+    }
+    const r = this.rejectCurrent;
+    this.rejectCurrent = undefined;
+    r?.(new CancelledError());
   }
 }

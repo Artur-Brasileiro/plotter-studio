@@ -67,7 +67,7 @@ Regras de implementação que saem disso:
 - **`layers.ts`**: camadas por caneta (ordem = ordem de `profile.pens`: cor → fina → grossa), cruzes de registro em ida e volta (X20 Y12 e X580 Y12, braço de 6 mm) como 1ª e última descida, desvio da ponta (`pen.offsetX/Y`: a camada inteira sai deslocada ao contrário).
 - **`audit.ts`** (`auditGcode`): lê o **texto** final como o GRBL leria e confere tudo da seção 10 das regras. **O que ela não sabe ler, ela acusa.** `checkAgainstPlan` confere que o arquivo risca o que o plano mandou. A interface só deixa baixar ou enviar com `audit.ok`.
 - **`resume.ts`**: de onde retomar depois de uma parada (a descida anterior à que estava sendo feita).
-- **`review.test.ts`**: os defeitos que uma revisão independente achou, cada um com o teste que o prova. Não apagar.
+- **`review.test.ts` e `review2.test.ts`** (aqui e em `src/core/text`): os defeitos que duas revisões independentes acharam, cada um com o teste que o prova, e os sorteios que conferem milhares de arquivos gerados com um leitor de G-code independente da auditoria. Não apagar.
 
 Regras que não podem quebrar ao mexer aqui: o gerador nunca escreve `G0` com a caneta embaixo; todo `M3`/`M5` tem `G4` depois; nenhuma linha passa de 69 caracteres; só ASCII; o arquivo gerado passa na própria auditoria (há testes de estresse para o arquivo inteiro, cada parte e cada ponto de retomada).
 

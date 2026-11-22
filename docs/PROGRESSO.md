@@ -27,7 +27,7 @@ Para ver funcionando: **dois cliques em `Abrir Plotter Studio (simulador).bat`**
 | 5. Várias canetas (camadas, cruzes de registro, correção da ponta) e retomar | pronto |
 | 6. Texto em fonte de traço único | pronto: "Trazer desenho → Texto", três letras (Simples, Futura, Cursiva), acentos e cedilha |
 
-Testes automáticos: 1.291 passando (eram 304 no começo da noite). `npm run build` passa.
+Testes automáticos: 1.331 passando (eram 304 no começo da noite). `npm run build` passa.
 
 ## O que cada passo da tela faz
 
@@ -62,7 +62,7 @@ No alto da tela, **Como usar** explica os três passos, a parada de emergência 
 
 ## Revisões independentes feitas nesta noite
 
-Duas partes do código foram entregues a revisores que não participaram da escrita, com a tarefa de achar defeito.
+O código foi entregue três vezes a revisores que não participaram da escrita, com a tarefa de achar defeito. Cada defeito confirmado ficou com um teste que o prova e que agora passa.
 
 **Controle da CNC** (comparado com o código-fonte do GRBL 1.1h e do fork `grbl-servo`): 11 achados, todos corrigidos.
 Os mais importantes:
@@ -83,6 +83,17 @@ primeiro. Detalhes em [GRBL.md](GRBL.md).
 - no modo "esperar", o arquivo gerado podia ser reprovado pela própria auditoria (as duas contavam o tempo de jeitos
   diferentes), e os 8 ciclos do aquecimento não entravam em conta nenhuma.
 
+**Segunda revisão do gerador** (tudo o que foi escrito depois da primeira: camadas, retomada, auditoria reescrita,
+agenda do servo, texto): `src/core/job/review2.test.ts` e `src/core/text/review2.test.ts`. O revisor gerou perto de
+25 mil arquivos sorteados (inteiros, em partes e retomadas, com 1 a 3 canetas) e conferiu cada um com um leitor de
+G-code escrito por ele, sem usar a auditoria do aplicativo. **Com as configurações padrão ele não achou nenhum arquivo
+que quebrasse uma regra.** Achou 11 defeitos, todos corrigidos; o único que podia estragar um desenho:
+- o "Retomar de onde parou" continuava sendo oferecido depois de o desenho ser movido na mesa (a retomada riscaria
+  ao lado do que já estava no papel). Agora o ponto guardado só vale se todos os pontos do desenho forem os mesmos.
+
+Os outros pediam configurações fora do padrão (servo com o pico igual à média, blindagem desligada, aquecimento
+maior que o pico) ou eram de acabamento (o "í" da letra cursiva ficava com pingo e acento; o "Y" entortava).
+
 ## Decisões que tomei e que o Artur pode querer mudar
 
 Todas são configuráveis ou fáceis de trocar.
@@ -97,6 +108,14 @@ Todas são configuráveis ou fáceis de trocar.
 - **Ordem das camadas** = ordem da lista de canetas em Configurações → Estojo de canetas (verde → fina → preta).
 - **Desvio da caneta fina** = 1,0 mm em X (do README). As cruzes de registro são a conferência.
 - **Aquecimento com no máximo 20 ciclos** e pausas do servo com no mínimo 0,05 s nas Configurações.
+- **O comentário do checkpoint saiu sem o "~"**: `; CHECKPOINT 1 (10 min) re-sincroniza servo`, e não `(~10 min)` como
+  no script antigo. Para o GRBL o "~" é o comando "continuar", até dentro de comentário: com a máquina em pausa, um
+  programa de envio que mande os comentários faria ela voltar a andar. A referência para retomar continua sendo o
+  `; CHECKPOINT n`.
+- **Numa retomada, o servo pode descansar alguns segundos depois do aquecimento** (até ~30 s no pior caso, com duas
+  batidas de reaquecimento no fim). É a conta do limite do servo refeita para um arquivo que começa no meio.
+- **A média do servo de um arquivo com menos de um minuto** é contada como "descidas nesse minuto" (um tracinho só,
+  de 2 segundos, não são "30 por minuto").
 
 ## O que NÃO foi feito, ou ficou pela metade
 
@@ -106,4 +125,6 @@ Todas são configuráveis ou fáceis de trocar.
 - A regra "elementos soltos pequenos agrupados numa descida só" (regra 4) não existe: pontinhos soltos continuam sendo
   uma descida cada. A tela de vetorizar deixa desligar os pontinhos, e o servo descansa quando precisa.
 - Importar um G-code pronto (de fora) para conferir e enviar não existe: a auditoria só roda no que o aplicativo gera.
-- A tela não foi testada em celular nem em janela estreita.
+- Em velocidade FIXA acima de F500 (os botões F1000 e F1500), segmentos muito curtos podem fazer a máquina "gaguejar":
+  o limite de vazão só entra no arquivo no modo dinâmico. A F500, que é o padrão das regras, não acontece.
+- A tela foi conferida em 1440 × 900 e 1366 × 768; não em celular nem em janela estreita.

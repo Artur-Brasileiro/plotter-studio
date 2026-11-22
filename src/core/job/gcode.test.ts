@@ -23,8 +23,13 @@ describe("formatCoord", () => {
 });
 
 describe("toAsciiComment", () => {
-  it("tira acentos, troca travessão e aspas curvas, o resto vira ?", () => {
-    expect(toAsciiComment("Coração — “teste” ★")).toBe('Coracao - "teste" ?');
+  it("tira acentos, troca travessão e aspas curvas, o resto vira _", () => {
+    expect(toAsciiComment("Coração — “teste” ★")).toBe('Coracao - "teste" _');
+  });
+  it('nunca deixa "!", "?" nem "~": para o GRBL são comandos em tempo real, até em comentário', () => {
+    const s = toAsciiComment("Olá! tudo bem? ~10 min ★");
+    expect(s).toBe("Ola. tudo bem. -10 min _");
+    expect(s).not.toMatch(/[!?~]/);
   });
   it("parênteses viram colchetes (desenho (1).svg)", () => {
     expect(toAsciiComment("desenho (1).svg")).toBe("desenho [1].svg");

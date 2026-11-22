@@ -39,8 +39,10 @@ export function formatCoord(v: number): string {
  * Texto seguro para comentário de G-code: o GRBL trata todo byte acima de 0x7F como
  * comando em tempo real (ex.: o "—" em UTF-8 termina em 0x94 = velocidade −1%).
  * Remove acentos; travessão vira "-"; aspas curvas viram retas; parênteses viram colchetes
- * (o GRBL os ignora depois de ";", mas outros programas de envio podem não ignorar);
- * o resto fora de ASCII vira "?".
+ * (o GRBL os ignora depois de ";", mas outros programas de envio podem não ignorar).
+ * "!", "?" e "~" também saem: para o GRBL são comandos em tempo real (pausa, relatório, continuar)
+ * até dentro de comentário, e um programa de envio que mande os comentários pausaria a máquina por
+ * causa de um arquivo chamado "Olá!.svg". O resto fora de ASCII vira "_".
  */
 export function toAsciiComment(s: string): string {
   return s
@@ -53,7 +55,9 @@ export function toAsciiComment(s: string): string {
     .replace(/[\r\n\t]/g, " ")
     .replace(/\(/g, "[")
     .replace(/\)/g, "]")
-    .replace(/[^\x20-\x7e]/g, "?")
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/[!?]/g, ".")
+    .replace(/~/g, "-")
     .slice(0, 60);
 }
 

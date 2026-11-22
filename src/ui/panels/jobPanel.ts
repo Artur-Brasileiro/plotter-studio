@@ -145,7 +145,7 @@ export function createJobPanel(store: Store, planner: Planner, preview?: HTMLEle
     row("Tempo total", fmtDuration(e.totalS), "total");
     row("Traço", fmtLength(s.drawMm));
     row("Caneta no ar", fmtLength(s.travelMm));
-    if (store.state.job.optimize && s.travelMmUnoptimized > s.travelMm + 0.5) row("Economia na ordem", `−${fmtLength(s.travelMmUnoptimized - s.travelMm)}`);
+    if (store.state.job.optimize && s.travelMmUnoptimized > s.travelMm + 0.5) row("Poupado ao reordenar os traços", fmtLength(s.travelMmUnoptimized - s.travelMm));
     if (s.joinInkMm > 0.5) row("Tinta a mais das emendas", fmtLength(s.joinInkMm));
     if (s.hiddenDropped > 0) row("Tracinhos escondidos retirados", num(s.hiddenDropped));
   }

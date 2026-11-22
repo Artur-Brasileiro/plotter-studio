@@ -22,6 +22,18 @@ export function serialSupported(): boolean {
   return typeof navigator !== "undefined" && !!navigator.serial && window.isSecureContext;
 }
 
+/** navigator.serial, ou undefined fora do navegador (testes em Node). */
+const serialApi = (): Serial | undefined => (typeof navigator === "undefined" ? undefined : navigator.serial);
+
+/**
+ * Quantos erros de leitura seguidos, sem nenhum byte bom no meio, ainda contam como ruído. Passou disso,
+ * a porta é dada como perdida (não fica num laço reabrindo um stream que morre na hora).
+ */
+const MAX_READ_ERRORS_IN_A_ROW = 5;
+
+/** Fechamentos em andamento de uma porta que caiu: quem reconectar espera, em vez de dar "já está aberta". */
+const pendingClose = new WeakMap<SerialPort, Promise<void>>();
+
 function friendlyOpenError(e: unknown): string {
   const name = e instanceof DOMException ? e.name : "";
   const msg = e instanceof Error ? e.message : String(e);
@@ -34,11 +46,17 @@ function friendlyOpenError(e: unknown): string {
 
 /**
  * Transporte pela Web Serial API (Chrome/Edge). Um único writer com as escritas encadeadas em ordem,
- * um laço de leitura, e "lost" quando o cabo sai (evento disconnect ou read() rejeitando).
+ * um laço de leitura, e "lost" quando o cabo sai (evento disconnect, ou port.readable virar null).
+ *
+ * Nem todo erro de leitura é o cabo: pela especificação (serial.spec.whatwg.org, getter `readable`),
+ * BufferOverrunError, BreakError, FramingError, ParityError e UnknownError só matam o stream atual, e a
+ * porta entrega outro no próximo acesso a `port.readable`. Só a desconexão é fatal (NetworkError, e aí
+ * `readable` fica null). Um ruído na linha no meio de um desenho de 2 horas não pode derrubar a conexão.
  */
 export class WebSerialTransport implements Transport {
   onData: ((chunk: Uint8Array) => void) | null = null;
   onClose: ((info: { reason: "user" | "lost"; error?: unknown }) => void) | null = null;
+  onReadError: ((error: unknown) => void) | null = null;
   readonly label: string;
 
   private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -60,6 +78,7 @@ export class WebSerialTransport implements Transport {
   }
 
   async open(): Promise<void> {
+    await pendingClose.get(this.port); // uma conexão anterior desta porta que caiu ainda pode estar fechando
     try {
       await this.port.open({ baudRate: this.baudRate, bufferSize: 4096 });
     } catch (e) {
@@ -67,31 +86,60 @@ export class WebSerialTransport implements Transport {
     }
     this.isOpen = true;
     this.closing = false;
-    navigator.serial?.addEventListener("disconnect", this.onDisconnect);
+    serialApi()?.addEventListener("disconnect", this.onDisconnect);
     this.writer = this.port.writable?.getWriter();
     this.readDone = this.readLoop();
   }
 
   private async readLoop(): Promise<void> {
-    const readable = this.port.readable;
-    if (!readable) return;
-    const reader = readable.getReader();
-    this.reader = reader;
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (value && value.length) this.onData?.(value);
-      }
-    } catch (e) {
-      if (!this.closing) this.lost(e);
-    } finally {
+    let errorsInARow = 0;
+    while (this.isOpen && !this.closing) {
+      const readable = this.port.readable;
+      if (!readable) break; // porta desconectada (ou fechada por fora)
+      const reader = readable.getReader();
+      this.reader = reader;
+      let readError: { error: unknown } | undefined;
+      let handlerError: { error: unknown } | undefined;
       try {
-        reader.releaseLock();
-      } catch {
-        /* já liberado */
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value && value.length) {
+            errorsInARow = 0;
+            try {
+              this.onData?.(value);
+            } catch (e) {
+              handlerError = { error: e }; // erro nosso ao tratar os bytes, não da porta
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        readError = { error: e };
+      } finally {
+        try {
+          reader.releaseLock();
+        } catch {
+          /* já liberado */
+        }
+        this.reader = undefined;
       }
-      this.reader = undefined;
+      if (this.closing || !this.isOpen) return;
+      if (handlerError) {
+        this.lost(handlerError.error);
+        return;
+      }
+      if (!readError) break; // o stream acabou sem erro e sem ninguém pedir
+      if (!this.port.readable || ++errorsInARow > MAX_READ_ERRORS_IN_A_ROW) {
+        this.lost(readError.error);
+        return;
+      }
+      // erro não fatal: a porta continua aberta; avisa e segue lendo no stream novo
+      try {
+        this.onReadError?.(readError.error);
+      } catch {
+        /* quem ouve não pode derrubar a leitura */
+      }
     }
     if (!this.closing && this.isOpen) this.lost(new Error("A leitura da porta terminou."));
   }
@@ -109,7 +157,7 @@ export class WebSerialTransport implements Transport {
   async close(): Promise<void> {
     if (!this.isOpen) return;
     this.closing = true;
-    navigator.serial?.removeEventListener("disconnect", this.onDisconnect);
+    serialApi()?.removeEventListener("disconnect", this.onDisconnect);
     try {
       await this.reader?.cancel();
     } catch {
@@ -136,7 +184,7 @@ export class WebSerialTransport implements Transport {
     if (!this.isOpen || this.closing) return;
     this.closing = true;
     this.isOpen = false;
-    navigator.serial?.removeEventListener("disconnect", this.onDisconnect);
+    serialApi()?.removeEventListener("disconnect", this.onDisconnect);
     void this.reader?.cancel().catch(() => {});
     try {
       this.writer?.releaseLock();
@@ -144,7 +192,14 @@ export class WebSerialTransport implements Transport {
       /* ok */
     }
     this.writer = undefined;
-    void this.readDone.then(() => this.port.close()).catch(() => {});
+    const port = this.port;
+    const closed = this.readDone
+      .then(() => port.close())
+      .catch(() => {})
+      .then(() => {
+        if (pendingClose.get(port) === closed) pendingClose.delete(port);
+      });
+    pendingClose.set(port, closed);
     this.onClose?.({ reason: "lost", error });
   }
 }

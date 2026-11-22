@@ -20,7 +20,7 @@ export interface FakeGrblOptions {
   maxRateMmMin?: number;
   /** false simula um fork que não levanta a caneta com 0x9E na pausa */
   spindleStopInHold?: boolean;
-  /** sobrescreve valores do $$ (ex.: { 32: "1" }) */
+  /** sobrescreve valores do $$ (ex.: { 32: "1" }, { 10: "0" } para relatórios em WPos) */
   settings?: Record<number, string>;
   faults?: {
     /** a k-ésima linha de G-code recebida (1 = primeira) responde error:code */
@@ -29,6 +29,8 @@ export interface FakeGrblOptions {
     disconnectAfterLines?: number;
     /** a placa nunca responde (nem ao 0x18) */
     noBanner?: boolean;
+    /** o $H falha com este alarme (8 = não se afastou da chave, 9 = não achou a chave) */
+    homingAlarm?: number;
   };
 }
 
@@ -42,10 +44,30 @@ interface Block {
   jog: boolean;
 }
 
+/** Uma linha de G-code já conferida (nada aqui mexe no estado: a linha pode ter que esperar). */
+interface ParsedBlock {
+  motion?: 0 | 1 | 80;
+  dwell: boolean;
+  absolute?: boolean;
+  spindle?: boolean;
+  coolant?: boolean;
+  flow?: 0 | 1 | 2 | 30;
+  f?: number;
+  s?: number;
+  p?: number;
+  x?: number;
+  y?: number;
+}
+
 const BANNER = "Grbl 1.1h ['$' for help]";
 const LOCKED = "[MSG:'$H'|'$X' to unlock]";
-const SUPPORTED_G = [0, 1, 4, 17, 21, 54, 90, 91, 94];
-const SUPPORTED_M = [2, 3, 5, 8, 9, 30];
+/** LINE_BUFFER_SIZE do GRBL: 80, com o terminador (protocol.h) */
+const LINE_MAX_CHARS = 79;
+/** G4: o GRBL conta a pausa em passos de 50 ms, arredondando para cima (DWELL_TIME_STEP, nuts_bolts.c) */
+const DWELL_STEP_MS = 50;
+/** De quantos em quantos relatórios o WCO e o Ov voltam (config.h): parado e em movimento */
+const WCO_REFRESH = { idle: 10, busy: 30 };
+const OVR_REFRESH = { idle: 10, busy: 20 };
 
 function defaultSettings(o: Required<Pick<FakeGrblOptions, "workArea" | "maxRateMmMin" | "homingPulloffMm">>): Record<number, string> {
   const f = (n: number) => n.toFixed(3);
@@ -60,10 +82,18 @@ function defaultSettings(o: Required<Pick<FakeGrblOptions, "workArea" | "maxRate
 
 /**
  * GRBL 1.1h falso, determinístico (com ManualClock), que implementa o Transport.
- * Modela o que importa para o envio: buffer de recepção de 128 bytes (estouro = rxOverflow), planejador
- * de 15 blocos (o "ok" sai quando a linha entra nele), M3/M5/G4 esperando o planejador esvaziar,
- * comandos de tempo real (?, !, ~, 0x18, 0x85, 0x9E, overrides), $H/$X/$$/$#/$J e soft limits.
+ * Conferido com o fonte do gnea/grbl v1.1h (protocol.c, gcode.c, system.c, motion_control.c, report.c,
+ * limits.c) e com o fork vankesteren/grbl-servo (spindle_control.c). Modela o que importa para o envio:
+ * - buffer de recepção de 128 bytes (estouro = rxOverflow) e planejador de 15 blocos (o "ok" sai quando a
+ *   linha entra nele);
+ * - G-code modal: G0/G1 valem para as linhas seguintes só com X/Y; "G1 F500" sozinho só muda o modo;
+ * - M3/M5 (quando mudam o estado), G4 e M2 esperam o planejador esvaziar; M2 volta para G1/G90/M5 e
+ *   override de 100%, e avisa [MSG:Pgm End];
+ * - comandos de tempo real (?, !, ~, 0x18, 0x85, 0x9E, overrides), $H/$X/$$/$#/$J e soft limits;
+ * - os silêncios do GRBL: nenhum relatório durante o homing nem depois de um ALARM:2 (até o reset);
+ * - o "ok" atrasado da linha que estava executando quando chega um reset.
  * Movimento em velocidade constante (sem aceleração): basta para a ordem e o tempo.
+ * Não modelado (responde error:20): arcos, eixo Z, polegadas, G10/G28/G92, G4 junto com movimento.
  */
 export class FakeGrbl implements Transport {
   readonly label = "Simulador";
@@ -71,7 +101,7 @@ export class FakeGrbl implements Transport {
   onClose: ((info: { reason: "user" | "lost"; error?: unknown }) => void) | null = null;
 
   // --- inspeção para testes
-  /** o que a caneta desenhou, em WPos */
+  /** o que a caneta desenhou, em WPos (uma descida sem movimento vira um traço de 1 ponto) */
   readonly penStrokes: Vec[][] = [];
   maxRxUsed = 0;
   rxOverflow = false;
@@ -82,6 +112,9 @@ export class FakeGrbl implements Transport {
   readonly rtLog: { byte: number; at: number; state: string }[] = [];
   /** overrides de spindle (0x99–0x9D) recebidos: nunca deveriam chegar */
   readonly forbiddenBytes: number[] = [];
+  /** quantos "?" chegaram e quantos relatórios saíram (o GRBL não responde a todos) */
+  statusQueries = 0;
+  statusReports = 0;
 
   private readonly o: Required<Omit<FakeGrblOptions, "settings" | "faults">> & Pick<FakeGrblOptions, "faults">;
   private readonly wco: Vec;
@@ -98,21 +131,28 @@ export class FakeGrbl implements Transport {
   private holdLeftMs = 0;
   private homingLeftMs = 0;
   private dwellLeftMs = 0;
-  private dwellOkPending = false;
-  private pendingSpindleStop = false;
+  /** a linha da frente já está "executando" (esperando vaga no planejador ou ele esvaziar) */
+  private waitingLine = false;
+  /** M0: em Hold até o "~"; só então sai o ok */
+  private m0Wait = false;
+  /** ALARM:1/2: o GRBL fica num laço morto até o reset (não responde nem ao "?") */
+  private critical = false;
+  /** chegou "?" durante o homing: sai um relatório só, no fim */
+  private statusQueued = false;
   private spindleOn = false;
   private spindleS = 0;
-  private spindleStopped = false;
+  private coolantOn = false;
+  /** parada do spindle (0x9E) durante o Hold: pedida / ativa */
+  private stopOvr: "off" | "initiate" | "enabled" = "off";
   private absolute = true;
-  private motionMode = 0;
-  private feed: number | undefined;
+  private motionMode: 0 | 1 | 80 = 0;
+  private feed = 0;
   private feedOv = 100;
-  private lastReportedOv = 100;
   private curFeed = 0;
   private w: Vec;
-  private reportCount = 0;
+  private wcoCounter = 0;
+  private ovrCounter = 0;
   private gcodeLines = 0;
-  private needsReset = false;
   private tickTimer: number | undefined;
   private lastTick = 0;
   private outbox: string[] = [];
@@ -150,8 +190,9 @@ export class FakeGrbl implements Transport {
   get wpos(): Vec {
     return this.w;
   }
+  /** S0 também é "em cima": no fork do servo o pulso de S0 é o mesmo do M5 */
   get penDown(): boolean {
-    return this.spindleOn && this.spindleS > 0 && !this.spindleStopped;
+    return this.spindleOn && this.spindleS > 0 && this.stopOvr !== "enabled";
   }
   get feedOverride(): number {
     return this.feedOv;
@@ -164,6 +205,14 @@ export class FakeGrbl implements Transport {
   }
   get gcodeLinesReceived(): number {
     return this.gcodeLines;
+  }
+  /** "G0" / "G1" / "G80": o modo de movimento que vale para uma linha só com X/Y */
+  get modalMotion(): string {
+    return `G${this.motionMode}`;
+  }
+  /** um G4 está contando */
+  get dwelling(): boolean {
+    return this.dwellLeftMs > 0;
   }
 
   /** Simula a placa travar: a porta continua aberta, mas nada mais é respondido. */
@@ -180,7 +229,6 @@ export class FakeGrbl implements Transport {
   powerGlitch(): void {
     if (!this.opened || this.cut) return;
     this.booted = false;
-    this.setPen(() => (this.spindleOn = false));
     this.powerUp();
     this.clock.setTimeout(() => {
       if (!this.opened || this.cut) return;
@@ -229,25 +277,34 @@ export class FakeGrbl implements Transport {
     this.outbox = [];
   }
 
+  /** Liga do zero (energia ou DTR): a RAM zera, então a posição de máquina volta a (0,0) = WPos (810,385). */
   private powerUp() {
-    this.rx = "";
-    this.planner = [];
-    this.st = "Alarm";
-    this.holdSub = 0;
-    this.homingLeftMs = this.dwellLeftMs = 0;
-    this.dwellOkPending = this.pendingSpindleStop = false;
-    this.spindleOn = this.spindleStopped = false;
-    this.spindleS = 0;
-    this.resetParser();
-    this.feedOv = this.lastReportedOv = 100;
-    this.needsReset = false;
-    this.reportCount = 0;
+    this.reinit("Alarm");
+    this.w = { x: this.o.workArea.width, y: this.o.workArea.height };
   }
 
-  private resetParser() {
+  /**
+   * O que o main() do GRBL refaz a cada reset: buffers, planejador, parser (G0, G90, F0, S0, M5),
+   * overrides em 100% e contadores do relatório. A posição fica.
+   */
+  private reinit(state: "Alarm" | "Idle") {
+    this.setPen(() => {
+      this.spindleOn = false; // o reset desliga o spindle: a caneta sobe
+      this.spindleS = 0;
+      this.stopOvr = "off";
+    });
+    this.rx = "";
+    this.planner = [];
+    this.holdSub = 0;
+    this.homingLeftMs = this.dwellLeftMs = 0;
+    this.waitingLine = this.m0Wait = this.critical = this.statusQueued = this.coolantOn = false;
     this.absolute = true;
     this.motionMode = 0;
-    this.feed = undefined;
+    this.feed = 0;
+    this.feedOv = 100;
+    this.curFeed = 0;
+    this.wcoCounter = this.ovrCounter = 0;
+    this.st = state;
   }
 
   private cutCable() {
@@ -271,6 +328,7 @@ export class FakeGrbl implements Transport {
     }
   }
 
+  /** serial.c, ISR(SERIAL_RX): "?", "!", "~", 0x18 e tudo acima de 0x7F saem do fluxo, em qualquer lugar da linha. */
   private receiveByte(b: number) {
     if (!this.booted || this.frozen) return; // bootloader do Uno (ou placa travada): descarta
     if (b >= 0x80 || b === RT.STATUS || b === RT.HOLD || b === RT.RESUME || b === RT.RESET) {
@@ -287,10 +345,19 @@ export class FakeGrbl implements Transport {
 
   private realtime(b: number) {
     if (b !== RT.STATUS) this.rtLog.push({ byte: b, at: this.clock.now(), state: this.stateText });
+    if (b === RT.RESET) {
+      this.softReset();
+      return;
+    }
+    if (b === RT.STATUS) {
+      this.statusQueries++;
+      // limits_go_home() não chama protocol_execute_realtime(): durante o homing o GRBL não responde.
+      if (this.st === "Home") this.statusQueued = true;
+      else if (!this.critical) this.sendStatus();
+      return;
+    }
+    if (this.critical) return; // laço morto do alarme crítico: só o reset sai dele
     switch (b) {
-      case RT.STATUS:
-        this.emit(this.statusReport());
-        break;
       case RT.HOLD:
         if (this.st === "Run") {
           this.st = "Hold";
@@ -300,7 +367,7 @@ export class FakeGrbl implements Transport {
           this.planner = [];
           this.st = "Idle";
         } else if (this.st === "Idle") {
-          this.st = "Hold";
+          this.st = "Hold"; // inclusive no meio de um G4: a pausa para de contar
           this.holdSub = 0;
         }
         break;
@@ -308,13 +375,14 @@ export class FakeGrbl implements Transport {
         if (this.st === "Hold" && this.holdSub === 0) {
           // com a caneta "parada" pelo 0x9E, o GRBL religa e já sai andando (por isso o controlador
           // manda o 0x9E antes e espera o servo)
-          if (this.spindleStopped) this.restoreSpindle();
-          this.pendingSpindleStop = false;
+          if (this.stopOvr === "enabled") this.restoreSpindle();
+          this.stopOvr = "off";
           this.st = this.planner.length ? "Run" : "Idle";
+          if (this.m0Wait) {
+            this.m0Wait = false;
+            this.reply("ok");
+          }
         }
-        break;
-      case RT.RESET:
-        this.softReset();
         break;
       case RT.JOG_CANCEL:
         if (this.st === "Jog") {
@@ -323,20 +391,25 @@ export class FakeGrbl implements Transport {
         }
         break;
       case RT.SPINDLE_STOP:
-        if (this.st === "Hold") {
-          if (this.holdSub === 0) this.toggleSpindleStop();
-          else this.pendingSpindleStop = !this.pendingSpindleStop;
+        // protocol_exec_rt_system(): só em Hold; pedido uma vez, vale quando o Hold completa
+        if (this.st !== "Hold") break;
+        if (this.stopOvr === "off") {
+          this.stopOvr = "initiate";
+          if (this.holdSub === 0) this.applySpindleStop();
+        } else if (this.stopOvr === "enabled") {
+          this.restoreSpindle();
+          this.stopOvr = "off";
         }
         break;
       case RT.FEED_RESET:
-        this.feedOv = 100;
+        this.setFeedOverride(100);
         break;
       case RT.FEED_PLUS_10:
       case RT.FEED_MINUS_10:
       case RT.FEED_PLUS_1:
       case RT.FEED_MINUS_1: {
         const d = { [RT.FEED_PLUS_10]: 10, [RT.FEED_MINUS_10]: -10, [RT.FEED_PLUS_1]: 1, [RT.FEED_MINUS_1]: -1 }[b] ?? 0;
-        this.feedOv = Math.min(200, Math.max(10, this.feedOv + d));
+        this.setFeedOverride(Math.min(200, Math.max(10, this.feedOv + d)));
         break;
       }
       default:
@@ -344,28 +417,57 @@ export class FakeGrbl implements Transport {
     }
   }
 
-  /** Como o GRBL: WCO de 10 em 10 relatórios; Ov quando muda ou de tempos em tempos (nunca junto do WCO). */
+  private setFeedOverride(v: number) {
+    if (v === this.feedOv) return;
+    this.feedOv = v;
+    this.ovrCounter = 0; // o GRBL mostra o Ov no relatório seguinte
+  }
+
+  private sendStatus() {
+    this.statusReports++;
+    this.emit(this.statusReport());
+  }
+
+  /**
+   * report_realtime_status(): MPos (ou WPos, se o bit 0 do $10 estiver zerado), Bf (bit 1 do $10), FS,
+   * e os campos que só vêm de vez em quando: WCO a cada 10 relatórios parado / 30 em movimento, e o Ov
+   * (com o A: dos acessórios) no relatório seguinte ao do WCO, a cada 10 / 20, ou quando muda.
+   */
   private statusReport(): string {
-    const mx = this.w.x + this.wco.x;
-    const my = this.w.y + this.wco.y;
-    const fields = [this.stateText, `MPos:${mx.toFixed(3)},${my.toFixed(3)},0.000`, `FS:${Math.round(this.curFeed)},${this.penDown ? this.spindleS : 0}`];
-    const n = this.reportCount++;
-    if (n % 10 === 0) fields.push(`WCO:${this.wco.x.toFixed(3)},${this.wco.y.toFixed(3)},0.000`);
-    else if (n % 10 === 5 || this.feedOv !== this.lastReportedOv) {
-      fields.push(`Ov:${this.feedOv},100,100`);
-      this.lastReportedOv = this.feedOv;
+    const mask = Number(this.settings.get(10) ?? "1");
+    const pos = (mask & 1) === 1 ? `MPos:${(this.w.x + this.wco.x).toFixed(3)},${(this.w.y + this.wco.y).toFixed(3)},0.000` : `WPos:${this.w.x.toFixed(3)},${this.w.y.toFixed(3)},0.000`;
+    const fields = [this.stateText, pos];
+    if (mask & 2) fields.push(`Bf:${this.o.plannerBlocks - this.planner.length},${this.o.rxBufferBytes - this.rx.length}`);
+    fields.push(`FS:${Math.round(this.curFeed)},${this.penDown ? this.spindleS : 0}`);
+    const busy = this.st === "Home" || this.st === "Run" || this.st === "Hold" || this.st === "Jog" || this.st === "Door";
+    if (this.wcoCounter > 0) this.wcoCounter--;
+    else {
+      this.wcoCounter = (busy ? WCO_REFRESH.busy : WCO_REFRESH.idle) - 1;
+      if (this.ovrCounter === 0) this.ovrCounter = 1; // o Ov fica para o próximo
+      fields.push(`WCO:${this.wco.x.toFixed(3)},${this.wco.y.toFixed(3)},0.000`);
+    }
+    if (this.ovrCounter > 0) this.ovrCounter--;
+    else {
+      this.ovrCounter = (busy ? OVR_REFRESH.busy : OVR_REFRESH.idle) - 1;
+      // no fork do servo o PWM nunca desliga, então spindle_get_state() sempre diz "ligado": A:S fixo
+      fields.push(`Ov:${this.feedOv},100,100`, "A:S");
     }
     return `<${fields.join("|")}>`;
   }
 
-  private toggleSpindleStop() {
-    if (!this.o.spindleStopInHold) return;
-    if (this.spindleStopped) this.restoreSpindle();
-    else if (this.spindleOn) this.setPen(() => (this.spindleStopped = true));
+  /** O Hold completou com um 0x9E pedido: desliga o spindle (no fork do servo, a caneta sobe). */
+  private applySpindleStop() {
+    if (!this.o.spindleStopInHold || !this.spindleOn) {
+      this.stopOvr = "off";
+      return;
+    }
+    this.setPen(() => (this.stopOvr = "enabled"));
+    this.ovrCounter = 0;
   }
 
   private restoreSpindle() {
-    this.setPen(() => (this.spindleStopped = false));
+    this.setPen(() => (this.stopOvr = "off"));
+    this.ovrCounter = 0;
     this.emit("[MSG:Restoring spindle]");
   }
 
@@ -385,28 +487,28 @@ export class FakeGrbl implements Transport {
     if (Math.abs(last.x - this.w.x) > 1e-9 || Math.abs(last.y - this.w.y) > 1e-9) s.push({ ...this.w });
   }
 
+  /**
+   * 0x18 (mc_reset + main): andando → ALARM:3 (no homing, ALARM:6) e a máquina volta em Alarm; parado
+   * (Idle, Hold:0, no meio de um G4) → só o banner, com a posição mantida. A linha que estava executando
+   * (G4, espera do planejador, $H, M0, a do soft limit) ainda devolve o seu "ok" antes do banner.
+   */
   private softReset() {
     if (!this.booted) return;
-    const moving = this.st === "Run" || this.st === "Jog" || this.st === "Home" || (this.st === "Hold" && this.holdSub === 1);
-    const wasAlarm = this.st === "Alarm";
-    this.setPen(() => {
-      this.spindleOn = false; // o reset executa M5: a caneta sobe
-      this.spindleStopped = false;
-    });
-    this.planner = [];
-    this.rx = "";
-    this.dwellLeftMs = this.homingLeftMs = 0;
-    this.dwellOkPending = this.pendingSpindleStop = false;
-    this.resetParser();
-    this.feedOv = 100;
-    this.needsReset = false;
-    this.curFeed = 0;
+    const alarm = this.st === "Home" ? 6 : this.st === "Run" || this.st === "Jog" || (this.st === "Hold" && this.holdSub === 1) ? 3 : undefined;
     const lines: string[] = [];
-    if (moving) lines.push("ALARM:3");
-    this.st = moving || wasAlarm ? "Alarm" : "Idle";
+    if (alarm !== undefined) lines.push(`ALARM:${alarm}`);
+    if (this.dwellLeftMs > 0 || this.waitingLine || this.st === "Home" || this.m0Wait || this.critical) lines.push("ok");
+    const alarmState = alarm !== undefined || this.st === "Alarm";
+    this.reinit(alarmState ? "Alarm" : "Idle");
     lines.push("", BANNER);
-    if (this.st === "Alarm") lines.push(LOCKED);
+    if (alarmState) lines.push(LOCKED);
     this.emit(...lines);
+  }
+
+  /** Alarme em que o próprio GRBL se reinicia (falha no homing): ALARM, o "ok" do $H, banner, Alarm. */
+  private alarmAndReset(code: number) {
+    this.reinit("Alarm");
+    this.emit(`ALARM:${code}`, "ok", "", BANNER, LOCKED);
   }
 
   private tick() {
@@ -418,31 +520,18 @@ export class FakeGrbl implements Transport {
       this.holdLeftMs -= dt;
       if (this.holdLeftMs <= 0) {
         this.holdSub = 0;
-        if (this.pendingSpindleStop) {
-          this.pendingSpindleStop = false;
-          this.toggleSpindleStop();
-        }
+        if (this.stopOvr === "initiate") this.applySpindleStop();
       }
     }
     if (this.st === "Home") {
       this.homingLeftMs -= dt;
-      if (this.homingLeftMs <= 0) {
-        const p = this.o.homingPulloffMm;
-        this.w = { x: this.o.workArea.width - p, y: this.o.workArea.height - p };
-        this.st = "Idle";
-        this.linesExecuted++;
-        this.emit("ok");
-      }
+      if (this.homingLeftMs <= 0) this.finishHoming();
     }
     if (this.dwellLeftMs > 0 && this.st !== "Hold") {
       this.dwellLeftMs -= dt;
       if (this.dwellLeftMs <= 0) {
         this.dwellLeftMs = 0;
-        if (this.dwellOkPending) {
-          this.dwellOkPending = false;
-          this.linesExecuted++;
-          this.emit("ok");
-        }
+        this.reply("ok");
       }
     }
     if (this.st === "Run" || this.st === "Jog") this.move(dt);
@@ -450,12 +539,27 @@ export class FakeGrbl implements Transport {
     this.process();
   }
 
+  private finishHoming() {
+    const fail = this.o.faults?.homingAlarm;
+    if (fail !== undefined) {
+      this.alarmAndReset(fail);
+      return;
+    }
+    const p = this.o.homingPulloffMm;
+    this.w = { x: this.o.workArea.width - p, y: this.o.workArea.height - p };
+    // os "?" que chegaram durante o homing viram um relatório só, ainda como Home, antes do ok
+    if (this.statusQueued) this.sendStatus();
+    this.statusQueued = false;
+    this.st = "Idle";
+    this.reply("ok");
+  }
+
   private move(dtMs: number) {
     let budget = dtMs;
     this.curFeed = 0;
     while (budget > 0 && this.planner.length) {
       const b = this.planner[0];
-      const f = b.rapid ? this.o.maxRateMmMin : b.jog ? b.feed : (b.feed * this.feedOv) / 100;
+      const f = b.rapid ? this.o.maxRateMmMin : Math.min(this.o.maxRateMmMin, b.jog ? b.feed : (b.feed * this.feedOv) / 100);
       this.curFeed = f;
       const speed = f / 60000; // mm/ms
       const need = (b.len - b.done) / speed;
@@ -479,6 +583,7 @@ export class FakeGrbl implements Transport {
   }
 
   private inArea(p: Vec): boolean {
+    if (Number(this.settings.get(20) ?? "1") === 0) return true; // soft limits desligados
     const e = 1e-6;
     return p.x >= -e && p.y >= -e && p.x <= this.o.workArea.width + e && p.y <= this.o.workArea.height + e;
   }
@@ -486,13 +591,16 @@ export class FakeGrbl implements Transport {
   private process() {
     if (!this.booted || this.cut) return;
     for (;;) {
-      if (this.st === "Hold" || this.st === "Home" || this.dwellLeftMs > 0 || this.needsReset) return;
-      const nl = this.rx.indexOf("\n");
-      if (nl < 0) return;
-      const line = this.rx.slice(0, nl).replace(/\r/g, "");
-      if (this.execute(line) === "blocked") return;
-      this.rx = this.rx.slice(nl + 1);
-      this.received.push(line);
+      // em Hold o GRBL fica preso na rotina de suspensão; no homing, no G4 e no alarme crítico, idem
+      if (this.st === "Hold" || this.st === "Home" || this.dwellLeftMs > 0 || this.critical || this.m0Wait) return;
+      const eol = this.rx.search(/[\r\n]/); // os dois terminam a linha (um "\r\n" daria dois ok)
+      if (eol < 0) return;
+      const raw = this.rx.slice(0, eol);
+      const r = this.execute(raw);
+      this.waitingLine = r === "blocked";
+      if (r === "blocked") return;
+      this.rx = this.rx.slice(eol + 1);
+      this.received.push(raw);
       if (this.cut) return;
     }
   }
@@ -503,39 +611,67 @@ export class FakeGrbl implements Transport {
     return "done";
   }
 
-  private execute(line: string): "blocked" | "done" {
-    const t = line.trim();
-    if (!t) return this.reply("ok");
-    if (t.startsWith("$")) return this.system(t);
-    return this.gcode(t);
+  /**
+   * protocol_main_loop(): tira espaços e comentários ("(" até ")" sem aninhar; ";" até o fim), passa
+   * para maiúsculas e decide. Linha vazia ou só com comentário responde "ok", até em Alarm.
+   */
+  private execute(raw: string): "blocked" | "done" {
+    let line = "";
+    let inParen = false;
+    let overflow = false;
+    for (const ch of raw) {
+      if (overflow) break;
+      if (inParen) {
+        if (ch === ")") inParen = false;
+        continue;
+      }
+      if (ch <= " " || ch === "/") continue;
+      if (ch === "(") inParen = true;
+      else if (ch === ";") break;
+      else if (line.length >= LINE_MAX_CHARS) overflow = true;
+      else line += ch.toUpperCase();
+    }
+    if (overflow) return this.reply("error:11");
+    if (!line) return this.reply("ok");
+    if (line[0] === "$") return this.system(line);
+
+    const n = this.gcodeLines + 1;
+    const faults = this.o.faults;
+    if (faults?.disconnectAfterLines === n) {
+      this.gcodeLines = n;
+      this.cutCable();
+      return "done";
+    }
+    if (faults?.errorAtLine?.line === n) {
+      this.gcodeLines = n;
+      return this.reply(`error:${faults.errorAtLine.code}`);
+    }
+    // o GRBL trava o G-code em Alarm e durante um jog, antes de interpretar a linha
+    const r = this.st === "Alarm" || this.st === "Jog" ? this.reply("error:9") : this.gcode(line);
+    if (r !== "blocked") this.gcodeLines = n;
+    return r;
   }
 
-  private system(t: string): "blocked" | "done" {
-    const u = t.toUpperCase().replace(/\s+/g, "");
+  /** system_execute_line(). `u` já vem sem espaços e em maiúsculas. */
+  private system(u: string): "blocked" | "done" {
     const idleOrAlarm = this.st === "Idle" || this.st === "Alarm";
+    if (u === "$") {
+      this.emit("[HLP:$$ $# $G $I $N $x=val $Nx=line $J=line $SLP $C $X $H ~ ! ? ctrl-x]");
+      return this.reply("ok");
+    }
+    if (u.startsWith("$J")) {
+      if (!(this.st === "Idle" || this.st === "Jog")) return this.reply("error:8");
+      if (u[2] !== "=") return this.reply("error:3");
+      return this.jog(u.slice(3));
+    }
     if (u === "$$") {
       if (this.st === "Run" || this.st === "Hold") return this.reply("error:8");
       const keys = [...this.settings.keys()].sort((a, b) => a - b);
       this.emit(...keys.map((k) => `$${k}=${this.settings.get(k)}`));
       return this.reply("ok");
     }
-    if (u === "$#") {
-      if (!idleOrAlarm) return this.reply("error:8");
-      const z = "0.000,0.000,0.000";
-      this.emit(
-        `[G54:${this.wco.x.toFixed(3)},${this.wco.y.toFixed(3)},0.000]`,
-        ...["G55", "G56", "G57", "G58", "G59", "G28", "G30", "G92"].map((g) => `[${g}:${z}]`),
-        "[TLO:0.000]",
-        `[PRB:${z}:0]`,
-      );
-      return this.reply("ok");
-    }
     if (u === "$G") {
-      this.emit(`[GC:G${this.motionMode} G54 G17 G21 G${this.absolute ? 90 : 91} G94 M${this.spindleOn ? 3 : 5} M9 T0 F${this.feed ?? 0} S${this.spindleS}]`);
-      return this.reply("ok");
-    }
-    if (u === "$I") {
-      this.emit("[VER:1.1h.20190825:]", "[OPT:V,15,128]");
+      this.emit(`[GC:G${this.motionMode} G54 G17 G21 G${this.absolute ? 90 : 91} G94 M${this.spindleOn ? 3 : 5} M${this.coolantOn ? 8 : 9} T0 F${this.feed} S${this.spindleS}]`);
       return this.reply("ok");
     }
     if (u === "$X") {
@@ -545,48 +681,70 @@ export class FakeGrbl implements Transport {
       }
       return this.reply("ok");
     }
+    if (u === "$C") return this.reply("ok"); // modo de conferência: não modelado
+    if (!idleOrAlarm) return this.reply("error:8");
+    if (u === "$#") {
+      const z = "0.000,0.000,0.000";
+      this.emit(
+        `[G54:${this.wco.x.toFixed(3)},${this.wco.y.toFixed(3)},0.000]`,
+        ...["G55", "G56", "G57", "G58", "G59", "G28", "G30", "G92"].map((g) => `[${g}:${z}]`),
+        "[TLO:0.000]",
+        `[PRB:${z}:0]`,
+      );
+      return this.reply("ok");
+    }
+    if (u === "$I") {
+      this.emit("[VER:1.1h.20190830:]", `[OPT:V,${this.o.plannerBlocks},${this.o.rxBufferBytes}]`);
+      return this.reply("ok");
+    }
     if (u === "$H") {
-      if (!idleOrAlarm) return this.reply("error:8");
+      if (Number(this.settings.get(22) ?? "1") === 0) return this.reply("error:5");
       this.st = "Home";
       this.homingLeftMs = this.o.homingMs;
       return "done"; // o ok sai no fim do homing
     }
-    if (u.startsWith("$J=")) {
-      if (!(this.st === "Idle" || this.st === "Jog")) return this.reply("error:8");
-      if (this.planner.length >= this.o.plannerBlocks) return "blocked";
-      const words = parseWords(u.slice(3));
-      if (!words) return this.reply("error:2");
-      let abs = this.absolute;
-      let x: number | undefined;
-      let y: number | undefined;
-      let f: number | undefined;
-      for (const [k, v] of words) {
-        if (k === "G" && v === 90) abs = true;
-        else if (k === "G" && v === 91) abs = false;
-        else if (k === "G" && (v === 21 || v === 20 || v === 53)) continue;
-        else if (k === "X") x = v;
-        else if (k === "Y") y = v;
-        else if (k === "F") f = v;
-        else return this.reply("error:16");
-      }
-      if (f === undefined || f <= 0) return this.reply("error:22");
-      if (x === undefined && y === undefined) return this.reply("error:26");
-      const from = this.planEnd();
-      const to = abs ? { x: x ?? from.x, y: y ?? from.y } : { x: from.x + (x ?? 0), y: from.y + (y ?? 0) };
-      if (!this.inArea(to)) return this.reply("error:15");
-      this.pushBlock(from, to, f, false, true);
-      if (this.planner.length) this.st = "Jog";
-      return this.reply("ok");
-    }
-    let m = /^\$(\d+)=(.+)$/.exec(u);
+    const m = /^\$(\d+)=(.+)$/.exec(u);
     if (m) {
-      if (!idleOrAlarm) return this.reply("error:8");
       this.settings.set(Number(m[1]), m[2]);
       return this.reply("ok");
     }
-    m = /^\$(C|SLP|RST=.*|N\d?=?.*)$/.exec(u);
-    if (m) return this.reply("ok");
+    if (/^\$(SLP|RST=.*|N\d?=?.*)$/.test(u)) return this.reply("ok"); // não modelados
     return this.reply("error:3");
+  }
+
+  /** $J=: só G90/G91, G20/G21, G53, X/Y, F (e N). Fora da área responde error:15, sem alarme. */
+  private jog(code: string): "blocked" | "done" {
+    if (this.planner.length >= this.o.plannerBlocks) return "blocked";
+    const words = parseWords(code);
+    if (typeof words === "number") return this.reply(`error:${words}`);
+    let abs = this.absolute;
+    let machine = false;
+    let x: number | undefined;
+    let y: number | undefined;
+    let f: number | undefined;
+    for (const [k, v] of words) {
+      if (k === "G" && v === 90) abs = true;
+      else if (k === "G" && v === 91) abs = false;
+      else if (k === "G" && v === 21) continue;
+      else if (k === "G" && v === 53) machine = true;
+      else if (k === "X") x = v;
+      else if (k === "Y") y = v;
+      else if (k === "F") f = v;
+      else if (k === "N") continue;
+      else if (k === "G" || k === "M") return this.reply("error:16");
+      else return this.reply("error:36");
+    }
+    if (f === undefined || f <= 0) return this.reply("error:22");
+    if (x === undefined && y === undefined) return this.reply("error:26");
+    const from = this.planEnd();
+    let to: Vec;
+    if (machine) to = { x: x === undefined ? from.x : x - this.wco.x, y: y === undefined ? from.y : y - this.wco.y };
+    else if (abs) to = { x: x ?? from.x, y: y ?? from.y };
+    else to = { x: from.x + (x ?? 0), y: from.y + (y ?? 0) };
+    if (!this.inArea(to)) return this.reply("error:15");
+    this.pushBlock(from, to, f, false, true);
+    if (this.planner.length) this.st = "Jog";
+    return this.reply("ok");
   }
 
   private pushBlock(from: Vec, to: Vec, feed: number, rapid: boolean, jog: boolean) {
@@ -595,110 +753,160 @@ export class FakeGrbl implements Transport {
     this.planner.push({ from, to, len, done: 0, feed, rapid, jog });
   }
 
-  private gcode(t: string): "blocked" | "done" {
-    // comentários como o GRBL: "(" abre, ")" fecha (sem aninhar), ";" vai até o fim
-    let code = "";
-    let inParen = false;
-    for (const ch of t) {
-      if (inParen) {
-        if (ch === ")") inParen = false;
-        continue;
-      }
-      if (ch === "(") inParen = true;
-      else if (ch === ";") break;
-      else code += ch;
-    }
-    code = code.toUpperCase().replace(/\s+/g, "");
-    const words = parseWords(code);
-    const gs = words?.filter(([k]) => k === "G").map(([, v]) => v) ?? [];
-    const ms = words?.filter(([k]) => k === "M").map(([, v]) => v) ?? [];
-    const has = (k: string) => words?.some(([w]) => w === k) ?? false;
-    const val = (k: string) => words?.find(([w]) => w === k)?.[1];
-    const isSync = ms.some((v) => v === 3 || v === 4 || v === 5) || gs.includes(4);
-    const isMotion = has("X") || has("Y");
-    const alarmLike = this.st === "Alarm" || this.st === "Jog";
+  /**
+   * gc_execute_line(): primeiro confere a linha inteira (um erro não muda nada do estado), depois
+   * espera o que precisar e só então executa, na ordem do GRBL: F, S, M3/M5, G4, G90/G91, movimento, M2.
+   */
+  private gcode(line: string): "blocked" | "done" {
+    const b = parseBlock(line);
+    if (typeof b === "number") return this.reply(`error:${b}`);
 
-    // espera como o GRBL: movimento precisa de vaga no planejador; M3/M5/G4 esperam ele esvaziar
-    if (words && !alarmLike) {
-      if (isSync && (this.planner.length > 0 || this.st === "Run")) return "blocked";
-      if (isMotion && this.planner.length >= this.o.plannerBlocks) return "blocked";
-    }
+    const axisWords = b.x !== undefined || b.y !== undefined;
+    const motion = b.motion ?? this.motionMode;
+    const feed = b.f ?? this.feed;
+    if (b.dwell && b.p === undefined) return this.reply("error:28");
+    if (!b.dwell && b.p !== undefined) return this.reply("error:36");
+    if (b.dwell && (axisWords || b.flow !== undefined)) return this.reply("error:20"); // não modelado
+    if (motion === 80 && axisWords) return this.reply("error:31");
+    // G1 (na linha ou modal) precisa de F, mesmo sem eixos na linha
+    if (motion === 1 && (axisWords || b.motion === 1) && !(feed > 0)) return this.reply("error:22");
 
-    this.gcodeLines++;
-    const faults = this.o.faults;
-    if (faults?.disconnectAfterLines !== undefined && this.gcodeLines === faults.disconnectAfterLines) {
-      this.cutCable();
-      return "done";
-    }
-    if (faults?.errorAtLine && this.gcodeLines === faults.errorAtLine.line) return this.reply(`error:${faults.errorAtLine.code}`);
-    if (alarmLike) return this.reply("error:9"); // o GRBL trava o G-code antes de interpretar a linha
-    if (!words) return this.reply(`error:${parseErrorCode(code)}`);
-    if (gs.some((g) => !SUPPORTED_G.includes(g))) return this.reply("error:20");
-    if (ms.some((v) => !SUPPORTED_M.includes(v))) return this.reply("error:20");
+    // espera como o GRBL: o que mexe no spindle, o G4 e o M0/M2/M30 esperam o planejador esvaziar;
+    // movimento precisa de vaga. Um M5 (ou M3 S igual) repetido não muda nada e por isso não espera.
+    const spindleChange = b.spindle !== undefined && b.spindle !== this.spindleOn;
+    const speedChange = b.s !== undefined && b.s !== this.spindleS && this.spindleOn;
+    const flowSync = b.flow === 0 || b.flow === 2 || b.flow === 30;
+    const coolantChange = b.coolant !== undefined && b.coolant !== this.coolantOn;
+    if ((spindleChange || speedChange || coolantChange || b.dwell || flowSync) && (this.planner.length > 0 || this.st === "Run")) return "blocked";
+    if (axisWords && this.planner.length >= this.o.plannerBlocks) return "blocked";
 
-    const f = val("F");
-    if (f !== undefined) this.feed = f;
-    const s = val("S");
-    if (s !== undefined) this.spindleS = s;
-    if (gs.includes(90)) this.absolute = true;
-    if (gs.includes(91)) this.absolute = false;
-    if (gs.includes(0)) this.motionMode = 0;
-    if (gs.includes(1)) this.motionMode = 1;
-    if (ms.includes(3)) this.setPen(() => (this.spindleOn = true));
-    if (ms.includes(5)) this.setPen(() => (this.spindleOn = false));
-    if (gs.includes(4)) {
-      const p = val("P");
-      if (p === undefined || p < 0) return this.reply("error:28");
-      this.dwellLeftMs = p * 1000;
-      this.dwellOkPending = true;
-      return "done"; // o ok sai no fim da pausa
+    if (b.f !== undefined) this.feed = b.f;
+    if (b.s !== undefined && b.s !== this.spindleS) {
+      const s = b.s;
+      this.setPen(() => (this.spindleS = s));
     }
-    if (isMotion) {
-      if (this.motionMode === 1 && this.feed === undefined) return this.reply("error:22");
+    if (spindleChange) {
+      const on = b.spindle === true;
+      this.setPen(() => (this.spindleOn = on));
+      this.ovrCounter = 0;
+    }
+    if (b.coolant !== undefined) this.coolantOn = b.coolant;
+    if (b.absolute !== undefined) this.absolute = b.absolute;
+    if (b.motion !== undefined) this.motionMode = b.motion;
+    if (b.dwell) {
+      this.dwellLeftMs = Math.ceil(((b.p ?? 0) * 1000) / DWELL_STEP_MS - 1e-9) * DWELL_STEP_MS;
+      if (this.dwellLeftMs > 0) return "done"; // o ok sai no fim da pausa
+    }
+    if (axisWords) {
       const from = this.planEnd();
-      const x = val("X");
-      const y = val("Y");
-      const to = this.absolute ? { x: x ?? from.x, y: y ?? from.y } : { x: from.x + (x ?? 0), y: from.y + (y ?? 0) };
+      const to = this.absolute ? { x: b.x ?? from.x, y: b.y ?? from.y } : { x: from.x + (b.x ?? 0), y: from.y + (b.y ?? 0) };
       if (!this.inArea(to)) {
-        // soft limit: o GRBL para tudo, entra em alarme e espera um reset
+        // soft limit: o GRBL para, desliga o spindle, entra em alarme e fica mudo até o reset
         this.setPen(() => (this.spindleOn = false));
         this.planner = [];
-        this.rx = "";
         this.st = "Alarm";
-        this.needsReset = true;
+        this.critical = true;
+        this.curFeed = 0;
         this.emit("ALARM:2", "[MSG:Reset to continue]");
         return "done";
       }
-      this.pushBlock(from, to, this.feed ?? 0, this.motionMode === 0, false);
+      this.pushBlock(from, to, feed, motion === 0, false);
       if (this.st === "Idle" && this.planner.length) this.st = "Run";
+    }
+    if (b.flow === 0) {
+      this.st = "Hold"; // M0: pausa do programa, sai com "~"
+      this.holdSub = 0;
+      this.m0Wait = true;
+      return "done";
+    }
+    if (b.flow === 2 || b.flow === 30) {
+      // fim de programa: G1 (!), G17, G90, G94, G54, M5, M9 e overrides em 100%; F e S ficam
+      this.motionMode = 1;
+      this.absolute = true;
+      this.setPen(() => (this.spindleOn = false));
+      this.coolantOn = false;
+      this.feedOv = 100;
+      this.wcoCounter = this.ovrCounter = 0;
+      this.emit("[MSG:Pgm End]");
     }
     return this.reply("ok");
   }
 }
 
-/** "G1X10.5Y-2F1500" → [["G",1],["X",10.5],...]; undefined se mal formado. */
-function parseWords(code: string): [string, number][] | undefined {
-  const r = parseWordsAt(code);
-  return typeof r === "number" ? undefined : r;
-}
-
-/** Como parseWords, mas devolve a posição onde falhou. */
-function parseWordsAt(code: string): [string, number][] | number {
+/**
+ * "G1X10.5Y-2F1500" → [["G",1],["X",10.5],...]; ou o código do erro: 1 se o que vem não é letra,
+ * 2 se a letra não tem número válido.
+ */
+function parseWords(code: string): [string, number][] | number {
   const out: [string, number][] = [];
   const re = /([A-Z])([-+]?(?:\d+\.?\d*|\.\d+))/y;
   let i = 0;
   while (i < code.length) {
     re.lastIndex = i;
     const m = re.exec(code);
-    if (!m) return i;
+    if (!m) return /[A-Z]/.test(code[i]) ? 2 : 1;
     out.push([m[1], parseFloat(m[2])]);
     i = re.lastIndex;
   }
   return out;
 }
 
-/** error:1 se o que sobrou não começa com letra; error:2 se a letra não tem número válido. */
-function parseErrorCode(code: string): number {
-  const at = parseWordsAt(code);
-  return typeof at === "number" && /[A-Z]/.test(code[at]) ? 2 : 1;
+/** Palavras de uma linha → bloco conferido, ou o código do erro (como o passo 2 do gc_execute_line). */
+function parseBlock(line: string): ParsedBlock | number {
+  const words = parseWords(line);
+  if (typeof words === "number") return words;
+  const b: ParsedBlock = { dwell: false };
+  const groups = new Set<string>();
+  const seen = new Set<string>();
+  const group = (g: string) => {
+    if (groups.has(g)) return false;
+    groups.add(g);
+    return true;
+  };
+  for (const [k, v] of words) {
+    if (k === "G" || k === "M") {
+      const int = Math.trunc(v);
+      if (Math.round(100 * (v - int)) !== 0) return k === "G" && [28, 30, 38, 43, 92].includes(int) ? 20 : 23;
+      let g: string;
+      if (k === "G") {
+        if (int === 0 || int === 1 || int === 80) {
+          g = "motion";
+          b.motion = int;
+        } else if (int === 4) {
+          g = "nonmodal";
+          b.dwell = true;
+        } else if (int === 17) g = "plane";
+        else if (int === 21) g = "units";
+        else if (int === 40) g = "cutter";
+        else if (int === 54) g = "coord";
+        else if (int === 61) g = "control";
+        else if (int === 90 || int === 91) {
+          g = "distance";
+          b.absolute = int === 90;
+        } else if (int === 94) g = "feedmode";
+        else return 20; // inclui o que o GRBL tem e o simulador não modela (G2/G3, G10, G20, G28, G53, G92...)
+      } else if (int === 0 || int === 1 || int === 2 || int === 30) {
+        g = "flow";
+        b.flow = int;
+      } else if (int === 3 || int === 4 || int === 5) {
+        g = "spindle";
+        b.spindle = int !== 5;
+      } else if (int === 8 || int === 9) {
+        g = "coolant";
+        b.coolant = int === 8;
+      } else return 20;
+      if (!group(`${k}:${g}`)) return 21;
+      continue;
+    }
+    if (!"FNPSTXY".includes(k)) return "IJKLRZ".includes(k) && k !== "Z" ? 36 : 20;
+    if (seen.has(k)) return 25;
+    seen.add(k);
+    if ("FNPST".includes(k) && v < 0) return 4;
+    if (k === "F") b.f = v;
+    else if (k === "S") b.s = v;
+    else if (k === "P") b.p = v;
+    else if (k === "X") b.x = v;
+    else if (k === "Y") b.y = v;
+  }
+  return b;
 }

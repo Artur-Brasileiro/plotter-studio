@@ -306,6 +306,7 @@ export function validateProfile(p: MachineProfile): string[] {
     else if (!ASCII_PRINTABLE.test(cmd)) e.push(`${label} tem caracteres fora de ASCII (o GRBL os interpreta como comandos).`);
     else if (cmd.includes("$")) e.push(`${label} não pode ter "$" (comandos $ mexem na configuração do GRBL).`);
     else if (/[;()]/.test(cmd)) e.push(`${label} não pode ter comentários.`);
+    else if (/[!?~]/.test(cmd)) e.push(`${label} não pode ter "!", "?" nem "~" (para o GRBL são pausa, relatório e continuar).`);
   }
   range(p.pen.settleSeconds, 0, 5, "Pausa depois de descer (s)");
   range(p.pen.settleUpSeconds, 0, 5, "Pausa depois de subir (s)");

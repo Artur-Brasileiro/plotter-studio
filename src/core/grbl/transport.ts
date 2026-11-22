@@ -12,4 +12,9 @@ export interface Transport {
   onData: ((chunk: Uint8Array) => void) | null;
   /** "user" = fechada por nós; "lost" = cabo desconectado ou placa sumiu */
   onClose: ((info: { reason: "user" | "lost"; error?: unknown }) => void) | null;
+  /**
+   * Erro de leitura que NÃO derruba a porta (ruído na linha: FramingError, BreakError, BufferOverrunError...).
+   * Alguns bytes do GRBL podem ter se perdido. Opcional: o simulador não usa.
+   */
+  onReadError?: ((error: unknown) => void) | null;
 }

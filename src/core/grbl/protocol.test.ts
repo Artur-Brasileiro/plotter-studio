@@ -44,6 +44,30 @@ describe("parseLine", () => {
     expect(workPosition(status("<Idle|WPos:1.000,2.000,0.000|FS:0,0>"), undefined)).toEqual({ x: 1, y: 2 });
   });
 
+  it("relatórios como o fork do servo manda: A:S junto do Ov, Home, Hold:1, Door, WPos com Bf", () => {
+    // no grbl-servo o PWM nunca desliga, então o campo de acessórios diz "S" até com a caneta em cima
+    const ov = status("<Idle|MPos:-1.000,-1.000,0.000|FS:0,0|Ov:100,100,100|A:S>");
+    expect(ov.overrides).toEqual({ feed: 100, rapid: 100, spindle: 100 });
+    expect(ov.spindle).toBe(0);
+    expect(ov.pins).toBe("");
+    expect(status("<Home|MPos:-1.000,-1.000,0.000|FS:0,0>").state).toBe("Home");
+    expect(stateLabel(status("<Hold:1|MPos:-700.000,-300.000,0.000|FS:1200,220>"))).toBe("Hold:1");
+    expect(stateLabel(status("<Door:0|MPos:0.000,0.000,0.000|FS:0,0|Pn:XYD>"))).toBe("Door:0");
+    const w = status("<Run|WPos:12.500,40.000,0.000|Bf:9,101|FS:500,220|WCO:-810.000,-385.000,0.000>");
+    expect(workPosition(w, undefined)).toEqual({ x: 12.5, y: 40 });
+    expect(w.buffer).toEqual({ blocks: 9, bytes: 101 });
+    expect(w.wco).toEqual({ x: -810, y: -385 });
+  });
+
+  it("o que o GRBL manda fora do roteiro não quebra: [MSG:Pgm End], linha de startup, [OPT:], [HLP:]", () => {
+    expect(parseLine("[MSG:Pgm End]")).toEqual({ type: "msg", text: "Pgm End" });
+    expect(parseLine("[MSG:Restoring spindle]")).toEqual({ type: "msg", text: "Restoring spindle" });
+    expect(parseLine("[OPT:V,15,128]")).toEqual({ type: "feedback", tag: "OPT", body: "V,15,128" });
+    expect(parseLine("[VER:1.1h.20190830:]")).toEqual({ type: "feedback", tag: "VER", body: "1.1h.20190830:" });
+    expect(parseLine(">G54G21:ok")).toMatchObject({ type: "unknown" }); // não é um "ok" da fila
+    expect(parseLine("[HLP:$$ $# $G $I $N $x=val $Nx=line $J=line $SLP $C $X $H ~ ! ? ctrl-x]")).toMatchObject({ type: "feedback", tag: "HLP" });
+  });
+
   it("ok, error, ALARM, banner, MSG, feedback e setting", () => {
     expect(parseLine("ok")).toEqual({ type: "ok" });
     expect(parseLine("error:9")).toEqual({ type: "error", code: 9 });

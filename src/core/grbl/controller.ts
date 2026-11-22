@@ -112,7 +112,56 @@ const RT_NAMES: Record<number, string> = {
   [RT.FEED_MINUS_1]: "0x94 (velocidade −1%)",
 };
 
+const ALLOWED_RT: ReadonlySet<number> = new Set(Object.values(RT));
+
+const RESET_NOT_CONFIRMED =
+  "O GRBL NÃO confirmou o reset (nenhum banner em 3 s). Se a máquina ainda estiver andando, desligue a fonte dos motores. Depois desconecte e conecte de novo.";
+
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** O comando como o GRBL o enxerga: sem comentários nem espaços, em maiúsculas ("$h ; home" → "$H"). */
+const commandOf = (text: string) =>
+  text
+    .replace(/\([^)]*\)/g, "")
+    .replace(/;.*$/, "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+
+/**
+ * Linha do programa que o GRBL pode ter pulado (error:N) sem estragar o resto: um ponto do traço (só
+ * X/Y: o modo de movimento não muda) ou uma pausa (G4). Qualquer outra muda a caneta ou o modo: sem um
+ * "G1 F500", por exemplo, os pontos seguintes sairiam em G0, na velocidade máxima e com a caneta no papel.
+ */
+const isSkippableLine = (text: string) => /^(?:[XY]|G0*4(?![\d.]))/.test(commandOf(text));
+
+/** $H (ou $HX/$HY/$HZ, se o firmware tiver o homing por eixo). */
+const isHomingCommand = (text: string) => /^\$H[XYZ]?$/.test(commandOf(text));
+
+/**
+ * "!" ou "~" digitado no console. Com um trabalho em andamento eles têm que passar pela pausa do
+ * controlador (que para de mandar linhas e cuida da caneta): mandados crus, o GRBL pausaria ou voltaria
+ * a andar por baixo, e a tela continuaria dizendo outra coisa. Um "~" cru numa pausa com a caneta
+ * levantada faria a máquina sair andando sem esperar o servo descer.
+ */
+export function consoleRealtimeAction(char: "?" | "!" | "~", job: JobState): "send" | "pause" | "resume" | "refuse" {
+  if (char === "?" || !isJobActive(job)) return "send";
+  if (char === "!") return job === "running" ? "pause" : "refuse";
+  return job === "paused" ? "resume" : "refuse";
+}
+
+/**
+ * O que o Esc faz agora (regra do CLAUDE.md): parada de emergência com trabalho ativo ou a máquina
+ * andando; num jog, só cancela o jog (0x85). Uma ação manual em andamento (Home, contorno, origem...)
+ * também conta como "andando", mesmo que o relatório de estado ainda não mostre: o GRBL não manda
+ * relatório durante o homing, e os primeiros 200 ms de qualquer movimento ainda aparecem como Idle.
+ */
+export function escapeAction(s: ControllerSnapshot): "estop" | "jogCancel" | "none" {
+  if (s.link !== "connected") return "none";
+  const st = s.status?.state;
+  if (isJobActive(s.job.state) || st === "Run" || st === "Home" || st === "Hold") return "estop";
+  if (st === "Jog") return "jogCancel";
+  return s.busy ? "estop" : "none";
+}
 
 /**
  * Conversa com o GRBL (seção 3.7 do PLAN): conexão com espera do banner, leitura de $$/$#, relatório de
@@ -143,6 +192,17 @@ export class GrblController {
   private settingsAcc = new Map<number, string>();
   private settingsDirty = false;
   private settingsRead = false;
+  /**
+   * Id (na fila) de um $H que já saiu e ainda não teve resposta. Durante o homing o GRBL não atende o "?"
+   * nem o "!": só o reset (limits.c: "Only the abort realtime command can interrupt this process").
+   */
+  private homingId: number | undefined;
+  /** Chegou um ALARM depois do qual o GRBL se reinicia: o banner seguinte não é a placa "reiniciando sozinha" */
+  private alarmBanner = false;
+  /** RX_BUFFER_SIZE que o próprio firmware informa no $I ([OPT:V,15,128]) */
+  private firmwareRxBytes: number | undefined;
+  /** Espera do banner depois de um reset de emergência: se não vier, o reset NÃO foi confirmado */
+  private resetTimer: number | undefined;
 
   // trabalho
   private program: GcodeProgram | undefined;
@@ -158,6 +218,8 @@ export class GrblController {
   private pauseTimer: number | undefined;
   private resumeTimer: number | undefined;
   private stopping: Promise<void> | undefined;
+  /** O Parar em andamento foi pedido pelo próprio controlador, por um erro que não dá para pular */
+  private stopReason: string | undefined;
 
   // jog
   private jogTarget: Vec | undefined;
@@ -200,7 +262,28 @@ export class GrblController {
 
   setProfile(p: MachineProfile): void {
     this.profile = p;
-    if (this.settingsRead) this.patch({ settingsWarnings: compareSettings(this.snap.settings, this.snap.g54, p) });
+    this.applyRxLimit();
+    if (this.settingsRead) this.patch({ settingsWarnings: this.warnings() });
+  }
+
+  /** Avisos de configuração: $$ e $# contra o perfil, mais o buffer de recepção que o firmware diz ter. */
+  private warnings(): string[] {
+    const w = compareSettings(this.snap.settings, this.snap.g54, this.profile);
+    const fw = this.firmwareRxBytes;
+    const mine = this.profile.serial.rxBufferBytes;
+    if (fw !== undefined && fw !== mine) {
+      w.push(
+        fw < mine
+          ? `Este GRBL tem um buffer de recepção de ${fw} bytes ($I), menor que os ${mine} do perfil: o envio passa a respeitar ${fw} (com ${mine} as linhas se perderiam). Corrija em Configurações.`
+          : `Este GRBL tem um buffer de recepção de ${fw} bytes ($I), e o perfil diz ${mine}: funciona, só que mais devagar do que poderia.`,
+      );
+    }
+    return w;
+  }
+
+  /** A contagem de caracteres nunca usa mais que o menor dos dois: o do perfil e o que o firmware informou. */
+  private applyRxLimit(): void {
+    this.streamer.setRxBufferBytes(Math.min(this.profile.serial.rxBufferBytes, this.firmwareRxBytes ?? Infinity));
   }
 
   private patch(p: Partial<ControllerSnapshot>): void {
@@ -248,6 +331,8 @@ export class GrblController {
     });
     this.transport.onData = (c) => this.onData(c);
     this.transport.onClose = (info) => this.onTransportClose(info);
+    this.transport.onReadError = (e) =>
+      this.log("error", `Erro de leitura na serial (${errMsg(e)}): a porta continua aberta, mas uma resposta do GRBL pode ter se perdido. Se o desenho parar de avançar, use Parar.`);
     try {
       await this.transport.open();
     } catch (e) {
@@ -296,6 +381,10 @@ export class GrblController {
     this.expectingBanner = false;
     this.settingsAcc = new Map();
     this.settingsDirty = this.settingsRead = false;
+    this.homingId = undefined;
+    this.alarmBanner = false;
+    this.firmwareRxBytes = undefined;
+    this.cancelResetWatch();
     this.clearJobInternals();
     this.jogTarget = undefined;
     this.jogPending = 0;
@@ -324,6 +413,8 @@ export class GrblController {
     this.bannerWaiter?.(false);
     for (const w of [...this.statusWaiters]) w.done(false);
     this.streamer.clear();
+    this.homingId = undefined;
+    this.cancelResetWatch();
     this.rejectWaiters(new Error("A conexão com a máquina foi fechada."));
     const job = this.snap.job;
     if (info.reason === "user") {
@@ -380,16 +471,23 @@ export class GrblController {
     return this.waitStatus((r) => (r.state === "Idle" ? ++n >= 2 : ((n = 0), false)), ms);
   }
 
+  /** Espera o movimento manual acabar; um alarme no meio vira erro (e não "terminou"). */
+  private async waitMotionEnd(): Promise<void> {
+    const idle = await this.waitIdle(120_000);
+    if (!idle && this.snap.alarm !== undefined) throw new GrblAlarmError(this.snap.alarm);
+  }
+
   private async readSettings(): Promise<void> {
     try {
       await this.send("$$");
       await this.send("$#");
+      await this.send("$I"); // [OPT:V,15,128]: o tamanho real do buffer de recepção
     } catch (e) {
       this.log("error", `Não consegui ler a configuração: ${errMsg(e)}`);
     }
     if (this.snap.link !== "connected") return;
     this.settingsRead = true;
-    const settingsWarnings = compareSettings(this.snap.settings, this.snap.g54, this.profile);
+    const settingsWarnings = this.warnings();
     this.patch({ settingsWarnings });
     for (const w of settingsWarnings) this.log("info", `Aviso: ${w}`);
   }
@@ -421,6 +519,7 @@ export class GrblController {
    * segundo plano o Chrome segura os timers, os "?" saem raramente, e isso não é a placa travada.
    */
   private pollTick(): void {
+    if (this.silent()) this.statusAskedAt = undefined;
     const age = this.statusAskedAt === undefined ? 0 : this.clock.now() - this.statusAskedAt;
     const health: Health = age > 5000 ? "stuck" : age > 1000 ? "slow" : "ok";
     if (health !== this.snap.health) {
@@ -433,8 +532,26 @@ export class GrblController {
 
   private requestStatus(): void {
     if (this.snap.link !== "connected") return;
-    this.statusAskedAt ??= this.clock.now();
+    // o "?" sai assim mesmo (o relatório volta mais cedo quando o silêncio acabar): só não conta como falta de resposta
+    if (!this.silent()) this.statusAskedAt ??= this.clock.now();
     this.writeBytes(Uint8Array.of(RT.STATUS));
+  }
+
+  /**
+   * O GRBL não responde ao "?" em dois casos (wiki "Grbl v1.1 Interface"; limits.c e protocol.c): durante
+   * o homing e depois de um alarme crítico (ALARM:1/2), até o reset. Nesses períodos o silêncio não é a
+   * placa travada.
+   */
+  private silent(): boolean {
+    return this.homingId !== undefined || this.snap.needsReset;
+  }
+
+  /** O $H saiu: daqui até o ok (ou o alarme) o estado é Home, e o GRBL não vai dizer isso sozinho. */
+  private beginHoming(id: number): void {
+    this.homingId = id;
+    this.statusAskedAt = undefined;
+    const st = this.snap.status;
+    this.patch({ health: "ok", status: { ...(st ?? { pins: "" }), state: "Home", subState: undefined, feed: 0 } });
   }
 
   // ------------------------------------------------------------------ leitura
@@ -478,7 +595,15 @@ export class GrblController {
           const [x, y] = m.body.split(",").map(Number);
           if (Number.isFinite(x) && Number.isFinite(y)) {
             this.patch({ g54: { x, y } });
-            if (this.settingsRead) this.patch({ settingsWarnings: compareSettings(this.snap.settings, { x, y }, this.profile) });
+            if (this.settingsRead) this.patch({ settingsWarnings: this.warnings() });
+          }
+        } else if (m.tag === "OPT") {
+          // [OPT:<opções>,<blocos do planejador>,<RX_BUFFER_SIZE>] (report_build_info)
+          const rx = Number(m.body.split(",")[2]);
+          if (Number.isInteger(rx) && rx >= 16) {
+            this.firmwareRxBytes = rx;
+            this.applyRxLimit();
+            if (this.settingsRead) this.patch({ settingsWarnings: this.warnings() });
           }
         }
         return;
@@ -492,7 +617,10 @@ export class GrblController {
     }
   }
 
-  private onStatus(r: StatusReport): void {
+  private onStatus(report: StatusReport): void {
+    // Durante o homing o GRBL não gera relatório: o que chegar agora saiu antes de o $H começar (um "?"
+    // que cruzou com ele) e diria Alarm/Idle com a máquina já andando. O estado continua Home.
+    const r: StatusReport = this.homingId !== undefined && report.state !== "Home" ? { ...report, state: "Home", subState: undefined } : report;
     const wco = r.wco ?? this.snap.wco;
     const wpos = workPosition(r, wco);
     this.statusAskedAt = undefined;
@@ -515,7 +643,7 @@ export class GrblController {
     if (this.settingsDirty) {
       this.settingsDirty = false;
       this.patch({ settings: new Map(this.settingsAcc) });
-      if (this.settingsRead) this.patch({ settingsWarnings: compareSettings(this.snap.settings, this.snap.g54, this.profile) });
+      if (this.settingsRead) this.patch({ settingsWarnings: this.warnings() });
     }
     const a = this.streamer.acknowledge();
     if (!a) {
@@ -525,10 +653,14 @@ export class GrblController {
     if (a.id < 0) {
       const w = this.waiters.get(a.id);
       this.waiters.delete(a.id);
+      if (a.id === this.homingId) {
+        this.homingId = undefined;
+        this.statusAskedAt = undefined;
+      }
       if (code === undefined) {
         this.log("in", "ok");
         // $H/$X também valem quando digitados no console
-        const cmd = w?.text.trim().toUpperCase();
+        const cmd = w ? commandOf(w.text) : "";
         if (cmd === "$H") this.patch({ homed: true, alarm: undefined });
         else if (cmd === "$X") this.patch({ alarm: undefined });
       } else this.log("error", `${errorText(code)} em "${w?.text ?? "?"}". ${describeError(code).action}`);
@@ -541,7 +673,8 @@ export class GrblController {
         this.log("error", `${errorText(code)} na linha ${a.id + 1} do programa: "${text}". ${describeError(code).action}`);
         const error = { line: a.id, code, text };
         const st = this.snap.job.state;
-        if (st === "running" || (st === "pausing" && this.pauseKind === "endOfStroke")) {
+        if (st !== "stopping" && !isSkippableLine(text)) this.abortOnError(error);
+        else if (st === "running" || (st === "pausing" && this.pauseKind === "endOfStroke")) {
           this.beginHoldPause(this.profile.pen.pauseLift === "spindleStop", error);
         } else if (!this.snap.job.error) this.patchJob({ error });
       }
@@ -549,12 +682,36 @@ export class GrblController {
     this.pump();
   }
 
+  /**
+   * O GRBL recusou uma linha que não dá para pular (caneta, deslocamento, modo de movimento). "Continuar
+   * mesmo assim" estragaria o desenho, então o trabalho para sozinho, do jeito que mantém a posição.
+   */
+  private abortOnError(error: NonNullable<JobProgress["error"]>): void {
+    this.patchJob({ error: this.snap.job.error ?? error });
+    this.stopReason = `${errorText(error.code)} na linha ${error.line + 1} ("${error.text}"). Essa linha muda a caneta ou o modo de movimento, e sem ela o resto sairia errado (por exemplo, um traço inteiro em G0). O trabalho foi parado: a caneta subiu e a posição foi mantida.`;
+    this.log("error", "Linha recusada não pode ser pulada: parando o trabalho.");
+    void this.stop();
+  }
+
   private onAlarm(code: number): void {
     const info = describeAlarm(code);
     this.log("error", `${alarmText(code)}. ${info.action}`);
     this.streamer.clear();
+    this.homingId = undefined;
+    this.statusAskedAt = undefined;
+    // ALARM:4/5 (sonda) deixam o GRBL rodando; nos outros ele se reinicia (ou espera o nosso reset) e manda o banner
+    this.alarmBanner = code !== 4 && code !== 5;
     this.rejectWaiters(new GrblAlarmError(code));
-    this.patch({ homed: false, alarm: code, busy: undefined });
+    for (const w of [...this.statusWaiters]) w.done(false);
+    // o alarme é a palavra final sobre o estado: depois de um ALARM:1/2 o GRBL nem responde mais ao "?"
+    const st = this.snap.status;
+    this.patch({
+      homed: false,
+      alarm: code,
+      busy: undefined,
+      needsReset: code === 1 || code === 2 ? true : this.snap.needsReset,
+      status: st ? { ...st, state: "Alarm", subState: undefined, feed: 0 } : undefined,
+    });
     const job = this.snap.job;
     if (isJobActive(job.state) && job.state !== "stopping") {
       this.clearJobInternals();
@@ -567,8 +724,13 @@ export class GrblController {
       this.bannerWaiter?.(true);
       return;
     }
+    this.homingId = undefined;
+    this.statusAskedAt = undefined;
+    const afterAlarm = this.alarmBanner;
+    this.alarmBanner = false;
     if (this.expectingBanner) {
       this.expectingBanner = false;
+      this.cancelResetWatch();
       this.streamer.clear();
       this.rejectWaiters(new Error("Comando descartado pelo reset."));
       this.patch({ needsReset: false });
@@ -576,7 +738,8 @@ export class GrblController {
       this.pump();
       return;
     }
-    this.log("error", "A placa reiniciou sozinha (o GRBL mandou o banner sem ninguém pedir).");
+    if (afterAlarm) this.log("info", "O GRBL se reiniciou depois do alarme (é o esperado): está em Alarm até o Home.");
+    else this.log("error", "A placa reiniciou sozinha (o GRBL mandou o banner sem ninguém pedir).");
     this.streamer.clear();
     this.rejectWaiters(new Error("A placa reiniciou."));
     this.patch({ homed: false, needsReset: false, busy: undefined });
@@ -612,15 +775,23 @@ export class GrblController {
     let text = "";
     for (const l of lines) {
       text += l.text + "\n";
-      if (l.id < 0) this.log("out", l.text);
-      else this.lastSentId = l.id;
+      if (l.id < 0) {
+        this.log("out", l.text);
+        if (isHomingCommand(l.text)) this.beginHoming(l.id);
+      } else this.lastSentId = l.id;
     }
     this.writeBytes(asciiBytes(text));
   }
 
-  /** Comando de tempo real (fura a fila). Overrides de spindle (0x99–0x9D) são recusados: mexem no servo. */
+  /**
+   * Comando de tempo real (fura a fila). Só passam os que o aplicativo usa (lista RT). Overrides de
+   * spindle (0x99–0x9D) mexem no servo; e os outros bytes que o GRBL entende também não têm o que fazer
+   * aqui: 0x84 (porta de segurança) suspende a máquina num estado que a tela não trata, 0xA0/0xA1 ligam
+   * os pinos de refrigeração, 0x95–0x97 mudam a velocidade do G0.
+   */
   realtime(byte: number): void {
     if (byte >= 0x99 && byte <= 0x9d) throw new Error("Override de spindle muda a posição do servo da caneta: proibido.");
+    if (!ALLOWED_RT.has(byte)) throw new Error(`Byte de tempo real 0x${byte.toString(16)} não é usado pelo Plotter Studio: recusado.`);
     if (this.snap.link !== "connected") return;
     this.writeBytes(Uint8Array.of(byte));
     if (byte !== RT.STATUS) this.log("out", `[tempo real] ${RT_NAMES[byte] ?? `0x${byte.toString(16)}`}`);
@@ -699,6 +870,8 @@ export class GrblController {
 
   /** Levanta a caneta e vai para (0,0) por jog (cancelável com Parar). */
   async goToOrigin(feed = 6000): Promise<void> {
+    // sem Home o GRBL não sabe onde a máquina está: "ir para (0,0)" pode ser andar 810 mm contra o fim do curso
+    if (!this.snap.homed) throw new Error("Faça o Home antes: sem ele a posição não é confiável.");
     await this.withBusy("Indo para a origem", async () => {
       await this.sendOk(this.profile.pen.upCmd);
       await this.sendOk(this.dwell());
@@ -708,7 +881,7 @@ export class GrblController {
       } finally {
         this.jogDone();
       }
-      await this.waitIdle(120_000);
+      await this.waitMotionEnd();
     });
   }
 
@@ -723,7 +896,7 @@ export class GrblController {
         const r = results[bad] as { ok: false; code: number };
         throw new GrblCommandError(r.code, lines[bad]);
       }
-      await this.waitIdle(120_000);
+      await this.waitMotionEnd();
     });
   }
 
@@ -780,6 +953,7 @@ export class GrblController {
 
   /** Segurar a tecla: um só $J até a borda da área; jogStop() manda 0x85. */
   jogContinuous(dir: Vec, feed: number): void {
+    if (!this.snap.homed) throw new Error("O jog contínuo vai até a borda da área: faça o Home antes (sem ele a borda pode estar em qualquer lugar).");
     const base = this.checkJogAllowed();
     const target = edgeTarget(base, dir, this.profile.workArea, 0.5);
     if (Math.abs(target.x - base.x) < 0.005 && Math.abs(target.y - base.y) < 0.005) return;
@@ -854,7 +1028,7 @@ export class GrblController {
     for (const it of items) {
       if (it.text === up) pen = "unsettled";
       else if (it.text === down) pen = "down";
-      else if (/^G0*4(?:\s|$)/.test(it.text) && pen === "unsettled") pen = "settled";
+      else if (/^G0*4(?![\d.])/i.test(it.text) && pen === "unsettled") pen = "settled";
       safe[it.id] = pen === "settled";
     }
     return safe;
@@ -953,18 +1127,30 @@ export class GrblController {
   /** Parar mantendo a posição: "!" → espera Hold:0 → reset. O reset executa M5 (a caneta sobe). */
   stop(): Promise<void> {
     if (this.snap.link !== "connected") return Promise.resolve();
-    if (!this.stopping) this.stopping = this.doStop().finally(() => (this.stopping = undefined));
+    if (!this.stopping) {
+      this.stopping = this.doStop().finally(() => {
+        this.stopping = undefined;
+        this.stopReason = undefined;
+      });
+    }
     return this.stopping;
   }
 
   private async doStop(): Promise<void> {
+    if (this.homingId !== undefined) {
+      // no homing o "!" é ignorado e não há relatório para esperar: só o reset para a máquina
+      this.log("info", "Home interrompido com reset (durante o homing o GRBL só aceita o reset). Vem um ALARM:6: refaça o Home.");
+      this.emergencyStop();
+      await this.waitBanner(3000);
+      return;
+    }
     const wasActive = isJobActive(this.snap.job.state);
     this.sendBlocked = true;
     this.streamer.clearQueued();
     this.cancelTimer("resumeTimer");
     this.cancelTimer("pauseTimer");
     if (wasActive) this.patchJob({ state: "stopping" });
-    if (this.snap.status?.state !== "Alarm") {
+    if (!this.inAlarm()) {
       this.realtime(RT.HOLD);
       this.holdSentAt = this.clock.now();
       this.startFastPoll();
@@ -974,7 +1160,8 @@ export class GrblController {
       );
       this.stopFastPoll();
       if (this.snap.link !== "connected") return;
-      if (!stopped) {
+      // um alarme no meio da espera também é "parou": segue para o reset (o GRBL já parou ou está se reiniciando)
+      if (!stopped && !this.inAlarm()) {
         this.log("error", "A máquina não parou em 10 s: parada de emergência.");
         this.emergencyStop("A máquina não confirmou a parada em 10 s; foi feita uma parada de emergência. Faça o Home.");
         return;
@@ -983,20 +1170,30 @@ export class GrblController {
     this.expectReset();
     this.realtime(RT.RESET);
     const ok = await this.waitBanner(3000);
-    if (!ok) this.log("error", "O GRBL não mandou o banner depois do reset.");
+    if (!ok) this.log("error", RESET_NOT_CONFIRMED);
     this.sendBlocked = false;
     if (wasActive && this.snap.job.state === "stopping") {
+      const why = this.stopReason;
       this.patchJob({
-        state: "stopped",
+        state: why === undefined ? "stopped" : "failed",
         endedAt: this.clock.now(),
         currentLine: undefined,
-        message: "Parado. A caneta subiu e a posição foi mantida: dá para usar \"Ir para a origem\" sem refazer o Home.",
+        message: !ok
+          ? RESET_NOT_CONFIRMED
+          : this.snap.alarm !== undefined
+            ? `Parado, mas o GRBL entrou em alarme (${alarmText(this.snap.alarm)}): faça o Home antes de continuar.`
+            : (why ?? "Parado. A caneta subiu e a posição foi mantida: dá para usar \"Ir para a origem\" sem refazer o Home."),
       });
     }
   }
 
+  private inAlarm(): boolean {
+    return this.snap.status?.state === "Alarm";
+  }
+
   private expectReset(): void {
     this.expectingBanner = true;
+    this.homingId = undefined;
     this.streamer.clear();
     this.rejectWaiters(new Error("Comando descartado pelo reset."));
   }
@@ -1017,6 +1214,26 @@ export class GrblController {
         message: message ?? "Parada de emergência. Se a máquina estava andando, a posição se perdeu: faça o Home.",
       });
     }
+    this.watchReset();
+  }
+
+  /**
+   * O GRBL sempre responde a um reset com o banner, em milissegundos. Se ele não vier, a parada de
+   * emergência NÃO foi confirmada (placa travada, sem energia, cabo ruim) e isso tem que aparecer.
+   */
+  private watchReset(): void {
+    this.cancelResetWatch();
+    this.resetTimer = this.clock.setTimeout(() => {
+      this.resetTimer = undefined;
+      if (!this.expectingBanner || this.snap.link !== "connected") return;
+      this.log("error", RESET_NOT_CONFIRMED);
+      if (this.snap.job.state === "stopped") this.patchJob({ message: RESET_NOT_CONFIRMED });
+    }, 3000);
+  }
+
+  private cancelResetWatch(): void {
+    if (this.resetTimer !== undefined) this.clock.clearTimeout(this.resetTimer);
+    this.resetTimer = undefined;
   }
 
   private updateJobFromStatus(r: StatusReport, wpos: Vec | undefined): void {

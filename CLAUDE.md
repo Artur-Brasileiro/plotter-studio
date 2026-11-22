@@ -22,7 +22,7 @@ npm run build    # typecheck + build em dist/
 
 - **Firmware:** GRBL 1.1h, fork `vankesteren/grbl-servo` (servo da caneta no PWM do spindle, pino D11). Arduino Uno + CNC Shield V3, drivers A4988 em 1/16 (`$100`/`$101` = 80).
 - **Conexão:** Windows, porta COM6, 115200 baud. Ao abrir a porta, o Uno **reinicia** (DTR) e o GRBL liga em **ALARM** até o `$H` (homing).
-- **Área útil:** **810 × 385 mm** (`$130`/`$131`). Soft limits ligados (`$20=1`): qualquer coordenada fora de 0..810 / 0..385 gera `ALARM:2` e perde a posição. O software deve **bloquear a exportação** se algo sair da área.
+- **Área útil:** **810 × 385 mm** (`$130`/`$131`). Soft limits ligados (`$20=1`): qualquer coordenada fora de 0..810 / 0..385 gera `ALARM:2` (o GRBL fica mudo até um reset; por segurança o aplicativo pede o Home de novo). O software deve **bloquear a exportação** se algo sair da área.
 - **Coordenadas:** origem de trabalho G54 gravada na EEPROM (`G10 L2 P1 X-810 Y-385`), no canto da **frente à esquerda**. **X+ para a direita, Y+ para longe do operador.** Todas as coordenadas do desenho são positivas, em mm, com `G90` (absoluto).
   - **Na tela, Y+ aponta para cima** (o operador vê o papel de frente). SVG e canvas têm Y para baixo, então é preciso inverter: `y_maquina = altura - y_tela`. Essa inversão existe em **um único lugar**, `sceneToMachineMatrix(H)` em `src/core/coords.ts`; nenhum outro código inverte Y. O desenho no papel deve sair com a mesma orientação que aparece na tela, **sem espelhar** (use `samples/orientacao.svg` para conferir).
 - **Caneta:**

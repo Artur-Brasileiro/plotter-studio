@@ -3,8 +3,10 @@ export const MAX_LINE_CHARS = 70;
 
 /**
  * Prepara uma linha para o GRBL: tira comentários (";" e parênteses) e espaços nas pontas, porque
- * comentários também ocupam o buffer de 128 bytes. null = linha vazia (não envia).
- * Lança se sobrar byte fora de ASCII (o GRBL os trata como comandos em tempo real) ou mais de 70 caracteres.
+ * comentários também ocupam o buffer de 128 bytes. null = linha vazia (não envia: o GRBL responderia
+ * "ok" a ela, mas quem não foi enviada também não entra na contagem).
+ * Lança se sobrar byte fora de ASCII (o GRBL os trata como comandos em tempo real), um "?", "!" ou "~"
+ * (idem: o GRBL os tira do fluxo e executa, mesmo dentro de um comentário) ou mais de 70 caracteres.
  * `keepComments` (console manual): só confere, sem mexer no texto.
  */
 export function prepareLine(raw: string, opts: { keepComments?: boolean } = {}): string | null {
@@ -13,6 +15,11 @@ export function prepareLine(raw: string, opts: { keepComments?: boolean } = {}):
   s = s.trim();
   if (!s) return null;
   if (/[^\x20-\x7e]/.test(s)) throw new Error(`Linha com caractere fora de ASCII (o GRBL o trataria como comando em tempo real): "${s}"`);
+  const rt = /[?!~]/.exec(s);
+  if (rt) {
+    const what = { "?": "pedido de relatório", "!": "pausa (feed hold)", "~": "continuar" }[rt[0]];
+    throw new Error(`Linha com "${rt[0]}": para o GRBL isso é um comando em tempo real (${what}), até dentro de comentário. Tire esse caractere: "${s}"`);
+  }
   if (s.length > MAX_LINE_CHARS) throw new Error(`Linha com ${s.length} caracteres (máximo ${MAX_LINE_CHARS}): "${s.slice(0, 40)}..."`);
   return s;
 }
@@ -27,7 +34,7 @@ export interface StreamLine {
  * (texto + "\n") se ela couber junto com as que ainda não receberam ok/error.
  */
 export class CharCountingStreamer {
-  private readonly limit: number;
+  private limit: number;
   private queue: (StreamLine & { bytes: number })[] = [];
   private qHead = 0;
   private pending: { id: number; bytes: number }[] = [];
@@ -36,6 +43,14 @@ export class CharCountingStreamer {
 
   constructor(opts: { rxBufferBytes: number }) {
     this.limit = opts.rxBufferBytes - 1;
+  }
+
+  /**
+   * Troca o tamanho do buffer (o GRBL diz o dele no $I: [OPT:V,15,128]). Vale para as próximas linhas;
+   * as que já saíram continuam esperando o ok.
+   */
+  setRxBufferBytes(n: number): void {
+    this.limit = n - 1;
   }
 
   enqueue(lines: readonly StreamLine[]): void {

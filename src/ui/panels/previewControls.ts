@@ -12,24 +12,30 @@ const mmss = (s: number) => {
 export function createPreviewControls(overlay: Overlay, player: Player): HTMLElement {
   const show = h("input", { type: "checkbox" });
   show.addEventListener("change", () => {
-    if (!show.checked) player.stop();
-    overlay.setVisible(show.checked);
+    // o valor é lido ANTES de parar a animação: parar avisa o `onTick`, que acerta a caixa pelo que está
+    // na tela naquele instante (ainda ligado), e ela voltava a ficar marcada
+    const want = show.checked;
+    if (!want) player.stop();
+    overlay.setVisible(want);
+    show.checked = want;
   });
   const playBtn = h("button", { title: "Anima a ordem real do desenho" }, "▶ Play");
   playBtn.addEventListener("click", () => (player.playing ? player.pause() : player.play()));
   const stopBtn = h("button", { onclick: () => player.stop() }, "⏹");
   const speed = h("select", { "aria-label": "Velocidade da animação" }, ...SPEEDS.map((s) => h("option", { value: String(s), selected: s === player.speed }, `×${s}`)));
   speed.addEventListener("change", () => (player.speed = Number(speed.value)));
-  const time = h("span", { class: "hint" }, "");
+  const time = h("span", { class: "hint preview-time" }, "");
 
+  // chamado a cada quadro da animação e sempre que o plano muda (o Player volta ao começo e avisa)
   player.onTick = (t, total, playing) => {
     playBtn.textContent = playing ? "⏸ Pausar" : "▶ Play";
     time.textContent = total ? `${mmss(t)} / ${mmss(total)}` : "";
     show.checked = overlay.isVisible;
   };
+  player.onTick(0, overlay.totalTime, false); // o tempo aparece logo, sem precisar apertar Play
 
   const swatch = (color: string, label: string, dashed = false) =>
-    h("span", { class: "legend-item" }, h("span", { class: "swatch", style: `border-top: 3px ${dashed ? "dashed" : "solid"} ${color}` }), label);
+    h("span", { class: "legend-item" }, h("span", { class: "legend-line", style: `border-top: 3px ${dashed ? "dashed" : "solid"} ${color}` }), label);
 
   return h(
     "div",

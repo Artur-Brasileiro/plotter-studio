@@ -26,8 +26,8 @@ export interface Pen {
 }
 
 export interface MachineProfile {
-  /** 3 = com o curso em Y corrigido para 390 mm (ver `mergeProfile`) */
-  readonly version: 3;
+  /** 3 = curso em Y corrigido para 390 mm; 4 = gabaritos de papel na origem (ver `mergeProfile`) */
+  readonly version: 4;
   /** Curso da máquina em mm (= $130 / $131 do GRBL). Limite duro: fora dele o GRBL dá ALARM:2. */
   workArea: { width: number; height: number };
   /**
@@ -156,8 +156,17 @@ export interface MachineProfile {
 /** O curso em Y que o projeto usou até 22/11/2026. O da máquina é 390 (corrigido pelo dono dela). */
 const OLD_DEFAULT_HEIGHT = 385;
 
+/**
+ * Os gabaritos que o projeto trazia até 22/11/2026: no canto da zona de desenho. Era uma posição suposta.
+ * O dono da máquina põe a ponta do papel exatamente na origem (onde a caneta fica em "Ir para a origem").
+ */
+const OLD_TEMPLATES: readonly MachineProfile["paperTemplates"][number][] = [
+  { name: "A4", x: 30, y: 25, width: 297, height: 210 },
+  { name: "A3", x: 30, y: 25, width: 420, height: 297 },
+];
+
 export const DEFAULT_PROFILE: MachineProfile = {
-  version: 3,
+  version: 4,
   // O programa só deixa enviar se a origem gravada na máquina (G54) for (−largura, −altura): se o G54 dela
   // estiver em outro valor, a tela avisa ao conectar e o número certo é o da máquina.
   workArea: { width: 810, height: 390 },
@@ -224,11 +233,11 @@ export const DEFAULT_PROFILE: MachineProfile = {
   },
   gcode: { finalPosition: { x: 0, y: 0 } },
   serial: { baudRate: 115200, statusIntervalMs: 200, rxBufferBytes: 128 },
-  // ATENÇÃO: posições supostas no canto da zona de desenho, em paisagem.
-  // Conferir com o gabarito real da mesa antes de confiar.
+  // A ponta do papel fica na origem (0, 0): é onde o dono da máquina encosta a folha. Deitados (paisagem);
+  // a zona de desenho começa em X 30, Y 25, então a margem fica DENTRO da folha.
   paperTemplates: [
-    { name: "A4", x: 30, y: 25, width: 297, height: 210 },
-    { name: "A3", x: 30, y: 25, width: 420, height: 297 },
+    { name: "A4", x: 0, y: 0, width: 297, height: 210 },
+    { name: "A3", x: 0, y: 0, width: 420, height: 297 },
   ],
 };
 
@@ -272,16 +281,22 @@ export function mergeProfile(saved: unknown): MachineProfile {
   const defaultPen = pens.some((p) => p.id === merged.defaultPen) ? merged.defaultPen : pens[pens.length - 1].id;
   const regMode = merged.registration.mode === "always" || merged.registration.mode === "never" ? merged.registration.mode : "auto";
   const onOverload = merged.servo.onOverload === "warn" || merged.servo.onOverload === "block" ? merged.servo.onOverload : "wait";
-  const version = isObj(saved) ? saved.version : undefined;
-  const old = isObj(saved) && version !== 2 && version !== 3;
+  // de que versão é o perfil salvo (sem número = o primeiro formato)
+  const version = isObj(saved) && typeof saved.version === "number" ? saved.version : 1;
+  const old = isObj(saved) && version < 2;
   const feed = old ? { ...merged.feed, fixed: DEFAULT_PROFILE.feed.fixed } : merged.feed;
   // Perfil salvo antes da versão 3 com o curso em Y antigo (385): era só o padrão daquela versão, e estava
   // errado. Passa a 390 uma vez; quem salvar 385 de novo, já na versão 3, fica com 385.
-  const stale = isObj(saved) && version !== 3 && merged.workArea.height === OLD_DEFAULT_HEIGHT;
+  const stale = isObj(saved) && version < 3 && merged.workArea.height === OLD_DEFAULT_HEIGHT;
   const workArea = stale ? { ...merged.workArea, height: DEFAULT_PROFILE.workArea.height } : merged.workArea;
+  // Perfil salvo antes da versão 4: o gabarito que ainda está na posição suposta (igual ao padrão antigo)
+  // vai para a origem. O que o dono mediu e mudou, ou criou, fica como está.
+  const wasDefault = (t: MachineProfile["paperTemplates"][number]) =>
+    OLD_TEMPLATES.some((o) => o.name === t.name && o.x === t.x && o.y === t.y && o.width === t.width && o.height === t.height);
+  const placed = isObj(saved) && version < 4 ? templates.map((t) => (wasDefault(t) ? { ...t, x: 0, y: 0 } : t)) : templates;
   return {
     ...merged,
-    version: 3,
+    version: 4,
     workArea,
     feed,
     pen: { ...merged.pen, pauseLift },
@@ -289,7 +304,7 @@ export function mergeProfile(saved: unknown): MachineProfile {
     pens,
     defaultPen,
     registration: { ...merged.registration, mode: regMode },
-    paperTemplates: templates,
+    paperTemplates: placed,
   };
 }
 

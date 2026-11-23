@@ -78,10 +78,14 @@ export class Overlay {
     this.redraw();
   }
 
+  /** Chamado quando o plano mostrado muda (o Player volta ao começo e o tempo da tela é refeito). */
+  onPlanChange: () => void = () => {};
+
   setPlan(plan: JobPlan | undefined, fixedMode: boolean): void {
     this.fixedMode = fixedMode;
     this.cache = plan ? this.build(plan) : undefined;
     this.doneVpt = "";
+    this.onPlanChange();
     this.redraw();
   }
 
@@ -342,7 +346,10 @@ export class Player {
   speed = 20;
   onTick: (t: number, total: number, playing: boolean) => void = () => {};
 
-  constructor(private readonly overlay: Overlay) {}
+  constructor(private readonly overlay: Overlay) {
+    // plano novo: a animação do antigo não vale mais, e quem mostra o tempo total precisa saber
+    overlay.onPlanChange = () => this.stop();
+  }
 
   get playing(): boolean {
     return this.raf !== 0;

@@ -46,6 +46,24 @@ describe("profileStore", () => {
     expect(loadProfileWithStatus(st).profile.workArea.height).toBe(390);
   });
 
+  it("perfil guardado no navegador com o A4 e o A3 na posição suposta (30, 25): abre com eles na origem, sem aviso", () => {
+    const old = {
+      ...structuredClone(DEFAULT_PROFILE),
+      version: 3,
+      paperTemplates: [
+        { name: "A4", x: 30, y: 25, width: 297, height: 210 },
+        { name: "A3", x: 30, y: 25, width: 420, height: 297 },
+      ],
+    };
+    const st = memory({ "plotter-studio:profile": JSON.stringify({ version: 1, profile: old }) });
+    const r = loadProfileWithStatus(st);
+    expect(r.problem).toBeUndefined();
+    expect(r.profile.paperTemplates.map((t) => [t.name, t.x, t.y])).toEqual([["A4", 0, 0], ["A3", 0, 0]]);
+    // gravado de novo e reaberto, continua na origem
+    saveProfile(r.profile, st);
+    expect(loadProfileWithStatus(st).profile.paperTemplates.map((t) => [t.x, t.y])).toEqual([[0, 0], [0, 0]]);
+  });
+
   it("perfil corrompido volta ao padrão com aviso", () => {
     const r = loadProfileWithStatus(memory({ "plotter-studio:profile": "{quebrado" }));
     expect(r.profile).toEqual(DEFAULT_PROFILE);

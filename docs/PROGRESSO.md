@@ -288,6 +288,30 @@ um pouco era quase impossível voltar a deixá-lo reto. Pediu uma trava de propo
 - Conferido no navegador com o mouse de verdade (roteiro de teste automático): canto puxado torto mantém a
   proporção (1,2632 antes e depois), com e sem Shift; 87,5° encaixa em 90 exatos; −3° encaixa em 0.
 
+## Pendências anotadas no primeiro teste na máquina (22/11/2026, à noite)
+
+O Artur pediu para ir anotando e resolver depois. **Nada aqui foi corrigido ainda.** Enquanto ele estiver com a
+máquina conectada, não mexer em `src/` nem em `index.html`: o programa roda pelo `npm run dev`, e salvar um arquivo
+de código recarrega a página e derruba a conexão (no meio de um desenho, ele para).
+
+1. **"Mostrar o caminho" não desmarca** (passo 2, Pré-visualização; visto pelo Artur). Pista, ainda não
+   confirmada: em `src/ui/panels/previewControls.ts` o `player.onTick` faz `show.checked = overlay.isVisible`, e
+   desmarcar chama `player.stop()` antes de `overlay.setVisible(false)`; se o `stop` dispara o `onTick`, a caixa
+   volta a ficar marcada. Reproduzir com teste antes de mexer.
+2. **Legenda da pré-visualização com argolas em vez de tracinhos** (mesma captura de tela: "reta", "curva",
+   "F fixo" aparecem como círculos coloridos). Conferir o `.swatch` em `src/style.css`.
+3. **Os gabaritos A4 e A3 estão no lugar errado na tela.** O Artur põe a ponta do papel exatamente na origem
+   (0, 0), que é onde a caneta fica em "Ir para a origem". O perfil padrão desenha os gabaritos a partir de
+   (30, 25): era uma posição suposta (está escrito no comentário de `paperTemplates` em `src/core/machine.ts`).
+   Efeito: na tela o A4 aparece 30 mm para a direita e 25 mm para o fundo do papel de verdade; um desenho que
+   encosta na borda direita ou de cima do gabarito sai do papel real. O certo é (0, 0). Lembrar que o perfil
+   guardado no navegador mantém o valor antigo: precisa de migração, como a do curso.
+4. **"Folha" na tela não é o papel.** A parte clara (540 × 345) é a área útil da regra (X 30–570, Y 25–370), que
+   corresponde a uma folha grande de ~600 × 395 posta na origem com margem. Para A4 e A3, "Encaixar na folha" e
+   "Centralizar na folha" levam o desenho para fora do papel de verdade. Conversar com o Artur: a tela devia
+   mostrar o papel que está na mesa (tamanho escolhido, ponta em 0, 0) e a margem dentro dele. Perguntar também
+   se ele põe o A4 e o A3 deitados ou em pé, e se quer manter a margem de 30/25 mm em folha pequena.
+
 ## Combinado com o Artur
 
 - As regras de `docs/REGRAS_GCODE.md` mandam onde contradizem o gerador antigo.

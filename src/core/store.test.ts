@@ -60,3 +60,73 @@ describe("Store", () => {
     expect(s.state.job.fixedFeed).toBe(500);
   });
 });
+
+describe("mesa travada: enquanto a máquina desenha, nada na mesa muda", () => {
+  const withTwo = () => {
+    const s = new Store();
+    s.commit("Importar", (doc) => addDrawing(doc, d("a")));
+    s.commit("Importar", (doc) => addDrawing(doc, d("b")));
+    return s;
+  };
+
+  it("começa destravada", () => {
+    expect(new Store().state.locked).toBe(false);
+  });
+
+  it("travada, um commit não muda o documento nem o histórico", () => {
+    const s = withTwo();
+    s.setLocked(true);
+    const before = s.state.history;
+    s.commit("Apagar", (doc) => removeDrawings(doc, ["a"]));
+    expect(s.doc.drawings.map((x) => x.id)).toEqual(["a", "b"]);
+    expect(s.state.history).toBe(before);
+  });
+
+  it("travada, desfazer e refazer não fazem nada", () => {
+    const s = withTwo();
+    s.undo(); // sobra "a"; "b" fica para refazer
+    s.setLocked(true);
+    s.undo();
+    expect(s.doc.drawings.map((x) => x.id)).toEqual(["a"]);
+    s.redo();
+    expect(s.doc.drawings.map((x) => x.id)).toEqual(["a"]);
+  });
+
+  it("travar solta o que estava selecionado, e nada pode ser selecionado enquanto isso", () => {
+    const s = withTwo();
+    s.setSelection(["a"]);
+    s.setLocked(true);
+    expect(s.state.selection).toEqual([]);
+    s.setSelection(["b"]);
+    expect(s.state.selection).toEqual([]);
+  });
+
+  it("quem ouve o estado fica sabendo quando trava e quando destrava", () => {
+    const s = withTwo();
+    const seen: boolean[] = [];
+    s.subscribe((st, prev) => st.locked !== prev.locked && seen.push(st.locked));
+    s.setLocked(true);
+    s.setLocked(true); // repetir não avisa de novo
+    s.setLocked(false);
+    expect(seen).toEqual([true, false]);
+  });
+
+  it("destravada, tudo volta a funcionar", () => {
+    const s = withTwo();
+    s.setLocked(true);
+    s.setLocked(false);
+    s.setSelection(["b"]);
+    s.commit("Apagar", (doc) => removeDrawings(doc, ["a"]));
+    expect(s.doc.drawings.map((x) => x.id)).toEqual(["b"]);
+    expect(s.state.selection).toEqual(["b"]);
+    s.undo();
+    expect(s.doc.drawings.map((x) => x.id)).toEqual(["a", "b"]);
+  });
+
+  it("os ajustes do trabalho e da máquina não são da mesa: continuam podendo mudar", () => {
+    const s = withTwo();
+    s.setLocked(true);
+    s.setJob({ optimize: false });
+    expect(s.state.job.optimize).toBe(false);
+  });
+});

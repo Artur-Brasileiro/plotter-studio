@@ -294,10 +294,16 @@ O Artur pediu para ir anotando e resolver depois. **Nada aqui foi corrigido aind
 máquina conectada, não mexer em `src/` nem em `index.html`: o programa roda pelo `npm run dev`, e salvar um arquivo
 de código recarrega a página e derruba a conexão (no meio de um desenho, ele para).
 
-1. **"Mostrar o caminho" não desmarca** (passo 2, Pré-visualização; visto pelo Artur). Pista, ainda não
-   confirmada: em `src/ui/panels/previewControls.ts` o `player.onTick` faz `show.checked = overlay.isVisible`, e
-   desmarcar chama `player.stop()` antes de `overlay.setVisible(false)`; se o `stop` dispara o `onTick`, a caixa
-   volta a ficar marcada. Reproduzir com teste antes de mexer.
+1. **"Mostrar o caminho" não desmarca** (passo 2, Pré-visualização; visto pelo Artur). Reproduzido no navegador
+   de teste (desmarcada → clique → marcada → clique → marcada). Causa, lida no código: em
+   `src/ui/panels/previewControls.ts`, desmarcar chama `player.stop()`, que dispara o `onTick`, que faz
+   `show.checked = overlay.isVisible` (ainda ligado); só depois vem `overlay.setVisible(show.checked)`, já com a
+   caixa marcada de novo. Conserto: guardar o valor da caixa antes de chamar o `stop`. Escrever o teste primeiro.
+5. **O tempo da pré-visualização ("0:00 / 29:24") fica parado no valor antigo** quando o desenho muda (visto pelo
+   Artur ao redimensionar). O plano é refeito certo: o rodapé ("tempo estimado ~…"), o "Tempo total" do passo 2 e
+   o "Desenho inteiro (~…)" do passo 3 acompanham (conferido no navegador de teste). Só esse rótulo não, porque
+   ele só é escrito dentro do `player.onTick` (Play, pausa ou ⏹). Conserto: atualizar o rótulo também quando o
+   plano muda. Até lá, clicar em ⏹ atualiza o número.
 2. **Legenda da pré-visualização com argolas em vez de tracinhos** (mesma captura de tela: "reta", "curva",
    "F fixo" aparecem como círculos coloridos). Conferir o `.swatch` em `src/style.css`.
 3. **Os gabaritos A4 e A3 estão no lugar errado na tela.** O Artur põe a ponta do papel exatamente na origem

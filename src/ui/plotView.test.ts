@@ -151,7 +151,8 @@ describe("tela de plotagem: como o trabalho terminou", () => {
     expect(v.tone).toBe("done");
     expect(v.title).toBe("Desenho concluído");
     expect(v.percent).toBe("100%");
-    expect(v.summary).toBe("Levou 10 min. O estimado era 10 min.");
+    expect(v.elapsed).toBe("10 min");
+    expect(v.estimated).toBe("10 min");
     expect(v.remaining).toBeUndefined();
   });
 
@@ -185,7 +186,7 @@ describe("tela de plotagem: como o trabalho terminou", () => {
   it("falhou: tom de erro e a explicação da máquina", () => {
     const v = ended("failed", { canResume: true }, "Conexão perdida na linha 400 de 1000.");
     expect(v.tone).toBe("failed");
-    expect(v.title).toBe("O desenho não terminou");
+    expect(v.title).toBe("O desenho falhou");
     expect(v.message).toContain("Conexão perdida");
     expect(v.resume).toContain("Retomar de onde parou");
   });

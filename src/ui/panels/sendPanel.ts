@@ -1,4 +1,3 @@
-import { describeError } from "../../core/grbl/codes";
 import { isJobActive, type ControllerSnapshot, type JobState } from "../../core/grbl/controller";
 import { RT } from "../../core/grbl/protocol";
 import { bboxOfPoints } from "../../core/geometry/path";
@@ -10,15 +9,20 @@ import type { Store } from "../../core/store";
 import { addRun, loadRuns, type RunRecord } from "../../storage/runsStore";
 import { clear, h, toast } from "../dom";
 import type { MachineSession } from "../machine/session";
-import type { Overlay, Player } from "../overlay";
+import type { Overlay } from "../overlay";
 import { fmtDuration, type Planner } from "../planner";
+import type { PlotActions } from "../plotScreen";
+import { plotView, type PlotView } from "../plotView";
 import { createLayerPicker } from "./layerPicker";
 import { machineAction } from "./machinePanel";
 
 interface ActiveJob {
   readonly plan: JobPlan;
   readonly program: GcodeProgram;
+  /** Nome no histórico (com a camada e a parte) */
   readonly name: string;
+  /** Nome na tela de plotagem (a camada aparece numa linha própria) */
+  readonly screenName: string;
   /** tempo estimado (s) em que este envio começa e termina, dentro do plano inteiro */
   readonly t0: number;
   readonly t1: number;
@@ -31,6 +35,10 @@ interface ActiveJob {
   lastStroke: number;
   /** O que foi enviado: tudo, uma parte, ou uma retomada */
   readonly kind: SendWhat["kind"];
+  /** Preenchidos quando o trabalho acaba: a próxima camada, se acabaram todas, e se dá para retomar */
+  next?: { readonly index: number; readonly penName: string };
+  allLayersDone?: boolean;
+  canResume?: boolean;
 }
 
 const RESULT_TEXT: Record<RunRecord["result"], string> = { finished: "concluído", stopped: "parado", failed: "falhou" };
@@ -69,42 +77,43 @@ export interface SendPanel {
   readonly el: HTMLElement;
   /** Há trabalho na máquina: a pré-visualização mostra o plano dele, não o da mesa. */
   readonly active: () => boolean;
+  /** O que os botões da tela de plotagem fazem na máquina */
+  readonly actions: PlotActions;
+}
+
+/** Avisos para quem mostra o trabalho em andamento (a tela de plotagem e o som). */
+export interface SendHooks {
+  /** O momento atual do trabalho. `undefined`: não há trabalho na tela (nunca houve, ou já voltaram para a mesa). */
+  onView?(view: PlotView | undefined): void;
+  /** O trabalho acabou de ir para a máquina. Chamado dentro do clique em Enviar: é quando o som pode ser preparado. */
+  onStart?(): void;
+  /** O trabalho acabou. Chamado mesmo com a janela escondida. */
+  onEnd?(result: "finished" | "stopped" | "failed"): void;
 }
 
 /**
- * Aba "Máquina", parte do envio: Contorno, Enviar (com as pré-condições na tela), barra de progresso,
- * tempo decorrido/restante, linha atual destacada na pré-visualização, Wake Lock, confirmação ao fechar
- * a aba e registro do tempo real × estimado.
+ * Passo "Plotar", parte do envio: Contorno e Enviar (com as pré-condições na tela), e o acompanhamento do
+ * trabalho: onde a máquina está, Wake Lock, confirmação ao fechar a aba, de onde retomar e o registro do
+ * tempo real × estimado. O que se VÊ durante o trabalho (progresso, Parar, Pausar) fica na tela de plotagem
+ * (`plotScreen.ts`): este painel entrega a ela o momento atual pelos `hooks` e as ações em `actions`.
  */
-export function createSendPanel(session: MachineSession, store: Store, planner: Planner, overlay: Overlay, player: Player): SendPanel {
+export function createSendPanel(session: MachineSession, store: Store, planner: Planner, overlay: Overlay, hooks: SendHooks = {}): SendPanel {
   let job: ActiveJob | undefined;
   let wake: WakeLockSentinel | undefined;
   let lastState: JobState = "none";
-  let lastErrKey = "";
   let resumePoint = loadResume();
+  /** A tela de plotagem: fechada, acompanhando o trabalho, ou mostrando como ele terminou (até "Voltar para a mesa") */
+  let screen: "none" | "live" | "ended" = "none";
+  let endedView: PlotView | undefined;
+  /** "Mostrar o caminho" estava ligado antes do envio? (o envio liga; no fim volta ao que era) */
+  let pathWasVisible = false;
 
   const frameBtn = h("button", { title: "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." }, "▭ Contorno");
   const sendBtn = h("button", { class: "primary" }, "▶ Enviar desenho");
-  const stopBtn = h("button", { title: "Para mantendo a posição: pausa, espera parar e reinicia o GRBL (a caneta sobe)." }, "■ Parar");
-  const pauseBtn = h("button", { class: "primary" }, "⏸ Pausar");
-  const pauseNote = h("p", { class: "hint" });
-  const errorBox = h("div", { class: "notice alarm" });
-  const ovValue = h("span", { class: "ov-value" });
-  const ovRow = h(
-    "div",
-    { class: "row center ov-row" },
-    h("span", { class: "hint" }, "Velocidade ", ovValue),
-    h("button", { title: "−10% (0x92)", onclick: () => feed(RT.FEED_MINUS_10) }, "−10%"),
-    h("button", { title: "Volta para 100% (0x90)", onclick: () => feed(RT.FEED_RESET) }, "100%"),
-    h("button", { title: "+10% (0x91)", onclick: () => feed(RT.FEED_PLUS_10) }, "+10%"),
-  );
   const partSelect = h("select", { "aria-label": "O que enviar" });
   const partRow = h("label", { class: "field" }, "O que enviar", partSelect);
   const resumeHint = h("p", { class: "hint", hidden: true });
   const reasons = h("ul", { class: "reasons" });
-  const bar = h("div", { class: "progress-fill" });
-  const progress = h("div", { class: "progress" }, bar);
-  const progressText = h("div", { class: "progress-text" });
   const resultBox = h("div", { class: "notice" });
   /** Depois de uma camada: qual é a próxima e o que trocar */
   const nextBox = h("div", { class: "notice next-layer", hidden: true });
@@ -120,13 +129,8 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     nextBox,
     partRow,
     resumeHint,
-    h("div", { class: "row" }, frameBtn, sendBtn, pauseBtn, stopBtn),
+    h("div", { class: "row" }, frameBtn, sendBtn),
     reasons,
-    progress,
-    progressText,
-    pauseNote,
-    errorBox,
-    ovRow,
     resultBox,
     runsDetails,
   );
@@ -139,13 +143,31 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     }
   }
 
-  pauseBtn.addEventListener("click", () => {
-    const c = session.controller;
-    const st = session.snapshot.job.state;
-    if (!c) return;
-    if (st === "running") c.pause();
-    else if (st === "paused") c.resume();
-  });
+  const actions: PlotActions = {
+    // para mantendo a posição: pausa, espera parar e reinicia a placa (a caneta sobe)
+    stop: () => {
+      const c = session.controller;
+      if (c) void machineAction(() => c.stop());
+    },
+    togglePause: () => {
+      const c = session.controller;
+      const st = session.snapshot.job.state;
+      if (!c) return;
+      if (st === "running") c.pause();
+      else if (st === "paused") c.resume();
+    },
+    // erro numa linha: a placa já pulou a linha; continua da próxima
+    continueAfterError: () => session.controller?.resume(),
+    feed: (change) => feed(change === "minus" ? RT.FEED_MINUS_10 : change === "plus" ? RT.FEED_PLUS_10 : RT.FEED_RESET),
+    emergency: () => session.controller?.emergencyStop(),
+    dismiss: () => {
+      if (screen !== "ended") return; // com o trabalho na máquina a tela não sai
+      screen = "none";
+      endedView = undefined;
+      hooks.onView?.(undefined);
+      render(session.snapshot);
+    },
+  };
 
   // ---------------------------------------------------------------- ações
   frameBtn.addEventListener("click", () => {
@@ -221,18 +243,29 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     }
     const layer = plan.layer;
     const name = (planner.jobName(plan) || "desenho") + (layer && layer.count > 1 ? ` [${layer.index + 1}/${layer.count} ${layer.penName}]` : "");
+    const suffix = what.kind === "part" ? ` (parte ${what.part + 1} de ${plan.stats.parts})` : what.kind === "resume" ? " (retomada)" : "";
     const label = what.kind === "part" ? `${name} (parte ${what.part + 1})` : what.kind === "resume" ? `${name} (retomada)` : name;
-    job = { plan, program, name: label, ...sendSpan(plan, what), estAt: 0, recorded: false, wholeLayer: what.kind !== "part" || what.part === plan.stats.parts - 1, lastStroke: -1, kind: what.kind };
+    job = {
+      plan,
+      program,
+      name: label,
+      screenName: (planner.jobName(plan) || "desenho") + suffix,
+      ...sendSpan(plan, what),
+      estAt: 0,
+      recorded: false,
+      wholeLayer: what.kind !== "part" || what.part === plan.stats.parts - 1,
+      lastStroke: -1,
+      kind: what.kind,
+    };
     nextBox.hidden = true;
-    if (player.playing) player.stop();
+    pathWasVisible = overlay.isVisible;
     overlay.setPlan(plan, store.state.job.speedMode === "fixed");
     overlay.setVisible(true);
     void lockScreen();
+    screen = "live";
+    endedView = undefined;
+    hooks.onStart?.();
     render(session.snapshot);
-  });
-  stopBtn.addEventListener("click", () => {
-    const c = session.controller;
-    if (c) void machineAction(() => c.stop());
   });
 
   // ---------------------------------------------------------------- tela acesa e fechar a aba
@@ -272,30 +305,44 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     return undefined;
   }
 
-  function renderProgress(s: ControllerSnapshot) {
+  /** Marca na mesa até onde a máquina já desenhou, e anota o tempo estimado desse ponto. */
+  function trackProgress(s: ControllerSnapshot) {
     const j = s.job;
-    const showing = !!job && j.state !== "none";
-    progress.hidden = progressText.hidden = !showing;
-    if (!showing || !job) return;
+    if (!job || !isJobActive(j.state)) return;
     const total = job.t1 - job.t0;
-    if (isJobActive(j.state)) {
-      const at = progressPoint(job.program, j.currentLine);
-      if (at && at.strokeIndex > job.lastStroke) job.lastStroke = at.strokeIndex;
-      const t = overlay.setProgress(at);
-      if (t !== undefined) job.estAt = Math.max(job.estAt, Math.min(total, t - job.t0));
-    }
-    const now = performance.now();
-    const pausedNow = j.pausedAt !== undefined ? now - j.pausedAt : 0;
-    const realS = j.startedAt !== undefined ? ((j.endedAt ?? now) - j.startedAt - j.pausedMs - pausedNow) / 1000 : 0;
-    const frac = j.state === "finished" ? 1 : total > 0 ? Math.min(1, job.estAt / total) : j.acked / Math.max(1, j.total);
-    bar.style.width = `${(frac * 100).toFixed(1)}%`;
-    bar.className = `progress-fill ${j.state}`;
-    const remainingEst = Math.max(0, total - job.estAt);
-    const ratio = job.estAt > 5 && realS > 5 ? realS / job.estAt : 1;
-    const parts = [`${Math.round(frac * 100)}%`, `linha ${j.acked.toLocaleString("pt-BR")} de ${j.total.toLocaleString("pt-BR")}`, `decorrido ${fmtDuration(realS)}`];
-    if (isJobActive(j.state)) parts.push(`falta ~${fmtDuration(remainingEst * ratio)}`);
-    else parts.push(`estimado ${fmtDuration(total)}`);
-    progressText.textContent = parts.join(" · ");
+    const at = progressPoint(job.program, j.currentLine);
+    if (at && at.strokeIndex > job.lastStroke) job.lastStroke = at.strokeIndex;
+    const t = overlay.setProgress(at);
+    if (t !== undefined) job.estAt = Math.max(job.estAt, Math.min(total, t - job.t0));
+  }
+
+  /** O momento atual do trabalho, como a tela de plotagem mostra. */
+  function viewOf(s: ControllerSnapshot): PlotView | undefined {
+    if (!job || s.job.state === "none") return undefined;
+    const layer = job.plan.layer;
+    return plotView(
+      {
+        job: s.job,
+        name: job.screenName,
+        estTotalS: job.t1 - job.t0,
+        estAtS: job.estAt,
+        penDown: (s.status?.spindle ?? 0) > 0,
+        feedPct: s.status?.overrides?.feed ?? 100,
+        pauseLift: store.state.profile.pen.pauseLift,
+        layer: layer ? { index: layer.index, count: layer.count, penName: layer.penName } : undefined,
+        next: job.next,
+        allLayersDone: job.allLayersDone,
+        canResume: job.canResume,
+      },
+      performance.now(),
+    );
+  }
+
+  /** Entrega o momento atual à tela de plotagem (depois do fim, o retrato de como terminou). */
+  function publish(s: ControllerSnapshot) {
+    if (screen === "none") return;
+    const v = screen === "ended" ? endedView : viewOf(s);
+    if (v) hooks.onView?.(v);
   }
 
   function finish(s: ControllerSnapshot) {
@@ -327,14 +374,13 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
       } else if (job.kind !== "resume") forget(); // recomeçou do início e parou antes de desenhar: idem
       // (uma retomada interrompida ainda no aquecimento deixa o ponto guardado como estava)
     }
+    job.canResume = j.state !== "finished" && resumeFor(job.plan) !== undefined;
     if (j.state === "finished") {
-      const diff = est > 0 ? Math.round(((realS - est) / est) * 100) : 0;
       const done = job.plan.layer;
-      const what = done && done.count > 1 ? `Camada ${done.index + 1} (${done.penName}) concluída` : "Desenho concluído";
-      toast(`${what} em ${fmtDuration(realS)} (estimado ${fmtDuration(est)}, ${diff >= 0 ? "+" : ""}${diff}%).`, "info", 12000);
       // a vez da próxima caneta: a lista já aponta para ela
       const next = done && job.wholeLayer ? planner.layers.find((p) => p.layer?.index === done.index + 1) : undefined;
       if (done && next?.layer) {
+        job.next = { index: next.layer.index, penName: next.layer.penName };
         planner.setLayer(next.layer.penId);
         clear(nextBox);
         nextBox.append(
@@ -343,12 +389,22 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
         );
         nextBox.hidden = false;
       } else if (done && done.count > 1 && job.wholeLayer) {
+        job.allLayersDone = true;
         clear(nextBox);
         nextBox.append(h("strong", null, "Todas as camadas foram plotadas."));
         nextBox.hidden = false;
       }
     }
     overlay.setPlan(planner.plan, store.state.job.speedMode === "fixed");
+    overlay.setVisible(pathWasVisible);
+    // a tela de plotagem passa a mostrar como terminou, e fica assim até "Voltar para a mesa"
+    if (screen === "live") {
+      endedView = viewOf(s);
+      screen = endedView ? "ended" : "none";
+      if (endedView) hooks.onView?.(endedView);
+      else hooks.onView?.(undefined);
+    }
+    hooks.onEnd?.(j.state);
   }
 
   function renderRuns() {
@@ -399,65 +455,19 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
     frameBtn.hidden = active;
     frameBtn.disabled = !on || !plan || !s.homed || !!s.busy || s.status?.state !== "Idle";
     frameBtn.title = s.homed ? "Percorre o retângulo do desenho com a caneta levantada, para conferir a posição no papel." : "Faça o Home antes do contorno.";
-    stopBtn.hidden = !active;
-    stopBtn.disabled = j.state === "stopping";
 
-    // pausa / continuar
-    const mode = store.state.profile.pen.pauseLift;
-    pauseBtn.hidden = !active || j.state === "stopping";
-    pauseBtn.disabled = j.state === "pausing" || j.state === "resuming";
-    pauseBtn.textContent =
-      j.state === "paused" ? "▶ Continuar" : j.state === "pausing" ? "Pausando…" : j.state === "resuming" ? "Descendo a caneta…" : "⏸ Pausar";
-    pauseBtn.title =
-      mode === "spindleStop"
-        ? "Para na hora e levanta a caneta (0x9E). Ao continuar, a caneta desce antes de andar."
-        : "Termina o traço atual, levanta a caneta e para.";
-    let note = "";
-    if (j.state === "pausing") note = j.pauseMode === "endOfStroke" ? "Terminando o traço atual antes de parar…" : "Parando…";
-    else if (j.state === "paused") {
-      if (j.pauseMode === "endOfStroke") note = "Pausado no fim do traço, com a caneta em cima. Dá para trocar a caneta ou ajustar o papel.";
-      else if (j.penLifted && (s.status?.spindle ?? 0) > 0)
-        note =
-          "Pausado, mas o GRBL diz que a caneta continua embaixo: este firmware não levanta a caneta com 0x9E. Em ⚙ Configurações → Subir e descer a caneta, mude \"Pausa\" para \"no fim do traço\".";
-      else if (j.penLifted) note = "Pausado com a caneta levantada. Ao continuar, ela desce, espera o servo e só então anda.";
-      else note = "Pausado. Atenção: a caneta ficou no papel.";
-    }
-    pauseNote.textContent = note;
-    pauseNote.hidden = !note;
-
-    // erro no meio do trabalho
-    errorBox.hidden = !(active && j.error);
-    const errKey = j.error && !errorBox.hidden ? `${j.error.line}:${j.error.code}:${j.state === "paused"}` : "";
-    if (j.error && errKey && errKey !== lastErrKey) {
-      const info = describeError(j.error.code);
-      clear(errorBox);
-      errorBox.append(
-        h("strong", null, `Erro na linha ${j.error.line + 1}: error:${j.error.code} — ${info.title}`),
-        h("code", { class: "err-line" }, j.error.text),
-        h("span", null, info.action),
-        h(
-          "div",
-          { class: "row" },
-          h("button", { disabled: j.state !== "paused", onclick: () => session.controller?.resume(), title: "O GRBL já pulou essa linha; continua da próxima." }, "Continuar mesmo assim"),
-          h("button", { onclick: () => session.controller && void machineAction(() => session.controller!.stop()) }, "■ Parar"),
-        ),
-      );
-    }
-    lastErrKey = errKey;
-
-    ovRow.hidden = !active;
-    ovValue.textContent = `${s.status?.overrides?.feed ?? 100}%`;
-
+    // (Parar, Pausar, a velocidade, o progresso e os avisos do trabalho ficam na tela de plotagem)
     resultBox.hidden = !(job && (j.state === "stopped" || j.state === "failed") && j.message);
     if (!resultBox.hidden) {
       resultBox.className = `notice ${j.state === "failed" ? "alarm" : ""}`;
       resultBox.textContent = j.message ?? "";
     }
-    renderProgress(s);
+    trackProgress(s);
     if (j.state !== lastState) {
       if (!active && isJobActive(lastState)) finish(s);
       lastState = j.state;
     }
+    publish(s);
   }
 
   let raf = 0;
@@ -491,5 +501,5 @@ export function createSendPanel(session: MachineSession, store: Store, planner: 
   setInterval(() => session.jobActive && schedule(), 500);
   renderRuns();
   render(session.snapshot);
-  return { el, active: () => session.jobActive };
+  return { el, active: () => session.jobActive, actions };
 }

@@ -49,7 +49,9 @@ export function createHelpDialog(): { open(): void } {
         "A lista “Antes de enviar” mostra o que falta: conectar a máquina, fazer o Home, pôr a caneta. Depois é só “Enviar desenho”.",
         list(
           "Antes de qualquer traço, o servo bate 8 vezes no ar, no canto da mesa. É o aquecimento.",
+          "Enquanto a máquina desenha, a tela muda: mostra quanto já foi e quanto falta, com um botão “Parar” bem grande. A mesa fica travada, para ninguém mexer no desenho sem querer; dá para aproximar e mover a vista.",
           "“Pausar” levanta a caneta e espera. “Parar” encerra, mantendo a posição.",
+          "Quando o desenho termina, toca um som (dá para desligar na própria tela) e aparece “Voltar para a mesa”.",
           "Se parar no meio (faltou luz, a caneta falhou), a opção “Retomar de onde parou” aparece em “O que enviar”. Não mexa no papel.",
           "Com mais de uma caneta, cada uma é uma camada: plote na ordem da lista e troque só a caneta entre uma e outra. As cruzes na borda de baixo têm que cair uma em cima da outra.",
         ),

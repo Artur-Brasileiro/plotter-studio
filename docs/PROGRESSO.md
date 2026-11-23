@@ -288,31 +288,61 @@ um pouco era quase impossível voltar a deixá-lo reto. Pediu uma trava de propo
 - Conferido no navegador com o mouse de verdade (roteiro de teste automático): canto puxado torto mantém a
   proporção (1,2632 antes e depois), com e sem Shift; 87,5° encaixa em 90 exatos; −3° encaixa em 0.
 
+## Acrescentado em 23/11/2026: o primeiro desenho na máquina, a tela de plotagem e o som
+
+**O programa rodou na máquina de verdade pela primeira vez (22/11, à noite), e o Artur disse que o desenho saiu
+perfeito, melhor que os que ele fazia pelo LaserGRBL.** Ele não mandou os números dos testes de `docs/TESTES.md`
+(medidas, `$$`): as tabelas de lá continuam em branco.
+
+Pedidos dele depois desse desenho, todos feitos:
+
+- **Tela de plotagem.** Com a máquina desenhando ele conseguia arrastar e editar o desenho na tela, e ficava
+  com medo de atrapalhar. (Não atrapalhava: o G-code já tinha sido gerado no envio. Mas a dúvida era justa.)
+  Agora, do clique em "Enviar desenho" até o trabalho acabar e alguém clicar em "Voltar para a mesa", o painel
+  lateral dá lugar a uma tela escura: porcentagem grande, decorrido e quanto falta, um "Parar" enorme, "Pausar",
+  velocidade e a emergência. A mesa fica travada: nada se seleciona, move, apaga nem entra (arrastar arquivo,
+  Delete, Ctrl+Z, setas); a roda do mouse e o pan continuam, para acompanhar de perto. A barra de cima perde os
+  botões de edição. Com a tela aberta as setas do teclado também não fazem jog.
+- **O "Parar" grande é o parar que mantém a posição** (a caneta sobe e dá para retomar), não a emergência. A
+  emergência continua no Esc, no botão vermelho de cima e num botão pequeno da tela. Decisão minha: é o parar
+  que não estraga o que já foi feito.
+- **Som.** Quatro notas subindo quando o desenho termina; três descendo se ele falha (cabo, alarme). Não toca
+  quando é o Artur que para. Liga e desliga na própria tela ("Tocar um som quando terminar"), e a escolha fica
+  guardada. É feito pelo navegador (Web Audio), sem arquivo de som.
+- **Os botões e avisos do trabalho saíram do passo 3** (Pausar, Parar, barra de progresso, velocidade, erro numa
+  linha): agora só existem na tela de plotagem. O passo 3 ficou com o que vem antes do envio.
+- Conferido no simulador com o mouse de verdade: do começo ao fim, pausar e continuar, parar e retomar, erro
+  numa linha, cabo que sai. Durante o trabalho, arrastar, Ctrl+A, Delete, seta, Ctrl+Z e soltar um arquivo não
+  mudam a mesa. **Nada disto rodou na máquina ainda.**
+
+Trabalhei numa cópia separada (um `git worktree`) e só no fim trouxe para a pasta dele, para a página que ele
+usa com a máquina não recarregar a cada arquivo salvo.
+
 ## Pendências anotadas no primeiro teste na máquina (22/11/2026, à noite)
 
-O Artur pediu para ir anotando e resolver depois. **Nada aqui foi corrigido ainda.** Enquanto ele estiver com a
-máquina conectada, não mexer em `src/` nem em `index.html`: o programa roda pelo `npm run dev`, e salvar um arquivo
-de código recarrega a página e derruba a conexão (no meio de um desenho, ele para).
+**Resolvidas em 23/11/2026: 1, 2, 3 e 5. A 4 continua aberta, esperando duas respostas do Artur.**
+Regra que continua valendo: com a máquina conectada, não mexer em `src/` nem em `index.html` na pasta dele. O
+programa roda pelo `npm run dev`, e salvar um arquivo de código recarrega a página e derruba a conexão.
 
-1. **"Mostrar o caminho" não desmarca** (passo 2, Pré-visualização; visto pelo Artur). Reproduzido no navegador
+1. (resolvida) **"Mostrar o caminho" não desmarca** (passo 2, Pré-visualização; visto pelo Artur). Reproduzido no navegador
    de teste (desmarcada → clique → marcada → clique → marcada). Causa, lida no código: em
    `src/ui/panels/previewControls.ts`, desmarcar chama `player.stop()`, que dispara o `onTick`, que faz
    `show.checked = overlay.isVisible` (ainda ligado); só depois vem `overlay.setVisible(show.checked)`, já com a
    caixa marcada de novo. Conserto: guardar o valor da caixa antes de chamar o `stop`. Escrever o teste primeiro.
-5. **O tempo da pré-visualização ("0:00 / 29:24") fica parado no valor antigo** quando o desenho muda (visto pelo
+5. (resolvida) **O tempo da pré-visualização ("0:00 / 29:24") fica parado no valor antigo** quando o desenho muda (visto pelo
    Artur ao redimensionar). O plano é refeito certo: o rodapé ("tempo estimado ~…"), o "Tempo total" do passo 2 e
    o "Desenho inteiro (~…)" do passo 3 acompanham (conferido no navegador de teste). Só esse rótulo não, porque
    ele só é escrito dentro do `player.onTick` (Play, pausa ou ⏹). Conserto: atualizar o rótulo também quando o
    plano muda. Até lá, clicar em ⏹ atualiza o número.
-2. **Legenda da pré-visualização com argolas em vez de tracinhos** (mesma captura de tela: "reta", "curva",
+2. (resolvida) **Legenda da pré-visualização com argolas em vez de tracinhos** (mesma captura de tela: "reta", "curva",
    "F fixo" aparecem como círculos coloridos). Conferir o `.swatch` em `src/style.css`.
-3. **Os gabaritos A4 e A3 estão no lugar errado na tela.** O Artur põe a ponta do papel exatamente na origem
+3. (resolvida: perfil versão 4, gabaritos em (0, 0), com migração do perfil salvo) **Os gabaritos A4 e A3 estão no lugar errado na tela.** O Artur põe a ponta do papel exatamente na origem
    (0, 0), que é onde a caneta fica em "Ir para a origem". O perfil padrão desenha os gabaritos a partir de
    (30, 25): era uma posição suposta (está escrito no comentário de `paperTemplates` em `src/core/machine.ts`).
    Efeito: na tela o A4 aparece 30 mm para a direita e 25 mm para o fundo do papel de verdade; um desenho que
    encosta na borda direita ou de cima do gabarito sai do papel real. O certo é (0, 0). Lembrar que o perfil
    guardado no navegador mantém o valor antigo: precisa de migração, como a do curso.
-4. **"Folha" na tela não é o papel.** A parte clara (540 × 345) é a área útil da regra (X 30–570, Y 25–370), que
+4. (ABERTA) **"Folha" na tela não é o papel.** A parte clara (540 × 345) é a área útil da regra (X 30–570, Y 25–370), que
    corresponde a uma folha grande de ~600 × 395 posta na origem com margem. Para A4 e A3, "Encaixar na folha" e
    "Centralizar na folha" levam o desenho para fora do papel de verdade. Conversar com o Artur: a tela devia
    mostrar o papel que está na mesa (tamanho escolhido, ponta em 0, 0) e a margem dentro dele. Perguntar também
@@ -345,6 +375,8 @@ de código recarrega a página e derruba a conexão (no meio de um desenho, ele 
 | 11. Traço alisado na escala da caneta; Preto e branco sem furinho nas letras | pronto em 22/11, à noite (ver acima) |
 | 12. Curso de 810 × 390; ícone gigante ao recarregar | pronto em 22/11, no fim do dia (ver acima) |
 | 13. Proporção travada na mesa; giro com encaixe, etiqueta do ângulo e "Endireitar" | pronto em 22/11, à noite (ver acima) |
+| 14. Primeiro desenho na máquina de verdade | feito pelo Artur em 22/11, à noite: "perfeito" |
+| 15. Tela de plotagem, mesa travada durante o trabalho, som no fim; consertos da pré-visualização; A4 e A3 na origem | pronto em 23/11 (ver acima) |
 
 Testes automáticos: 1.650 passando (eram 304 no começo da noite e 1.331 ao fim dela). `npm run build` passa.
 

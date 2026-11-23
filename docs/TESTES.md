@@ -39,7 +39,7 @@ Para ensaiar antes, sem a máquina: acrescente `?sim=1` na URL (um GRBL falso). 
 | 6 | Caneta | **Caneta ↓** e **Caneta ↑** | O servo desce e sobe; o painel mostra "Caneta embaixo/em cima" | |
 | 7 | Contorno | Com um desenho na mesa: **▭ Contorno** | O retângulo percorrido (caneta em cima) envolve o desenho como na tela | |
 | 8 | Envio | `orientacao.svg` na origem → **▶ Enviar desenho** | Barra anda, a cruz acompanha a caneta, o traço já feito fica forte na tela; no fim a máquina volta a (0,0) e aparece "Desenho concluído em …" | |
-| 9 | **Pausa** (decide o `pen.pauseLift`) | `curvas.svg`: **⏸ Pausar** no meio de um círculo; esperar 5 s; **▶ Continuar** | A caneta **sobe** na pausa e **desce antes de andar** ao continuar, sem falha no traço. Se não subir (ou o painel avisar "o GRBL diz que a caneta continua embaixo"): ⚙ Configurações → Subir e descer a caneta → Pausa = "no fim do traço" e repetir | |
+| 9 | **Pausa** (decide o `pen.pauseLift`) | `curvas.svg`: **⏸ Pausar** no meio de um círculo; esperar 5 s; **▶ Continuar** | A caneta **sobe** na pausa e **desce antes de andar** ao continuar, sem falha no traço. Se não subir (ou a tela avisar "a máquina diz que a caneta continua embaixo"): ⚙ Configurações → Subir e descer a caneta → Pausa = "no fim do traço" e repetir | |
 | 10 | Parar | **■ Parar** no meio de um desenho; depois **Ir para a origem** | A caneta sobe, **sem alarme**, Home continua "feito"; "Ir para a origem" vai ao lugar certo sem refazer o Home | |
 | 11 | Emergência | **⛔ Emergência** (ou Esc) no meio de um desenho | ALARM:3 traduzido, Home "falta"; Enviar fica bloqueado até o Home | |
 | 12 | Cabo | Puxar o USB no meio de um desenho | Em até 1 s: aviso vermelho, estado "conexão perdida", a tela não trava. Reconectar: banner, Alarm, Home | |
@@ -76,7 +76,7 @@ Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pr
 |---|---|---|---|---|
 | B1 | Aquecimento | **Enviar desenho** | Antes de tudo a máquina vai a X0 Y0 e o servo bate **8 vezes** no ar. Só depois vai para o desenho | |
 | B2 | Subida dupla | Olhe o Console durante um traço | Depois de cada traço saem dois `M5` seguidos; o servo só se mexe no primeiro | |
-| B3 | Pausar | **⏸ Pausar** no meio de um traço, esperar, **▶ Continuar** | O servo **sobe** na pausa e **desce ~0,5 s antes** de andar. Se não subir: Configurações → Subir e descer a caneta → Pausa = "no fim do traço" | |
+| B3 | Pausar | **⏸ Pausar** no meio de um traço, esperar, **▶ Continuar** | O servo **sobe** na pausa e **desce ~0,5 s antes** de andar. Se não subir (a tela avisa "a máquina diz que a caneta continua embaixo"): Configurações → Subir e descer a caneta → Pausa = "no fim do traço" | |
 | B4 | Pausar no aquecimento e num descanso | Pausar durante as 8 batidas; depois durante um "descanso do servo" (use um desenho com muitos tracinhos) | Pausa e continua sem perder nada | |
 | B5 | Parar e voltar | **■ Parar** no meio de um traço; depois **Ir para a origem** | Sem alarme. A máquina volta exatamente para uma marca feita antes na origem. Repita 3 vezes | |
 | B6 | Retomar | Depois de parar, em "O que enviar" já vem **Retomar de onde parou**. **Enviar** | Aquecimento de novo e o desenho continua do traço anterior ao que parou | |
@@ -84,6 +84,7 @@ Traga `samples/orientacao.svg` (passo 1) e confira o passo 2: tem que dizer **Pr
 | B8 | Descanso do servo | Vetorize uma imagem com muitos tracinhos (passo 2 mostra "a máquina vai esperar…") e envie | Nos descansos a caneta fica **em cima e parada**, e o servo em silêncio. Ponha a mão: ele esfria? | |
 | B9 | Aba escondida | Trabalho de 15 min no ar, com a aba minimizada por 10 min (desligue a suspensão do Windows) | Termina. No Console não pode haver "Erro de leitura na serial" (se houver, é ruído no cabo: anote quantos) | |
 | B10 | Cabo | Puxar o USB no meio; reconectar | Aviso em ~1 s; depois de reconectar e do Home, "Retomar de onde parou" continua o desenho | |
+| B11 | Tela de plotagem e som (acrescentado em 23/11) | **Enviar desenho** e, com a máquina desenhando, tente arrastar o desenho na tela, apagar com Delete e soltar um arquivo. Depois deixe terminar, com o som do computador ligado | A tela muda: fundo escuro, porcentagem grande, "Parar" bem grande, "Pausar" e a velocidade. Nada na mesa se mexe (a roda do mouse ainda aproxima). No fim toca um som curto e aparece "Desenho concluído"; "Voltar para a mesa" devolve a tela normal | |
 
 ### C. Com a caneta
 

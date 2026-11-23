@@ -47,20 +47,27 @@ export interface Importer {
  * SVG entra direto na mesa; imagem vai para `onImage` (a tela de vetorização).
  */
 export function installImport(store: Store, dropTarget: HTMLElement, onImage: (file: File) => void): Importer {
+  /** Mesa travada (a máquina está desenhando): nada entra. Avisa e devolve true. */
+  const locked = () => {
+    if (!store.state.locked) return false;
+    toast("A mesa está travada enquanto a máquina desenha. Traga o desenho quando ela terminar.", "warn", 7000);
+    return true;
+  };
   const svgInput = h("input", { type: "file", accept: ".svg,image/svg+xml", multiple: true, style: "display:none" });
   svgInput.addEventListener("change", () => {
-    if (svgInput.files) void importFiles(store, Array.from(svgInput.files));
+    if (svgInput.files && !locked()) void importFiles(store, Array.from(svgInput.files));
     svgInput.value = "";
   });
   const imgInput = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp", style: "display:none" });
   imgInput.addEventListener("change", () => {
     const f = imgInput.files?.[0];
     imgInput.value = "";
-    if (f) onImage(f);
+    if (f && !locked()) onImage(f);
   });
   document.body.append(svgInput, imgInput);
 
   const take = (files: File[]) => {
+    if (locked()) return;
     const svgs = files.filter(isSvg);
     const image = files.find((f) => !isSvg(f) && isImage(f));
     const other = files.filter((f) => !isSvg(f) && !isImage(f));
@@ -74,7 +81,7 @@ export function installImport(store: Store, dropTarget: HTMLElement, onImage: (f
   window.addEventListener("dragenter", (e) => {
     if (!hasFiles(e)) return;
     depth++;
-    dropTarget.classList.add("dragover");
+    if (!store.state.locked) dropTarget.classList.add("dragover");
   });
   window.addEventListener("dragleave", (e) => {
     if (!hasFiles(e)) return;

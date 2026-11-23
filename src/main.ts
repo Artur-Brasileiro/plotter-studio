@@ -31,6 +31,8 @@ import { createJogPanel } from "./ui/panels/jogPanel";
 import { createConsole } from "./ui/panels/consolePanel";
 import { createSendPanel } from "./ui/panels/sendPanel";
 import { createPlotSteps } from "./ui/panels/plotSteps";
+import { createPlotScreen } from "./ui/plotScreen";
+import { Sounds } from "./ui/sound";
 import { MachineSession, simSettingsFromUrl } from "./ui/machine/session";
 import "./style.css";
 
@@ -105,18 +107,25 @@ const help = createHelpDialog();
 // v2: máquina pela Web Serial (ou o simulador com ?sim=1)
 const session = new MachineSession(store, simSettingsFromUrl(location.search));
 import.meta.hot?.dispose(() => session.dispose());
+// O que mexe no desenho ou nos ajustes some da barra enquanto a tela de plotagem está aberta
+// (classe "edit-tool"; ver "body.plotting" no style.css). Ficam a vista da mesa e a conexão.
+const editTool = <T extends HTMLElement>(el: T): T => {
+  el.classList.add("edit-tool");
+  return el;
+};
 layout.toolbar.append(
-  bringMenu,
-  h("span", { class: "sep" }),
-  undoBtn,
-  redoBtn,
+  editTool(bringMenu),
+  editTool(h("span", { class: "sep" })),
+  editTool(undoBtn),
+  editTool(redoBtn),
+  h("span", { class: "plotting-tag" }, "Tela de plotagem: a mesa está travada"),
   h("button", { title: "Enquadrar a mesa inteira", onclick: fit }, "Ver a mesa toda"),
-  h("span", { class: "sep" }),
-  createPaperPicker().el,
+  editTool(h("span", { class: "sep" })),
+  editTool(createPaperPicker().el),
   h("span", { class: "spacer" }),
   createConnectControls(session),
-  h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações"),
-  h("button", { title: "Os três passos, do desenho ao papel", onclick: () => help.open() }, "Como usar"),
+  editTool(h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações")),
+  editTool(h("button", { title: "Os três passos, do desenho ao papel", onclick: () => help.open() }, "Como usar")),
 );
 // a cor do papel é só da tela: a folha da mesa é redesenhada com ela (o G-code não muda)
 onPaperChange(() => canvas.requestRenderAll());
@@ -153,8 +162,41 @@ side.addTab(
   "Conferir",
   createJobPanel(store, planner, createPreviewControls(overlay, player), (flag, title) => side.setFlag("job", flag, title)),
 );
-const jog = createJogPanel(session, () => side.active === "machine");
-const send = createSendPanel(session, store, planner, overlay, player);
+// (com a tela de plotagem aberta o painel do jog não está à vista: as setas não podem mexer na máquina)
+const jog = createJogPanel(session, () => side.active === "machine" && !store.state.locked);
+// Tela de plotagem: enquanto a máquina desenha (e até alguém clicar em "Voltar para a mesa"), ela toma o
+// lugar do painel lateral e a mesa fica travada. O painel de envio diz o que mostrar e executa os botões.
+const sounds = new Sounds();
+const plotScreen = createPlotScreen(
+  {
+    stop: () => send.actions.stop(),
+    togglePause: () => send.actions.togglePause(),
+    continueAfterError: () => send.actions.continueAfterError(),
+    feed: (change) => send.actions.feed(change),
+    emergency: () => send.actions.emergency(),
+    dismiss: () => send.actions.dismiss(),
+  },
+  sounds,
+);
+layout.side.after(plotScreen.el);
+const setPlotting = (on: boolean) => {
+  if (store.state.locked === on) return;
+  store.setLocked(on);
+  document.body.classList.toggle("plotting", on);
+  layout.side.hidden = on;
+};
+const send = createSendPanel(session, store, planner, overlay, {
+  onView: (view) => {
+    plotScreen.show(view);
+    setPlotting(!!view);
+  },
+  // dentro do clique em Enviar: o navegador só deixa tocar som depois de um gesto de quem usa
+  onStart: () => sounds.arm(),
+  onEnd: (result) => {
+    if (result === "finished") sounds.play("done");
+    else if (result === "failed") sounds.play("failed");
+  },
+});
 const machineTab = h("div", { class: "panel" }, createPlotSteps(session, planner, (id) => side.show(id)), send.el, createMachinePanel(session), jog.el);
 side.addTab("machine", "Plotar", machineTab);
 session.subscribe((s) => overlay.setMachinePosition(s.link === "connected" ? s.wpos : undefined, !!s.status?.spindle));
@@ -220,4 +262,4 @@ openTracer = (file) => {
 };
 
 // acesso pelo console do navegador, para depurar
-Object.assign(window, { plotter: { store, canvas, view, planner, side, session, openTracer: (f: File) => openTracer(f) } });
+Object.assign(window, { plotter: { store, canvas, view, planner, side, session, sounds, openTracer: (f: File) => openTracer(f) } });

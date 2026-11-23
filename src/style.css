@@ -419,12 +419,85 @@ dialog.sheet.trace { width: min(1720px, 98vw); height: min(1080px, 96vh); max-wi
 .seg-row button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
 .seg-row button.on { background: var(--plan); border-color: var(--plan); color: #fff; position: relative; }
 
+/* ------------------------------------------------------------------ tela de plotagem */
+/* Enquanto a máquina desenha, o painel lateral dá lugar a esta tela: escura, de letra grande, com um Parar
+   que não dá para errar. O que edita o desenho some da barra de cima, e a mesa fica travada (canvasView.ts).
+   A cor do momento (--tone) pinta a barra e o ponto do título: azul andando, âmbar esperando, verde pronto. */
+body.plotting .edit-tool { display: none; }
+.plotting-tag { display: none; align-items: center; gap: 9px; margin-right: 10px; font-weight: 600; white-space: nowrap; }
+body.plotting .plotting-tag { display: inline-flex; }
+.plotting-tag::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #8fb8ff; }
+
+.plot-screen {
+  --tone: #8fb8ff;
+  width: 348px; flex: none; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 18px; padding: 24px 22px 16px;
+  background: var(--ink); color: #fff;
+}
+.plot-screen.tone-hold, .plot-screen.tone-stopped { --tone: #f0c24a; }
+.plot-screen.tone-done { --tone: #5fd3a4; }
+.plot-screen.tone-failed { --tone: #ff8a7e; }
+.plot-screen :focus-visible { outline-color: #fff; outline-offset: 2px; }
+.plot-screen p { margin: 0; }
+
+.plot-title { display: flex; align-items: center; gap: 11px; margin: 0; font-size: 27px; font-weight: 600; line-height: 1.15; }
+.plot-title::before { content: ""; flex: none; width: 13px; height: 13px; border-radius: 50%; background: var(--tone); }
+.tone-run .plot-title::before { animation: plot-pulse 1.6s ease-in-out infinite; }
+@keyframes plot-pulse { 50% { opacity: 0.25; } }
+.plot-name { margin-top: 7px !important; font-size: 15px; color: #c5cee0; overflow-wrap: anywhere; }
+.plot-detail { margin-top: 2px !important; font-size: 13.5px; color: #9aa6bf; }
+
+.plot-percent { font-size: 78px; font-weight: 600; line-height: 0.95; letter-spacing: -0.02em; }
+.tone-done .plot-percent { color: var(--tone); }
+.plot-bar { height: 10px; margin-top: 14px; border-radius: 5px; background: #ffffff1f; overflow: hidden; }
+.plot-bar-fill { height: 100%; width: 0; border-radius: 5px; background: var(--tone); transition: width 0.4s; }
+.plot-times { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 0; }
+.plot-times dt { font-size: 12.5px; color: #9aa6bf; }
+.plot-times dd { margin: 1px 0 0; font-size: 19px; font-weight: 600; }
+.plot-lines { margin-top: 8px !important; font-size: 12.5px; color: #8793ad; }
+
+.plot-note { padding: 10px 12px; border-radius: 6px; background: #f0c24a24; border: 1px solid #f0c24a66; color: #ffe7a8; font-size: 13.5px; line-height: 1.4; }
+.plot-error { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 6px; background: #ff8a7e24; border: 1px solid #ff8a7e80; color: #ffd9d4; font-size: 13.5px; line-height: 1.4; }
+.plot-error .err-line { margin: 0; color: var(--ink); }
+.plot-error button { align-self: flex-start; margin-top: 2px; }
+
+/* botões sobre o fundo escuro */
+.plot-screen button { background: #ffffff14; border-color: #ffffff2e; color: #fff; }
+.plot-screen button:hover:not(:disabled) { background: #ffffff26; border-color: #ffffff55; }
+.plot-actions { display: flex; flex-direction: column; gap: 10px; }
+.plot-screen .plot-stop {
+  display: flex; align-items: center; justify-content: center; gap: 14px; min-height: 96px;
+  font-size: 27px; font-weight: 700; letter-spacing: 0.02em;
+  background: var(--danger); border: 2px solid #ff9d94; border-radius: 10px;
+}
+.plot-screen .plot-stop:hover:not(:disabled) { background: #d8463b; border-color: #ffc2bc; }
+.plot-stop-mark { width: 22px; height: 22px; border-radius: 3px; background: #fff; }
+.plot-stop-hint { margin: -3px 0 4px !important; font-size: 12.5px; color: #9aa6bf; text-align: center; }
+.plot-screen .plot-pause { min-height: 46px; font-size: 16px; font-weight: 600; border-color: #ffffff55; }
+.plot-speed { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: #c5cee0; }
+.plot-speed-label { flex: 1; }
+.plot-speed-value { color: #fff; font-weight: 600; }
+.plot-speed button { padding: 4px 10px; font-size: 13px; }
+.plot-screen .plot-estop { align-self: flex-start; padding: 4px 10px; font-size: 13px; background: transparent; border-color: #ff9d9466; color: #ffb4ad; }
+.plot-screen .plot-estop:hover:not(:disabled) { background: #c0362c55; border-color: #ff9d94; color: #fff; }
+
+.plot-result { display: flex; flex-direction: column; gap: 10px; }
+.plot-message, .plot-resume, .plot-next { padding: 10px 12px; border-radius: 6px; background: #ffffff12; border: 1px solid #ffffff2e; color: #e3e8f3; font-size: 13.5px; line-height: 1.4; }
+.tone-failed .plot-message { background: #ff8a7e24; border-color: #ff8a7e80; color: #ffd9d4; }
+.plot-screen .plot-back { min-height: 52px; margin-top: 4px; font-size: 17px; font-weight: 600; background: #fff; border-color: #fff; color: var(--ink); }
+.plot-screen .plot-back:hover:not(:disabled) { background: #e8ecf5; border-color: #e8ecf5; }
+
+.plot-foot { display: flex; flex-direction: column; gap: 7px; margin-top: auto; padding-top: 14px; border-top: 1px solid #ffffff1f; font-size: 12.5px; color: #9aa6bf; }
+.plot-foot .check { align-items: center; font-size: 13.5px; color: #c5cee0; }
+.plot-foot .check input { margin-top: 0; accent-color: #8fb8ff; }
+
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
 }
 @media (max-width: 900px) {
   .main { flex-direction: column; }
   .side { width: auto; height: 46vh; border-left: 0; border-top: 1px solid var(--rule); }
+  .plot-screen { width: auto; height: 46vh; }
   .trace-main, .settings-main { grid-template-columns: 1fr; }
   .settings-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
 }

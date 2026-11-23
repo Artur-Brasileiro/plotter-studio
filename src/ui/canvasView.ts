@@ -73,7 +73,7 @@ export class CanvasView {
       this.canvas.requestRenderAll();
     });
     store.subscribe((s, prev) => {
-      if (s.history !== prev.history || s.selection !== prev.selection || s.profile !== prev.profile) this.sync();
+      if (s.history !== prev.history || s.selection !== prev.selection || s.profile !== prev.profile || s.locked !== prev.locked) this.sync();
     });
     this.sync();
   }
@@ -139,6 +139,7 @@ export class CanvasView {
       for (const [id, o] of next) this.objs.set(id, o);
       for (const [o, m] of updates) o.applyModel(m);
       for (const o of added) this.canvas.add(o);
+      this.applyLock();
 
       // ordem de empilhamento = ordem do documento
       order.forEach((o, i) => {
@@ -170,6 +171,21 @@ export class CanvasView {
   }
 
   /**
+   * Mesa travada (a máquina está desenhando): nenhum desenho responde ao mouse e não há caixa de seleção.
+   * A trava vai em cada objeto, não em `canvas.skipTargetFind`: esse o pan (espaço + arrastar) liga e desliga.
+   * Aproximar e mover a vista continuam funcionando.
+   */
+  private applyLock(): void {
+    const locked = this.store.state.locked;
+    this.canvas.selection = !locked;
+    for (const o of this.objects()) {
+      o.selectable = !locked;
+      o.evented = !locked;
+    }
+    if (locked && this.canvas.getActiveObject()) this.canvas.discardActiveObject();
+  }
+
+  /**
    * Proporção travada ou solta (ver `gestures.ts`): com ela travada os cantos aumentam e diminuem o desenho
    * por igual e as alças que esticam um lado só somem. Vale para o que está selecionado agora.
    */
@@ -195,12 +211,23 @@ export class CanvasView {
 
   private pushSelection(): void {
     if (this.syncing) return;
+    if (this.store.state.locked) {
+      // (não deveria acontecer: os objetos não respondem ao mouse. Se acontecer, a seleção não fica.)
+      if (this.canvas.getActiveObject()) this.canvas.discardActiveObject();
+      return;
+    }
     // um conjunto entra sempre inteiro na seleção
     const ids = this.activeDrawings().flatMap((o) => o.drawingIds);
     this.store.setSelection(expandToGroups(this.store.doc, ids));
   }
 
   private onModified(action: string | undefined): void {
+    if (this.store.state.locked) {
+      // idem: um gesto que escapou da trava é desfeito na tela (o documento nem chegou a mudar)
+      for (const o of this.activeDrawings()) o.applyModel(o.modelTransform);
+      this.canvas.requestRenderAll();
+      return;
+    }
     const updates = new Map<DrawingId, Mat2D>();
     for (const o of this.activeDrawings()) {
       const m = modelMatrixFromFabric(o.calcTransformMatrix() as unknown as Mat2D, o.localBBox);

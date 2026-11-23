@@ -83,8 +83,6 @@ export interface PlotView {
   readonly feedPct: number;
   readonly pause: { readonly label: string; readonly title: string; readonly disabled: boolean; readonly hidden: boolean };
   readonly stopDisabled: boolean;
-  /** Depois de terminar: quanto levou */
-  readonly summary?: string;
   /** Depois de terminar uma camada: o que vem agora */
   readonly next?: string;
   /** Por que parou ou falhou, nas palavras do controlador */
@@ -101,7 +99,7 @@ const TITLE: Record<PlotPhase, string> = {
   stopping: "Parando…",
   finished: "Desenho concluído",
   stopped: "Desenho parado",
-  failed: "O desenho não terminou",
+  failed: "O desenho falhou",
 };
 
 const TONE: Record<PlotPhase, PlotTone> = {
@@ -176,7 +174,6 @@ export function plotView(inp: PlotInput, now: number): PlotView {
       hidden: !active || phase === "stopping",
     },
     stopDisabled: phase === "stopping",
-    summary: phase === "finished" ? `Levou ${fmtDuration(elapsedS)}. O estimado era ${fmtDuration(inp.estTotalS)}.` : undefined,
     next,
     message: !active && phase !== "finished" ? j.message : undefined,
     resume:

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { addDrawing, createDrawing, EMPTY_DOCUMENT, type PlotDocument } from "./document";
-import { scaling, translation, type Mat2D } from "./geometry/mat2d";
+import { IDENTITY, scaling, translation, type Mat2D } from "./geometry/mat2d";
 import { ellipseSubPath, type Geometry, type SubPath } from "./geometry/path";
-import { polylineLength, removeStrokes, removeSubpaths, sceneStrokes, StrokeIndex } from "./strokeEdit";
+import { DEFAULT_PROFILE } from "./machine";
+import { applyStrokeEdits, polylineLength, removeStrokes, removeSubpaths, sceneStrokes, StrokeIndex } from "./strokeEdit";
 
 const line = (x0: number, y0: number, x1: number, y1: number): SubPath => ({ start: { x: x0, y: y0 }, segments: [{ kind: "line", to: { x: x1, y: y1 } }], closed: false });
 
@@ -227,5 +228,95 @@ describe("StrokeIndex: achar o traço embaixo do mouse", () => {
       });
       expect(big.nearest(px, py, 1.5)).toBe(best);
     }
+  });
+});
+
+describe("applyStrokeEdits: apagar e passar traços para outra caneta (subcamadas)", () => {
+  const profile = DEFAULT_PROFILE; // canetas: verde, fina, preta (padrão)
+  const ids = () => {
+    let k = 0;
+    return () => `novo${++k}`;
+  };
+  const edits = (id: string, entries: [number, string | null][]) => new Map([[id, new Map(entries)]]);
+  /** Os pontos de um desenho no papel (mm da cena), para conferir que nada saiu do lugar. */
+  const scene = (doc: PlotDocument, id: string) => sceneStrokes(doc.drawings.find((d) => d.id === id)!).map((s) => Array.from(s.points));
+
+  it("desenho solto: o traço vai para uma camada nova da caneta escolhida, e os dois viram um conjunto", () => {
+    const before = docWith(three, translation(100, 50), "preta");
+    const doc = applyStrokeEdits(before, edits("d1", [[1, "verde"]]), profile, ids());
+    expect(doc.drawings.map((d) => d.id)).toEqual(["d1", "novo2"]);
+    const [orig, sub] = doc.drawings;
+    expect(orig.geometry.subpaths).toEqual([three.subpaths[0], three.subpaths[2]]);
+    expect(sub.geometry.subpaths).toEqual([three.subpaths[1]]);
+    expect(sub.penId).toBe("verde");
+    expect(sub.transform).toBe(orig.transform);
+    expect(sub.name).toBe("desenho");
+    expect(orig.group).toBe("novo1");
+    expect(sub.group).toBe("novo1");
+  });
+
+  it("o traço continua no mesmo lugar do papel", () => {
+    const before = docWith(three, translation(100, 50), "preta");
+    const doc = applyStrokeEdits(before, edits("d1", [[1, "verde"]]), profile, ids());
+    expect(scene(doc, "novo2")).toEqual([scene(before, "d1")[1]]);
+  });
+
+  it("o conjunto já tem a camada daquela caneta: o traço entra nela (no fim), mesmo com outra posição", () => {
+    let before = addDrawing(EMPTY_DOCUMENT, createDrawing("a", "img", three, translation(100, 50), "preta", "g"));
+    before = addDrawing(before, createDrawing("b", "img", { subpaths: [line(0, 0, 3, 0)] }, scaling(2), "verde", "g"));
+    const wanted = scene(before, "a")[2];
+    const doc = applyStrokeEdits(before, edits("a", [[2, "verde"]]), profile, ids());
+    expect(doc.drawings.map((d) => d.id)).toEqual(["a", "b"]);
+    const b = doc.drawings[1];
+    expect(b.geometry.subpaths).toHaveLength(2);
+    expect(b.transform).toEqual(scaling(2));
+    const got = scene(doc, "b")[1];
+    got.forEach((v, i) => expect(v).toBeCloseTo(wanted[i], 9));
+  });
+
+  it("apagar (null) e trocar de caneta na mesma mudança", () => {
+    const doc = applyStrokeEdits(docWith(three, translation(0, 0), "preta"), edits("d1", [[0, null], [2, "fina"]]), profile, ids());
+    expect(doc.drawings[0].geometry.subpaths).toEqual([three.subpaths[1]]);
+    expect(doc.drawings[1].penId).toBe("fina");
+    expect(doc.drawings[1].geometry.subpaths).toEqual([three.subpaths[2]]);
+  });
+
+  it("todos os traços para outra caneta: o desenho de origem sai, a camada nova fica no lugar dele", () => {
+    let before = docWith(three, translation(0, 0), "preta");
+    before = addDrawing(before, createDrawing("z", "outro", three, translation(0, 0)));
+    const doc = applyStrokeEdits(before, edits("d1", [[0, "verde"], [1, "verde"], [2, "verde"]]), profile, ids());
+    expect(doc.drawings.map((d) => d.id)).toEqual(["novo2", "z"]);
+    expect(doc.drawings[0].geometry.subpaths).toEqual(three.subpaths);
+  });
+
+  it("a mesma caneta que o desenho já usa (inclusive a padrão, sem penId) não muda nada", () => {
+    const before = docWith(three, translation(0, 0)); // sem caneta = preta, a padrão
+    expect(applyStrokeEdits(before, edits("d1", [[0, "preta"]]), profile, ids())).toBe(before);
+  });
+
+  it("caneta que não existe no perfil e índice fora do desenho são ignorados", () => {
+    const before = docWith(three, translation(0, 0), "preta");
+    expect(applyStrokeEdits(before, edits("d1", [[0, "dourada"], [7, "verde"], [-1, null]]), profile, ids())).toBe(before);
+  });
+
+  it("não mexe no documento de antes (o Ctrl+Z da mesa depende disso)", () => {
+    const before = docWith(three, translation(0, 0), "preta");
+    const snapshot = JSON.stringify(before);
+    applyStrokeEdits(before, edits("d1", [[0, "verde"], [1, null]]), profile, ids());
+    expect(JSON.stringify(before)).toBe(snapshot);
+  });
+
+  it("duas camadas trocando traços entre si: cada uma recebe o da outra", () => {
+    let before = addDrawing(EMPTY_DOCUMENT, createDrawing("a", "img", three, IDENTITY, "preta", "g"));
+    before = addDrawing(before, createDrawing("b", "img", { subpaths: [line(50, 0, 60, 0)] }, IDENTITY, "verde", "g"));
+    const all = new Map([
+      ["a", new Map<number, string | null>([[0, "verde"]])],
+      ["b", new Map<number, string | null>([[0, "preta"]])],
+    ]);
+    const doc = applyStrokeEdits(before, all, profile, ids());
+    const a = doc.drawings.find((d) => d.id === "a")!;
+    const b = doc.drawings.find((d) => d.id === "b")!;
+    expect(a.geometry.subpaths).toEqual([three.subpaths[1], three.subpaths[2], line(50, 0, 60, 0)]);
+    expect(b.geometry.subpaths).toEqual([three.subpaths[0]]);
   });
 });

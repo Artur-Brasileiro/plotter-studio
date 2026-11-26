@@ -4,7 +4,8 @@ import { meanScale } from "../core/geometry/mat2d";
 import type { Geometry } from "../core/geometry/path";
 import { penOf } from "../core/machine";
 import type { Store } from "../core/store";
-import { removeStrokes, sceneStrokes, StrokeIndex, type EditStroke } from "../core/strokeEdit";
+import { applyStrokeEdits, sceneStrokes, StrokeIndex, type EditStroke } from "../core/strokeEdit";
+import { expandToGroups } from "../core/document";
 import { append, clear, h, toast } from "./dom";
 import { onPaperChange, paperColor } from "./paper";
 
@@ -42,7 +43,7 @@ const nf = (v: number) => v.toLocaleString("pt-BR");
 const plural = (n: number, one: string, many: string) => `${nf(n)} ${n === 1 ? one : many}`;
 
 /**
- * Tela "Apagar traços": os desenhos escolhidos aparecem grandes, cada traço (cada descida da caneta) pode
+ * Tela "Apagar ou pintar traços" (Editar traços): os desenhos escolhidos aparecem grandes, cada traço (cada descida da caneta) pode
  * ser marcado com um clique ou com um retângulo, e Delete tira os marcados. "Guardar e voltar" guarda o
  * desenho sem eles, numa mudança só, que o Ctrl+Z da mesa desfaz. Nada aqui chega à máquina.
  *
@@ -74,8 +75,13 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   /** 0 = como o "Marcar os curtos" decidir; 1 = marcado à mão; 2 = desmarcado à mão */
   const manual = new Uint8Array(n);
   let shortMm = 0;
-  /** Cada Delete é uma entrada: os traços que saíram naquela vez */
-  const undoStack: number[][] = [];
+  /** A caneta de cada desenho editado, já resolvida (sem caneta = a padrão do perfil) */
+  const ownPen = new Map(edited.map((d) => [d.id, penOf(profile, d.penId).id]));
+  /** Caneta para a qual o traço foi passado nesta tela; undefined = continua na caneta do desenho */
+  const penTo: (string | undefined)[] = new Array(n).fill(undefined);
+  /** Cada Delete ou troca de caneta é uma entrada: os traços daquela vez (e a caneta que tinham antes) */
+  type UndoEntry = { kind: "remove"; list: number[] } | { kind: "pen"; list: number[]; before: (string | undefined)[] };
+  const undoStack: UndoEntry[] = [];
   /** A camada em que a pessoa está mexendo; undefined = todas */
   let activeLayer: DrawingId | undefined = edited.length > 1 && edited.some((d) => d.id === focusId) ? focusId : undefined;
   const inLayer = (i: number) => activeLayer === undefined || strokes[i].drawingId === activeLayer;
@@ -93,16 +99,21 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   for (const d of edited) strokeOfSubpath.set(d.id, new Int32Array(d.geometry.subpaths.length).fill(-1));
   strokes.forEach((s, i) => (strokeOfSubpath.get(s.drawingId)![s.subpath] = i));
   const basePaths = new Map<DrawingId, Path2D>();
+  /** Os traços de cada desenho que foram passados para outra caneta, um caminho por caneta */
+  const movedPaths = new Map<DrawingId, Map<string, Path2D>>();
   const rebuildBase = (d: Drawing) => {
     const map = strokeOfSubpath.get(d.id)!;
-    basePaths.set(d.id, pathOf(d.geometry, (sp) => map[sp] < 0 || !removed[map[sp]]));
+    basePaths.set(d.id, pathOf(d.geometry, (sp) => map[sp] < 0 || (!removed[map[sp]] && penTo[map[sp]] === undefined)));
+    const pens = new Set<string>();
+    for (const i of map) if (i >= 0 && !removed[i] && penTo[i] !== undefined) pens.add(penTo[i]!);
+    movedPaths.set(d.id, new Map([...pens].map((pen) => [pen, pathOf(d.geometry, (sp) => map[sp] >= 0 && !removed[map[sp]] && penTo[map[sp]] === pen)])));
   };
   edited.forEach(rebuildBase);
   const contextPaths = new Map<DrawingId, Path2D>();
   const penMm = Math.max(...edited.map((d) => penOf(profile, d.penId).widthMm));
 
   // ------------------------------------------------------------------ palco
-  const dialog = h("dialog", { class: "sheet strokes", "aria-label": "Apagar traços" });
+  const dialog = h("dialog", { class: "sheet strokes", "aria-label": "Apagar ou pintar traços" });
   const canvas = h("canvas");
   const stage = h("div", { class: "trace-stage", tabIndex: 0, "aria-label": "Desenho: clique num traço para marcar" }, canvas);
   const baseLayer = document.createElement("canvas");
@@ -232,6 +243,12 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
         b.globalAlpha = activeLayer === undefined || d.id === activeLayer ? 1 : 0.25;
         b.strokeStyle = legible(pen.color, paper);
         strokeDrawing(b, d, basePaths.get(d.id)!, Math.max(pen.widthMm, 1.25 / bz)); // largura real da caneta, nunca menos de ~1 px
+        // os traços passados para outra caneta já aparecem com a cor e a largura dela
+        for (const [penId, p] of movedPaths.get(d.id) ?? []) {
+          const to = penOf(profile, penId);
+          b.strokeStyle = legible(to.color, paper);
+          strokeDrawing(b, d, p, Math.max(to.widthMm, 1.25 / bz));
+        }
       }
       b.globalAlpha = 1;
       baseDirty = false;
@@ -297,9 +314,19 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   const count = h("p", { class: "stroke-count", "aria-live": "polite" });
   const deleteBtn = h("button", { title: "Tira do desenho os traços marcados (tecla Delete)", onclick: () => removeMarked() }, "Apagar os marcados");
   const clearBtn = h("button", { class: "quiet", title: "Tira todas as marcas (tecla Esc)", onclick: () => clearMarks() }, "Desmarcar tudo");
-  const undoBtn = h("button", { title: "Traz de volta os últimos traços apagados (Ctrl+Z)", onclick: () => undoRemoval() }, "↶ Desfazer");
+  const undoBtn = h("button", { title: "Desfaz a última vez que apagou ou trocou a caneta (Ctrl+Z)", onclick: () => undoRemoval() }, "↶ Desfazer");
+  // passar os marcados para outra caneta: um botão por caneta do estojo
+  const penButtons = profile.pens.map((pen) =>
+    h(
+      "button",
+      { class: "layer-chip", title: `Os traços marcados passam a ser feitos com a caneta ${pen.name}`, onclick: () => movePen(pen.id) },
+      h("span", { class: "dot", style: `--c:${pen.color}`, "aria-hidden": "true" }),
+      h("span", { class: "name" }, pen.name),
+      h("span", { class: "n" }),
+    ),
+  );
   const doneBtn = h("button", { class: "primary big", onclick: () => conclude() }, "Voltar para a mesa");
-  const backBtn = h("button", { title: "Sai desta tela e deixa o desenho como estava", onclick: () => close() }, "Voltar sem apagar");
+  const backBtn = h("button", { title: "Sai desta tela e deixa o desenho como estava", onclick: () => close() }, "Voltar sem mudar nada");
   // a camada em que se mexe (só aparece quando há mais de uma)
   const layerChips = h("div", { class: "layer-chips", role: "radiogroup", "aria-label": "Camada em que você está mexendo" });
   const layerBox = h("div", { class: "panel-section", hidden: edited.length < 2 }, h("h3", null, "Camada"), layerChips);
@@ -328,22 +355,36 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   });
 
   const counts = () => {
-    let marked = 0, gone = 0;
+    let marked = 0, gone = 0, moved = 0;
     for (let i = 0; i < n; i++) {
       if (removed[i]) gone++;
-      else if (isMarked(i)) marked++;
+      else {
+        if (isMarked(i)) marked++;
+        if (penTo[i] !== undefined) moved++;
+      }
     }
-    return { marked, gone };
+    return { marked, gone, moved };
   };
+  /** A caneta em que o traço está agora (a do desenho, ou a que recebeu nesta tela) */
+  const penNow = (i: number) => penTo[i] ?? ownPen.get(strokes[i].drawingId)!;
   function renderPanel() {
-    const { marked, gone } = counts();
-    count.textContent = `${plural(n - gone, "traço", "traços")} · ${plural(marked, "marcado", "marcados")} · ${plural(gone, "apagado", "apagados")}`;
+    const { marked, gone, moved } = counts();
+    count.textContent =
+      `${plural(n - gone, "traço", "traços")} · ${plural(marked, "marcado", "marcados")} · ${plural(gone, "apagado", "apagados")}` +
+      (moved > 0 ? ` · ${plural(moved, "em outra caneta", "em outra caneta")}` : "");
     deleteBtn.disabled = marked === 0;
     clearBtn.disabled = marked === 0;
     undoBtn.disabled = undoStack.length === 0;
+    // quantos traços cada caneta vai fazer, contando os que mudaram de caneta aqui
+    const perPen = new Map<string, number>();
+    for (let i = 0; i < n; i++) if (!removed[i]) perPen.set(penNow(i), (perPen.get(penNow(i)) ?? 0) + 1);
+    profile.pens.forEach((pen, k) => {
+      penButtons[k].disabled = marked === 0;
+      penButtons[k].querySelector(".n")!.textContent = perPen.get(pen.id) ? nf(perPen.get(pen.id)!) : "";
+    });
     // os botões de sair dizem o que vai acontecer
-    doneBtn.textContent = marked > 0 ? "Apagar os marcados e voltar" : gone > 0 ? "Guardar e voltar" : "Voltar para a mesa";
-    backBtn.hidden = marked === 0 && gone === 0;
+    doneBtn.textContent = marked > 0 ? "Apagar os marcados e voltar" : gone > 0 || moved > 0 ? "Guardar e voltar" : "Voltar para a mesa";
+    backBtn.hidden = marked === 0 && gone === 0 && moved === 0;
     if (edited.length < 2) return;
     // uma ficha por camada, com a cor da caneta e quantos traços ainda tem
     const left = new Map<DrawingId, number>();
@@ -376,17 +417,31 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     for (let i = 0; i < n; i++) if (isMarked(i)) list.push(i);
     if (list.length === 0) return;
     for (const i of list) removed[i] = 1;
-    undoStack.push(list);
+    undoStack.push({ kind: "remove", list });
+    geometryChanged(list);
+  }
+  /** Os marcados passam para a caneta `penId` (voltar para a caneta do próprio desenho desfaz a troca). */
+  function movePen(penId: string) {
+    const list: number[] = [];
+    for (let i = 0; i < n; i++) if (isMarked(i)) list.push(i);
+    if (list.length === 0) return;
+    const before = list.map((i) => penTo[i]);
+    for (const i of list) {
+      penTo[i] = ownPen.get(strokes[i].drawingId) === penId ? undefined : penId;
+      manual[i] = 2; // a marca sai: a pessoa vê a cor nova na hora
+    }
+    undoStack.push({ kind: "pen", list, before });
     geometryChanged(list);
   }
   function undoRemoval() {
-    const list = undoStack.pop();
-    if (!list) return;
-    for (const i of list) {
-      removed[i] = 0;
-      manual[i] = 1; // voltam como estavam antes do Delete: marcados
-    }
-    geometryChanged(list);
+    const entry = undoStack.pop();
+    if (!entry) return;
+    entry.list.forEach((i, k) => {
+      if (entry.kind === "remove") removed[i] = 0;
+      else penTo[i] = entry.before[k];
+      manual[i] = 1; // voltam como estavam antes: marcados
+    });
+    geometryChanged(entry.list);
   }
   /** Traços saíram ou voltaram: refaz só os desenhos afetados e o que estava embaixo do mouse. */
   function geometryChanged(list: readonly number[]) {
@@ -407,24 +462,38 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
 
   function conclude() {
     removeMarked(); // quem marcou e foi direto no botão de voltar queria apagar (o botão diz "Apagar os marcados e voltar")
-    const map = new Map<DrawingId, number[]>();
-    let total = 0;
+    // o que acontece com cada traço: null = sai; id de caneta = passa para aquela caneta
+    const map = new Map<DrawingId, Map<number, string | null>>();
+    let gone = 0, moved = 0;
     strokes.forEach((s, i) => {
-      if (!removed[i]) return;
-      total++;
-      const list = map.get(s.drawingId);
-      if (list) list.push(s.subpath);
-      else map.set(s.drawingId, [s.subpath]);
+      const to = removed[i] ? null : penTo[i];
+      if (to === undefined) return;
+      if (to === null) gone++;
+      else moved++;
+      let m = map.get(s.drawingId);
+      if (!m) map.set(s.drawingId, (m = new Map()));
+      m.set(s.subpath, to);
     });
-    if (total === 0) return close();
+    if (gone + moved === 0) return close();
     // a tela trabalhou em cima destes desenhos: se algum mudou por fora, os números dos traços não valem mais
     const stale = edited.some((d) => store.doc.drawings.find((x) => x.id === d.id)?.geometry !== d.geometry);
     if (stale) {
       toast("O desenho mudou enquanto esta tela estava aberta. Nada foi apagado.", "warn", 8000);
       return close();
     }
-    store.commit("Apagar traços", (docNow) => removeStrokes(docNow, map));
-    toast(`${plural(total, "traço apagado", "traços apagados")}. Se mudar de ideia, Ctrl+Z na mesa traz de volta.`);
+    const label = moved === 0 ? "Apagar traços" : gone === 0 ? "Trocar a caneta de traços" : "Apagar e trocar a caneta de traços";
+    const existed = new Set(store.doc.drawings.map((d) => d.id));
+    store.commit(label, (docNow) => applyStrokeEdits(docNow, map, store.state.profile, () => crypto.randomUUID()));
+    // a seleção fica com o conjunto inteiro, incluindo as camadas que acabaram de nascer
+    const after = store.doc.drawings;
+    const keep = ids.filter((id) => after.some((d) => d.id === id));
+    const born = after.filter((d) => !existed.has(d.id)).map((d) => d.id);
+    store.setSelection(expandToGroups(store.doc, [...keep, ...born]));
+    const parts = [
+      gone > 0 ? plural(gone, "traço apagado", "traços apagados") : "",
+      moved > 0 ? `${plural(moved, "traço passou", "traços passaram")} para outra caneta` : "",
+    ].filter(Boolean);
+    toast(`${parts.join(", ")}. Se mudar de ideia, Ctrl+Z na mesa desfaz.`);
     close();
   }
 
@@ -550,12 +619,12 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   let escArmed = false;
   /** Esc: primeiro tira as marcas; com traços apagados e ainda não guardados, avisa antes de sair. */
   function onEscape() {
-    const { marked, gone } = counts();
+    const { marked, gone, moved } = counts();
     if (marked > 0) return clearMarks();
-    if (gone > 0 && !escArmed) {
+    if (gone + moved > 0 && !escArmed) {
       escArmed = true;
       setTimeout(() => (escArmed = false), 5000);
-      return toast("Há traços apagados que ainda não foram guardados. “Guardar e voltar” guarda; Esc de novo sai sem apagar nada.", "warn", 5000);
+      return toast("Há mudanças que ainda não foram guardadas. “Guardar e voltar” guarda; Esc de novo sai sem mudar nada.", "warn", 5000);
     }
     close();
   }
@@ -611,11 +680,14 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   const side = h("div", { class: "trace-side panel" });
   append(side, [
     layerBox,
-    h("h3", null, "Marcar e apagar"),
-    h("p", { class: "hint" }, "Clique num traço para marcar (fica vermelho); clique de novo para desmarcar. Arraste para marcar vários. Delete apaga os marcados."),
+    h("h3", null, "Marcar"),
+    h("p", { class: "hint" }, "Clique num traço para marcar (fica vermelho); clique de novo para desmarcar. Arraste para marcar vários."),
     count,
     h("div", { class: "row" }, deleteBtn, undoBtn),
     h("div", { class: "row" }, clearBtn),
+    h("h3", null, "Pintar com outra caneta"),
+    h("p", { class: "hint" }, "Clique numa caneta: os traços marcados passam a ser feitos com ela, numa camada só dela, que vai para a máquina junto com o resto."),
+    h("div", { class: "layer-chips", role: "group", "aria-label": "Passar os marcados para a caneta" }, ...penButtons),
     h(
       "label",
       { class: "range", title: "Marca de uma vez todos os traços menores que este tamanho no papel. Confira o que ficou vermelho antes de apagar; clicar num deles tira a marca só dele." },
@@ -634,8 +706,8 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     h(
       "header",
       { class: "settings-head" },
-      h("strong", null, `Apagar traços de ${name}`),
-      h("button", { class: "close", title: "Voltar para a mesa sem apagar nada", "aria-label": "Voltar para a mesa sem apagar nada", onclick: close }, "✕"),
+      h("strong", null, `Apagar ou pintar traços de ${name}`),
+      h("button", { class: "close", title: "Voltar para a mesa sem mudar nada", "aria-label": "Voltar para a mesa sem mudar nada", onclick: close }, "✕"),
     ),
     h("div", { class: "trace-main" }, stage, side),
     h(

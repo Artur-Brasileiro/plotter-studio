@@ -208,7 +208,7 @@ export function createPropertiesPanel(store: Store, bring?: BringActions): HTMLE
         "div",
         { class: "acts" },
         h("span", { class: "n" }, `${n.toLocaleString("pt-BR")} ${n === 1 ? "traço" : "traços"}`),
-        h("button", { title: "Abre o desenho grande para marcar e apagar traços desta camada", onclick: () => editStrokesOfSelection(store, d.id) }, "Apagar traços"),
+        h("button", { title: "Abre o desenho grande para marcar traços desta camada e apagar ou passar para outra caneta", onclick: () => editStrokesOfSelection(store, d.id) }, "Editar traços"),
         alone ? null : h("button", { class: "quiet", title: "Tira esta camada do desenho (as outras ficam)", "aria-label": `Remover a camada ${pen.name}`, onclick: () => store.commit("Remover camada", (doc) => removeDrawings(doc, [d.id])) }, "Remover"),
       ),
     );

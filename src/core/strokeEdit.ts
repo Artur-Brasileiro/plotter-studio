@@ -1,6 +1,8 @@
-import { removeDrawings, type Drawing, type DrawingId, type PlotDocument } from "./document";
+import { createDrawing, removeDrawings, type Drawing, type DrawingId, type PlotDocument } from "./document";
 import { flattenSubPath } from "./geometry/flatten";
+import { IDENTITY, invert, multiply, nearlyEqualMat } from "./geometry/mat2d";
 import { controlBBox, transformGeometry } from "./geometry/path";
+import { penOf, type MachineProfile } from "./machine";
 
 /**
  * Apagar traços soltos de um desenho que já está na mesa (a tela é src/ui/strokeEditor.ts).
@@ -71,6 +73,73 @@ export function removeStrokes(doc: PlotDocument, removals: ReadonlyMap<DrawingId
   let out = doc;
   for (const [id, indices] of removals) out = removeSubpaths(out, id, indices);
   return out;
+}
+
+/**
+ * O que a tela faz com cada traço: `null` = apagar; um id de caneta = passar o traço para essa caneta.
+ * Desenho → (subcaminho → destino).
+ */
+export type StrokeEdits = ReadonlyMap<DrawingId, ReadonlyMap<number, string | null>>;
+
+/**
+ * Apaga traços e passa traços para outra caneta, numa mudança só no documento.
+ *
+ * Passar para outra caneta = criar subcamadas: os traços saem do desenho e entram na camada daquela
+ * caneta no MESMO conjunto (`Drawing.group`). Se o conjunto ainda não tem camada dessa caneta, ela nasce
+ * com a posição do desenho de origem, logo depois da última camada do conjunto. Um desenho solto que
+ * ganha uma subcamada passa a ser um conjunto (as duas camadas andam juntas na mesa).
+ * Os traços continuam exatamente onde estavam no papel, mesmo que a camada de destino tenha outra matriz.
+ *
+ * Destino igual à caneta que o desenho já usa não muda nada. Desenho que fica sem traço sai da mesa.
+ * Sem nada para mudar, devolve o MESMO documento. `newId` dá as ids das camadas novas e dos conjuntos novos.
+ */
+export function applyStrokeEdits(doc: PlotDocument, edits: StrokeEdits, profile: MachineProfile, newId: () => string): PlotDocument {
+  let drawings = doc.drawings.slice();
+  let changed = false;
+  for (const [id, perStroke] of edits) {
+    const at = drawings.findIndex((x) => x.id === id);
+    if (at < 0) continue;
+    const d = drawings[at];
+    const own = penOf(profile, d.penId).id;
+    const drop = new Set<number>();
+    const byPen = new Map<string, number[]>();
+    for (const [i, to] of perStroke) {
+      if (!Number.isInteger(i) || i < 0 || i >= d.geometry.subpaths.length || to === own) continue;
+      if (to !== null && !profile.pens.some((p) => p.id === to)) continue; // caneta que não existe mais no perfil
+      drop.add(i);
+      if (to === null) continue;
+      const list = byPen.get(to);
+      if (list) list.push(i);
+      else byPen.set(to, [i]);
+    }
+    if (drop.size === 0) continue;
+    changed = true;
+    const group = d.group ?? (byPen.size > 0 ? newId() : undefined);
+    const subpaths = d.geometry.subpaths.filter((_, i) => !drop.has(i));
+    if (subpaths.some((sp) => sp.segments.length > 0)) {
+      const geometry = { subpaths };
+      drawings[at] = { ...d, geometry, localBBox: controlBBox(geometry), ...(group ? { group } : {}) };
+    } else drawings.splice(at, 1);
+
+    for (const [pen, list] of byPen) {
+      const moved = { subpaths: list.sort((a, b) => a - b).map((i) => d.geometry.subpaths[i]) };
+      const ti = drawings.findIndex((x) => x.group === group && x.id !== d.id && penOf(profile, x.penId).id === pen);
+      if (ti >= 0) {
+        // a camada que já existe: os traços entram no fim dela, na posição em que estavam no papel
+        const t = drawings[ti];
+        const m = multiply(invert(t.transform), d.transform);
+        const extra = nearlyEqualMat(m, IDENTITY) ? moved : transformGeometry(moved, m);
+        const geometry = { subpaths: [...t.geometry.subpaths, ...extra.subpaths] };
+        drawings[ti] = { ...t, geometry, localBBox: controlBBox(geometry) };
+      } else {
+        let last = -1;
+        drawings.forEach((x, k) => x.group === group && (last = k));
+        const where = last >= 0 ? last + 1 : Math.min(at, drawings.length);
+        drawings = [...drawings.slice(0, where), createDrawing(newId(), d.name, moved, d.transform, pen, group), ...drawings.slice(where)];
+      }
+    }
+  }
+  return changed ? { drawings } : doc;
 }
 
 /** Limite de células por lado da grade: acima disso a memória cresce sem a busca ficar mais rápida. */

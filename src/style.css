@@ -52,7 +52,16 @@ body { display: flex; flex-direction: column; background: var(--bench); overflow
 .topbar { display: flex; gap: 18px; align-items: center; padding: 0 14px; background: var(--ink); color: #fff; min-height: 48px; }
 .brand { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
 .brand-mark { width: 22px; height: 22px; flex: none; }
-.toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: 1; }
+.toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; flex: 1; min-width: 0; }
+.topbar button { white-space: nowrap; }
+.help-btn { font-weight: 700; }
+.topbar .ico { display: inline-flex; vertical-align: -2px; }
+/* tela estreita: os botões com rótulo ficam só no ícone, para a barra caber numa linha (ver main.ts) */
+@media (max-width: 1500px) {
+  .topbar { gap: 12px; }
+  .toolbar .lbl, .topbar .paper-label { display: none; }
+  .toolbar .sep { margin: 0 2px; }
+}
 .toolbar .spacer { flex: 1; }
 .toolbar .sep { width: 1px; height: 22px; background: #ffffff2e; margin: 0 6px; }
 

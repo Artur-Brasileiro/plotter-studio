@@ -100,8 +100,19 @@ const bringMenu = createMenu("Trazer desenho", [
   { label: "Arquivo SVG", hint: "Desenho que já está em vetor", action: importer.pickSvg },
   { label: "Texto", hint: "Letras de traço único: a caneta escreve com uma linha só", action: writeText },
 ]);
-const undoBtn = h("button", { onclick: () => store.undo() }, "↶ Desfazer");
-const redoBtn = h("button", { onclick: () => store.redo() }, "↷ Refazer");
+// Em tela estreita os rótulos com "lbl" somem e fica o ícone (o nome continua no title e no aria-label):
+// com a máquina conectada a barra ganha Emergência, Desconectar e o estado, e não pode quebrar em duas linhas.
+const lbl = (text: string) => h("span", { class: "lbl" }, text);
+// engrenagem desenhada (o caractere ⚙ não existe em todas as fontes e vira um quadradinho)
+const gearIcon = () =>
+  h("span", {
+    class: "ico",
+    "aria-hidden": "true",
+    innerHTML:
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+  });
+const undoBtn = h("button", { "aria-label": "Desfazer", onclick: () => store.undo() }, "↶", lbl(" Desfazer"));
+const redoBtn = h("button", { "aria-label": "Refazer", onclick: () => store.redo() }, "↷", lbl(" Refazer"));
 const settings = createSettingsDialog(store);
 const help = createHelpDialog();
 // v2: máquina pela Web Serial (ou o simulador com ?sim=1)
@@ -124,8 +135,8 @@ layout.toolbar.append(
   editTool(createPaperPicker().el),
   h("span", { class: "spacer" }),
   createConnectControls(session),
-  editTool(h("button", { title: "Máquina, caneta, proteção do servo e velocidades", onclick: () => settings.open() }, "Configurações")),
-  editTool(h("button", { title: "Os três passos, do desenho ao papel", onclick: () => help.open() }, "Como usar")),
+  editTool(h("button", { title: "Configurações: máquina, caneta, proteção do servo e velocidades", "aria-label": "Configurações", onclick: () => settings.open() }, gearIcon(), lbl(" Configurações"))),
+  editTool(h("button", { class: "help-btn", title: "Como usar: os três passos, do desenho ao papel", "aria-label": "Como usar", onclick: () => help.open() }, "?", lbl(" Como usar"))),
 );
 // a cor do papel é só da tela: a folha da mesa é redesenhada com ela (o G-code não muda)
 onPaperChange(() => canvas.requestRenderAll());

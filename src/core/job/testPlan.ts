@@ -50,6 +50,7 @@ export function makePlan(strokes: PlannedStroke[], profile: MachineProfile = DEF
       estimate: s.estimate,
       strokeStartTimesS: s.strokeStartTimesS,
       joinInkMm: 0,
+      retraceMm: 0,
       hiddenDropped: 0,
       overloads: s.overloads,
       checkpoints: s.checkpoints,

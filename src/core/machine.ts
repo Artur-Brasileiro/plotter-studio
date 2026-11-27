@@ -69,6 +69,16 @@ export interface MachineProfile {
     searchMm: number;
     /** Pode emendar passando por cima de tinta já prevista no desenho */
     overInk: boolean;
+    /**
+     * Caminho pela tinta: em vez de subir, a caneta anda embaixo por cima das linhas do próprio desenho
+     * até o próximo traço, se o caminho tiver até isto (mm). 0 = desligado. Precisa de `overInk`.
+     */
+    retraceMm: number;
+    /**
+     * Emenda que pode aparecer: a ligação com a caneta embaixo vale se o pedaço dela que cai fora da
+     * tinta somar até isto (mm). Fecha as frestas entre linhas que quase se encostam. 0 = só o que não aparece.
+     */
+    visibleMm: number;
   };
   /** Canetas, na ordem em que as camadas são plotadas (cor → fina → grossa) */
   pens: Pen[];
@@ -186,7 +196,7 @@ export const DEFAULT_PROFILE: MachineProfile = {
     maxDescentMm: 900,
     onOverload: "wait",
   },
-  join: { searchMm: 3, overInk: true },
+  join: { searchMm: 3, overInk: true, retraceMm: 25, visibleMm: 0.3 },
   // ordem de plotagem de REGRAS_GCODE.md: cor -> fina -> grossa (a grossa cobre as pontas da fina)
   pens: [
     { id: "verde", name: "Verde 0,4", widthMm: 0.4, color: "#12805c", offsetX: 0, offsetY: 0 },
@@ -351,6 +361,8 @@ export function validateProfile(p: MachineProfile): string[] {
   if (p.servo.peakPer60s < p.servo.avgPerMin) e.push("O pico do servo em 60 s não pode ser menor que a média por minuto.");
   range(p.servo.maxDescentMm, 10, 100000, "Traço máximo por descida (mm)");
   range(p.join.searchMm, 0, 50, "Distância de busca para emendar (mm)");
+  range(p.join.retraceMm, 0, 200, "Andar por cima da tinta até (mm)");
+  range(p.join.visibleMm, 0, 2, "Emenda que pode aparecer (mm)");
 
   const ids = new Set<string>();
   for (const pen of p.pens) {

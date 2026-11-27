@@ -4,7 +4,8 @@ import { dist, type Vec } from "../geometry/vec";
 import { penOf, type MachineProfile, type Pen } from "../machine";
 import type { JobSettings } from "../store";
 import { checkBounds, checkZone } from "./bounds";
-import { bridgeIsHidden, createInkMap, stampStroke, strokeCovered } from "./inkmap";
+import { bridgeExposedMm, bridgeIsHidden, createInkMap, stampStroke, strokeCovered } from "./inkmap";
+import { buildInkGraph, InkSearch } from "./inkpath";
 import { layersOf, registrationCrosses, usesRegistration, type Layer } from "./layers";
 import { capDescents, keepOrder, orderStrokes, travelLength } from "./optimize";
 import { scheduleJob } from "./schedule";
@@ -14,6 +15,8 @@ import type { BoundsViolation, JobPlan, OrderedStroke, PlanLayer, Stroke } from 
 
 /** REGRAS_GCODE.md, regra 4: traço com menos de 3× a largura da caneta, totalmente coberto por outro, some. */
 const HIDDEN_MAX_PEN_WIDTHS = 3;
+/** Caminho pela tinta: maior salto entre dois traços que se encostam (a reta tem de ficar sobre a tinta) */
+const HOP_MAX_MM = 1.5;
 
 export interface PlanOptions {
   /** Onde a caneta está (padrão: a posição final do perfil, para onde a máquina volta) */
@@ -102,13 +105,28 @@ function planLayer(
       hiddenDropped = dropped.size;
       if (dropped.size) strokes = mine.filter((_, i) => !dropped.has(i));
     }
+    // a ligação vale se não aparece, ou se o que aparece fica dentro da tolerância do perfil
+    // (nunca mais que uma largura da caneta: na fina, 0,3 mm de emenda já é um risco)
+    const visible = Math.min(pen, Math.max(0, profile.join.visibleMm ?? 0));
+    const bridgeHidden = ink
+      ? visible > 0
+        ? (a: Vec, b: Vec) => bridgeExposedMm(ink, a, b, visible) <= visible
+        : (a: Vec, b: Vec) => bridgeIsHidden(ink, a, b, pen)
+      : undefined;
+    // caminho pela tinta: só com o mapa (é ele que confirma os saltos entre traços que se encostam)
+    const retrace = profile.join.retraceMm ?? 0;
+    const route =
+      ink && retrace > 0
+        ? { search: new InkSearch(buildInkGraph(strokes, { gapMm: pen, hiddenHopMm: Math.min(profile.join.searchMm, HOP_MAX_MM), hidden: bridgeHidden })), maxMm: retrace }
+        : undefined;
     ordered = orderStrokes(strokes, {
       start: orderStart,
       joinGapMm: pen,
       allowReverse: true,
       rotateClosed: true,
       searchMm: profile.join.searchMm,
-      bridgeHidden: ink ? (a, b) => bridgeIsHidden(ink, a, b, pen) : undefined,
+      bridgeHidden,
+      route,
     });
   }
   // Correção da ponta (seção 7): a caneta risca `offset` além de onde a máquina acha que está, então a
@@ -169,6 +187,7 @@ function planLayer(
       estimate: sched.estimate,
       strokeStartTimesS: sched.strokeStartTimesS,
       joinInkMm,
+      retraceMm: ordered.reduce((a, s) => a + (s.retraceMm ?? 0), 0),
       hiddenDropped,
       overloads: sched.overloads,
       checkpoints: sched.checkpoints,

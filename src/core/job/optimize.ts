@@ -1,4 +1,5 @@
 import { dist, type Vec } from "../geometry/vec";
+import type { InkSearch } from "./inkpath";
 import type { OrderedStroke, Stroke } from "./types";
 
 export interface OrderOptions {
@@ -14,6 +15,11 @@ export interface OrderOptions {
   readonly searchMm?: number;
   /** A ligação reta de a até b ficaria escondida (por cima de tinta)? Sem isto, só vale `joinGapMm`. */
   readonly bridgeHidden?: (a: Vec, b: Vec) => boolean;
+  /**
+   * Caminho pela tinta (inkpath.ts): sem emenda reta, a caneta ainda pode andar embaixo por cima das
+   * linhas do desenho até o próximo traço, se o caminho tiver até `maxMm`. O grafo tem de ser o destes `strokes`.
+   */
+  readonly route?: { readonly search: InkSearch; readonly maxMm: number };
 }
 
 const CELL = 10; // mm
@@ -160,6 +166,8 @@ export function orderStrokes(strokes: readonly Stroke[], opts: OrderOptions): Or
   const used = new Uint8Array(strokes.length);
   const out: OrderedStroke[] = [];
   let cur = opts.start;
+  /** Nó do grafo da tinta onde a caneta está (−1 = fora do desenho, no começo) */
+  let curNode = -1;
   const reach = Math.max(opts.joinGapMm, opts.bridgeHidden ? (opts.searchMm ?? 0) : 0);
   for (let count = 0; count < strokes.length; count++) {
     let e: Entry | undefined;
@@ -179,13 +187,35 @@ export function orderStrokes(strokes: readonly Stroke[], opts: OrderOptions): Or
       e = near ?? bridge;
       joined = !!e;
     }
-    // 2) senão, o mais próximo, com a caneta levantada
+    // 2) senão, andando embaixo pelo caminho da tinta
+    let path: Vec[] | undefined;
+    if (!e && opts.route && curNode >= 0) {
+      const r = opts.route.search.nearestEntry(curNode, opts.route.maxMm, used);
+      if (r) {
+        const p = strokes[r.stroke].points;
+        const at = r.vertex === -1 ? p[p.length - 1] : p[r.vertex];
+        e = { stroke: r.stroke, vertex: r.vertex, x: at.x, y: at.y, order: -1 };
+        joined = true;
+        path = r.path.slice(0, -1); // o último ponto do caminho é a entrada do traço
+      }
+    }
+    // 3) senão, o mais próximo, com a caneta levantada
     e ??= grid.nearest(cur, used);
     if (!e) break;
     used[e.stroke] = 1;
     const s = orient(strokes[e.stroke], e);
-    out.push({ ...s, joinedToPrevious: joined });
+    // o caminho pela tinta entra no começo do traço: a caneta o percorre embaixo antes de desenhar
+    if (path?.length) {
+      let retraceMm = 0;
+      for (let j = 0; j < path.length; j++) retraceMm += dist(path[j], j + 1 < path.length ? path[j + 1] : s.points[0]);
+      out.push({ ...s, points: [...path, ...s.points], closed: false, joinedToPrevious: joined, retraceMm });
+    } else out.push({ ...s, joinedToPrevious: joined });
     cur = s.points[s.points.length - 1];
+    if (opts.route) {
+      const n = strokes[e.stroke].points.length;
+      const endVertex = strokes[e.stroke].closed ? Math.max(0, e.vertex) : e.vertex === -1 ? 0 : n - 1;
+      curNode = opts.route.search.node(e.stroke, endVertex);
+    }
   }
   // traços vazios (sem pontos) não entram
   return out;

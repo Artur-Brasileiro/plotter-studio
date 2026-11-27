@@ -187,6 +187,32 @@ export function strokeCovered(m: InkMap, points: readonly Vec[]): boolean {
 }
 
 /**
+ * Quanto da ligação reta de `a` até `b` APARECERIA (mm de eixo fora da tinta): os pedaços em que o eixo
+ * ou uma das bordas do risco (menos a tolerância de 0,1 mm) cai fora da tinta do mapa. 0 = escondida.
+ * Para quando passar de `stopAboveMm` (a resposta já é "aparece demais").
+ */
+export function bridgeExposedMm(m: InkMap, a: Vec, b: Vec, stopAboveMm = Infinity): number {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1e-9) return 0;
+  const side = Math.max(0, m.penMm / 2 - slackOf(m.penMm));
+  const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+  const nx = -uy * side, ny = ux * side;
+  const n = Math.max(2, Math.ceil(len / (m.cellMm / 2)));
+  const step = len / n;
+  let out = 0;
+  for (let k = 0; k < n; k++) {
+    const t = (k + 0.5) / n;
+    const x = a.x + (b.x - a.x) * t;
+    const y = a.y + (b.y - a.y) * t;
+    if (!inked(m, x, y) || (side > 0 && (!inked(m, x + nx, y + ny) || !inked(m, x - nx, y - ny)))) {
+      out += step;
+      if (out > stopAboveMm) return out;
+    }
+  }
+  return out;
+}
+
+/**
  * A ligação reta de `a` até `b`, desenhada com a caneta embaixo, ficaria escondida? (regra 1)
  * Exige tinta no eixo da ligação e nas duas bordas dela (menos a tolerância de 0,1 mm): a ligação
  * inteira, com a largura dela, cai sobre tinta, e não só o miolo.

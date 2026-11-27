@@ -19,6 +19,11 @@ export interface OrderedStroke extends Stroke {
    * no ponto onde o traço anterior parou. Só faz sentido com `joinedToPrevious`.
    */
   readonly relift?: boolean;
+  /**
+   * Caminho pela tinta (inkpath.ts): os primeiros pontos deste traço não são dele, são o caminho que a
+   * caneta faz EMBAIXO por cima de linhas do desenho para chegar até ele. Comprimento desse caminho (mm).
+   */
+  readonly retraceMm?: number;
 }
 
 export type FeedClass = "straight" | "curve" | "tight";
@@ -91,6 +96,8 @@ export interface JobStats {
   readonly strokeStartTimesS: readonly number[];
   /** Tinta a mais criada pelas ligações das emendas (mm) */
   readonly joinInkMm: number;
+  /** Quanto a caneta andou embaixo por cima de linhas do desenho, no caminho pela tinta (mm; já está nos traços) */
+  readonly retraceMm: number;
   /** Traços curtos escondidos por outra tinta, que foram retirados */
   readonly hiddenDropped: number;
   /** Descidas que tiveram de esperar (ou que estouraram o limite, se a espera está desligada) */

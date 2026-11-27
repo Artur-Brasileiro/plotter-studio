@@ -755,7 +755,8 @@ describe("FIRME — sorteio: arquivo inteiro, cada parte e retomadas de várias 
           // nada some a não ser os tracinhos escondidos (cada um com menos de 3 larguras de caneta)
           const want = all.filter((s) => mine.has(s.drawingId)).reduce((a, s) => a + polylineLength(s.points), 0);
           const got = body.reduce((a, s) => a + polylineLength(s.points), 0);
-          expect(got, `${tagCase}: comprimento da camada`).toBeLessThanOrEqual(want + 1e-6);
+          // (o caminho pela tinta é risco de propósito, por cima de linhas do desenho: entra na conta, e só ele)
+          expect(got, `${tagCase}: comprimento da camada`).toBeLessThanOrEqual(want + plan.stats.retraceMm + 1e-6);
           expect(got, `${tagCase}: comprimento da camada`).toBeGreaterThanOrEqual(want - plan.stats.hiddenDropped * 3 * plan.layer!.penWidthMm - 1e-6);
         }
 

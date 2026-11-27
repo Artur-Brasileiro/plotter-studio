@@ -124,6 +124,20 @@ const GROUPS: Group[] = [
       { path: "servo.maxDescentMm", label: "Traço máximo por descida (mm)", help: "Depois disso a caneta sobe e desce no mesmo ponto. 900 mm ≈ 2 min a F500.", min: 10, max: 100000 },
       { path: "join.searchMm", label: "Procurar emenda até (mm)", help: "Distância em que se procura um traço que dê para emendar sem aparecer.", min: 0, max: 50 },
       { path: "join.overInk", label: "Emendar por cima de tinta", help: "A ligação entre dois traços pode ser desenhada quando passa inteira sobre tinta do próprio desenho.", bool: true },
+      {
+        path: "join.retraceMm",
+        label: "Andar por cima da tinta até (mm)",
+        help: "Em vez de subir, a caneta volta EMBAIXO por cima de uma linha que já está no desenho até o próximo traço, se o caminho for até deste tamanho. Não aparece no papel e poupa o servo. 0 desliga.",
+        min: 0,
+        max: 200,
+      },
+      {
+        path: "join.visibleMm",
+        label: "Emenda que pode aparecer (mm)",
+        help: "Quando duas linhas quase se encostam, a caneta pode ir embaixo de uma até a outra se o pedacinho que aparece no papel for até deste tamanho (nunca mais que a largura da caneta). Maior = menos subidas; 0 = só o que não aparece.",
+        min: 0,
+        max: 2,
+      },
     ],
   },
   {

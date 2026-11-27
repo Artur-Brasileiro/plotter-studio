@@ -1,4 +1,4 @@
-# Progresso da v3 (trabalho da noite de 21 para 22/11/2026)
+# Progresso da v3 (começou na noite de 21 para 22/11/2026; última entrada: 27/11/2026)
 
 Ramo: `v3-regras-e-vetorizador`. **Nada foi publicado**: a versão no ar (ramo `main`) não mudou.
 **Nada foi enviado para a máquina real**: tudo foi testado com testes automáticos, com o simulador (`?sim=1`)
@@ -287,6 +287,43 @@ um pouco era quase impossível voltar a deixá-lo reto. Pediu uma trava de propo
   partir do ângulo antigo (30 + 90 dava 90). Agora dá 120.
 - Conferido no navegador com o mouse de verdade (roteiro de teste automático): canto puxado torto mantém a
   proporção (1,2632 antes e depois), com e sem Shift; 87,5° encaixa em 90 exatos; −3° encaixa em 0.
+
+## Acrescentado em 27/11/2026, de madrugada: caneta que não sobe à toa, tesoura, mover e corpo da caneta
+
+Pedidos do Artur enquanto a máquina plotava o Eren (ele estava pelo SITE; nada disto foi publicado, e nenhum
+servidor desta pasta servia a página da máquina). Tudo testado com testes automáticos e num Chrome dirigido por
+script; **nada rodou na máquina ainda**.
+
+- **A caneta subia e descia no mesmo lugar, ou em cima da linha que acabou de fazer.** Medido no próprio desenho
+  dele (a imagem vetorizada no programa, tipo Preto e branco, girada e encaixada na folha): 6.116 subidas, 1.164
+  descendo em cima de tinta já feita, 72 min só de pausas do servo. Duas regras novas de emenda
+  (`docs/REGRAS_GCODE.md`, regra 1):
+  - **Pelo caminho da tinta** (`src/core/job/inkpath.ts`): sem emenda reta, a caneta anda EMBAIXO por cima das
+    linhas do próprio desenho até o próximo traço (até 25 mm de caminho). Não aparece: ela passa exatamente onde
+    já tem (ou vai ter) tinta.
+  - **Emenda que pode aparecer**: a ligação pode deixar até 0,3 mm fora da tinta (nunca mais que a largura da
+    caneta). Fecha as frestas entre linhas que quase se encostam.
+
+  | No desenho do Eren | Subidas | Tempo | Pausas do servo | Descanso do servo |
+  |---|---|---|---|---|
+  | Antes | 6.116 | 4 h 03 | 72 min | 23 min |
+  | Só o caminho pela tinta | 3.397 | 3 h 36 | 40 min | 1,4 min |
+  | **Os dois (padrão)** | **2.110** | **3 h 28** | **25 min** | **0,5 min** |
+  | Os dois, emenda de 0,5 mm | 1.598 | 3 h 23 | 20 min | 0,2 min |
+
+  No tipo Foto da mesma imagem: 2.479 → 1.692 subidas (o tempo sobe ~2 min: andar por cima da tinta às vezes
+  demora mais que subir; o servo agradece). O arquivo inteiro passa na auditoria. Os dois valores ficam em
+  Configurações → Proteção do servo ("Andar por cima da tinta até", "Emenda que pode aparecer").
+- **Tesoura** na tela de traços (agora "Editar traços"): clique num ponto de uma linha e ela vira duas, exato
+  também nas curvas. Para pintar só um pedaço de uma linha comprida com outra caneta.
+- **Mover traços**: ferramenta Mover (arrastar) ou setas do teclado (0,5 mm; com Shift, 5 mm) movem os marcados.
+  Teclas 1, 2 e 3 trocam a ferramenta. O Desfazer da tela desfaz tudo (guarda uma foto antes de cada ação).
+  **Mudou:** o botão de sair só guarda; antes ele apagava os marcados. Apagar é no botão ou na tecla Delete
+  (marcar agora serve também para pintar e mover).
+- **Corpo da caneta**: cada caneta pode ter o diâmetro do corpo; o estojo diz como o suporte segura (parede, V de
+  90° ou centralizada) e para que lado a ponta vai quando a caneta é mais grossa. A ponta fica no centro da
+  caneta, e o programa corrige sozinho (`tipOffset`). Caneta sem Corpo continua como antes. **Os padrões
+  (referência 10 mm, parede, ponta para X+) são chute:** o Artur precisa medir.
 
 ## Acrescentado em 23/11/2026: o primeiro desenho na máquina, a tela de plotagem e o som
 

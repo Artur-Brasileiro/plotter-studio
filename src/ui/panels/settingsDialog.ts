@@ -98,11 +98,11 @@ const GROUPS: Group[] = [
       {
         path: "penHolder.kind",
         label: "Como o suporte segura a caneta",
-        help: "A ponta fica no centro da caneta: numa caneta mais grossa, o centro sai do lugar. O programa corrige sozinho pelo Corpo de cada caneta.",
+        help: "A ponta fica no centro da caneta: numa caneta 2 mm mais grossa, a ponta anda 1 mm se ela encosta numa parede, 1,4 mm num V de 90° e nada se o suporte centraliza. O programa corrige sozinho pelo Corpo de cada caneta.",
         options: [
-          ["wall", "Encostada numa parede (a ponta anda metade da diferença)"],
-          ["v90", "Num V de 90° (a ponta anda 0,71 da diferença)"],
-          ["center", "O suporte centraliza (a ponta não anda)"],
+          ["wall", "Encostada numa parede"],
+          ["v90", "Num V de 90°"],
+          ["center", "Centralizada (aperta por todos os lados)"],
         ],
       },
       {
@@ -420,7 +420,7 @@ export function createSettingsDialog(store: Store): { open: () => void } {
       h(
         "p",
         { class: "help" },
-        "Ponta X / Y: quanto a ponta desta caneta fica deslocada no suporte em relação à de referência. Rode a 1ª cruz, fotografe, meça com o braço da cruz e ponha o valor aqui: a camada inteira sai corrigida. Na fina 0,03 mediu-se +1,0 mm em X.",
+        "Corpo: a grossura (diâmetro) da caneta onde o suporte aperta. A ponta fica no centro da caneta, então numa caneta mais grossa ou mais fina que a de referência o programa já corrige sozinho onde a máquina deve ir (veja o suporte, logo abaixo). Vazio = igual à de referência. Ponta X / Y: o ajuste fino que sobrar, medido nas cruzes: rode a 1ª cruz, fotografe, meça com o braço da cruz e ponha o valor aqui. Na fina 0,03 mediu-se +1,0 mm em X (antes de existir o Corpo: quem preencher o Corpo dela deve zerar este valor e medir de novo).",
       ),
     );
   };

@@ -85,7 +85,7 @@ Regras que não podem quebrar ao mexer aqui: o gerador nunca escreve `G0` com a 
 - `src/core/trace/kind.ts`: mede a imagem antes de traçar. Diz se ela é um desenho de linhas (aí a tela indica o tipo Traço ou Preto e branco, e avisa quem escolher Ilustração ou Foto) e se tem grade no fundo (aí "Linhas claras" desce sozinho).
 - As camadas de uma imagem (uma por caneta) chegam à mesa como desenhos do mesmo conjunto (`Drawing.group`): mesma posição, um objeto só na mesa.
 - Roda num Web Worker (`src/trace/`); a tela é `src/ui/trace/traceDialog.ts`, carregada sob demanda. O tempo de máquina que ela mostra vem do planejador de verdade, em outro worker (`src/trace/planWorker.ts`).
-- A cor do papel (`src/ui/paper.ts`) é só da tela: a mesa, a vetorização e a tela de apagar ou pintar traços (`src/ui/strokeEditor.ts`, com o núcleo em `src/core/strokeEdit.ts`; pintar = passar os traços marcados para outra caneta, que vira uma camada do mesmo conjunto, `applyStrokeEdits`) pintam a folha com ela. O G-code não muda.
+- A cor do papel (`src/ui/paper.ts`) é só da tela: a mesa, a vetorização e a tela Editar traços (`src/ui/strokeEditor.ts`, com o núcleo em `src/core/strokeEdit.ts`: apagar; pintar = passar os traços marcados para outra caneta, que vira uma camada do mesmo conjunto, `applyStrokeEdits`; cortar uma linha num ponto, `cutSubpath`, exato também nas curvas; mover os marcados, `translateSubpaths`; o desfazer da tela guarda fotos do estado) pintam a folha com ela. O G-code não muda.
 - Imagens de terceiros não vão para o repositório: as fixtures são formas sintéticas.
 
 ## Texto (v3)

@@ -3,7 +3,23 @@ import { addDrawing, createDrawing, EMPTY_DOCUMENT, type PlotDocument } from "./
 import { IDENTITY, scaling, translation, type Mat2D } from "./geometry/mat2d";
 import { ellipseSubPath, type Geometry, type SubPath } from "./geometry/path";
 import { DEFAULT_PROFILE } from "./machine";
-import { applyStrokeEdits, polylineLength, removeStrokes, removeSubpaths, sceneStrokes, StrokeIndex } from "./strokeEdit";
+import {
+  applyStrokeEdits,
+  cutGeometry,
+  cutSubpath,
+  nearestOnSubpath,
+  pointOnSegment,
+  polylineLength,
+  removeStrokes,
+  removeSubpaths,
+  sceneDeltaToLocal,
+  sceneStrokes,
+  StrokeIndex,
+  translateSubpaths,
+  withGeometries,
+} from "./strokeEdit";
+import { flattenSubPath } from "./geometry/flatten";
+import { rotationDeg, multiply } from "./geometry/mat2d";
 
 const line = (x0: number, y0: number, x1: number, y1: number): SubPath => ({ start: { x: x0, y: y0 }, segments: [{ kind: "line", to: { x: x1, y: y1 } }], closed: false });
 
@@ -318,5 +334,109 @@ describe("applyStrokeEdits: apagar e passar traços para outra caneta (subcamada
     const b = doc.drawings.find((d) => d.id === "b")!;
     expect(a.geometry.subpaths).toEqual([three.subpaths[1], three.subpaths[2], line(50, 0, 60, 0)]);
     expect(b.geometry.subpaths).toEqual([three.subpaths[0]]);
+  });
+});
+
+describe("cortar um traço (tesoura)", () => {
+  const poly = line(0, 0, 10, 0);
+  const L: SubPath = { start: { x: 0, y: 0 }, segments: [{ kind: "line", to: { x: 10, y: 0 } }, { kind: "line", to: { x: 10, y: 10 } }], closed: false };
+  const lengthOf = (sp: SubPath) => polylineLength(flattenSubPath(sp, 0.001).points.flatMap((q) => [q.x, q.y]));
+
+  it("aberto: vira dois, que se encontram no ponto do corte", () => {
+    const [a, b] = cutSubpath(L, 0, 0.3);
+    expect(a.segments.at(-1)!.to).toEqual({ x: 3, y: 0 });
+    expect(b.start).toEqual({ x: 3, y: 0 });
+    expect(b.segments.at(-1)!.to).toEqual({ x: 10, y: 10 });
+    expect(lengthOf(a) + lengthOf(b)).toBeCloseTo(20, 9);
+  });
+
+  it("no vértice: corta ali, sem criar trecho de comprimento zero", () => {
+    const [a, b] = cutSubpath(L, 0, 1);
+    expect(a.segments).toHaveLength(1);
+    expect(b.segments).toHaveLength(1);
+    expect(b.start).toEqual({ x: 10, y: 0 });
+  });
+
+  it("na ponta de um traço aberto: não muda nada", () => {
+    expect(cutSubpath(poly, 0, 0)).toEqual([poly]);
+    expect(cutSubpath(poly, 0, 1)).toEqual([poly]);
+  });
+
+  it("laço: vira UM traço aberto que começa e termina no corte, com o mesmo comprimento", () => {
+    const circle = ellipseSubPath(0, 0, 10, 10);
+    const pieces = cutSubpath(circle, 1, 0.5);
+    expect(pieces).toHaveLength(1);
+    const [o] = pieces;
+    expect(o.closed).toBe(false);
+    expect(o.segments.at(-1)!.to.x).toBeCloseTo(o.start.x, 9);
+    expect(o.segments.at(-1)!.to.y).toBeCloseTo(o.start.y, 9);
+    expect(lengthOf(o)).toBeCloseTo(lengthOf(circle), 3);
+  });
+
+  it("curva: os dois pedaços refazem exatamente a curva de antes", () => {
+    const c: SubPath = { start: { x: 0, y: 0 }, segments: [{ kind: "cubic", c1: { x: 0, y: 10 }, c2: { x: 10, y: 10 }, to: { x: 10, y: 0 } }], closed: false };
+    const [a, b] = cutSubpath(c, 0, 0.4);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const q = pointOnSegment(a, 0, t), want = pointOnSegment(c, 0, 0.4 * t);
+      expect(q.x).toBeCloseTo(want.x, 9);
+      expect(q.y).toBeCloseTo(want.y, 9);
+      const r = pointOnSegment(b, 0, t), want2 = pointOnSegment(c, 0, 0.4 + 0.6 * t);
+      expect(r.x).toBeCloseTo(want2.x, 9);
+      expect(r.y).toBeCloseTo(want2.y, 9);
+    }
+  });
+
+  it("cutGeometry põe os pedaços no lugar do traço cortado, na ordem", () => {
+    const g = cutGeometry(three, 1, 0, 0.5);
+    expect(g.subpaths).toHaveLength(4);
+    expect(g.subpaths[0]).toBe(three.subpaths[0]);
+    expect(g.subpaths[1].segments[0].to).toEqual({ x: 5, y: 5 });
+    expect(g.subpaths[2].start).toEqual({ x: 5, y: 5 });
+    expect(g.subpaths[3]).toBe(three.subpaths[2]);
+  });
+});
+
+describe("nearestOnSubpath: onde o clique cai no traço", () => {
+  it("reta: a projeção exata", () => {
+    const r = nearestOnSubpath(line(0, 0, 10, 0), { x: 4, y: 3 })!;
+    expect([r.seg, r.t, r.point.x, r.point.y, r.dist]).toEqual([0, 0.4, 4, 0, 3]);
+  });
+
+  it("círculo: o ponto do círculo na direção do clique", () => {
+    const r = nearestOnSubpath(ellipseSubPath(0, 0, 10, 10), { x: 20, y: 20 })!;
+    expect(Math.hypot(r.point.x, r.point.y)).toBeCloseTo(10, 2);
+    expect(r.point.x).toBeCloseTo(r.point.y, 2);
+    expect(r.dist).toBeCloseTo(Math.hypot(20, 20) - 10, 2);
+  });
+});
+
+describe("mover traços", () => {
+  it("translateSubpaths desloca só os indicados (curvas inteiras, com os pontos de controle)", () => {
+    const c: SubPath = { start: { x: 0, y: 0 }, segments: [{ kind: "cubic", c1: { x: 0, y: 1 }, c2: { x: 1, y: 1 }, to: { x: 1, y: 0 } }], closed: false };
+    const g = translateSubpaths({ subpaths: [c, line(0, 0, 1, 0)] }, [0], { x: 2, y: 3 });
+    expect(g.subpaths[0]).toEqual({ start: { x: 2, y: 3 }, segments: [{ kind: "cubic", c1: { x: 2, y: 4 }, c2: { x: 3, y: 4 }, to: { x: 3, y: 3 } }], closed: false });
+    expect(g.subpaths[1]).toEqual(line(0, 0, 1, 0));
+  });
+
+  it("sem deslocamento ou sem traço, devolve a mesma geometria", () => {
+    expect(translateSubpaths(three, [0], { x: 0, y: 0 })).toBe(three);
+    expect(translateSubpaths(three, [], { x: 1, y: 0 })).toBe(three);
+  });
+
+  it("sceneDeltaToLocal: o deslocamento na mesa vira o do desenho (girado e em escala)", () => {
+    const m = multiply(translation(100, 50), multiply(rotationDeg(90), scaling(2)));
+    const d = sceneDeltaToLocal(m, { x: 0, y: 4 });
+    // levado de volta para a mesa, dá o deslocamento pedido
+    expect(m[0] * d.x + m[2] * d.y).toBeCloseTo(0, 9);
+    expect(m[1] * d.x + m[3] * d.y).toBeCloseTo(4, 9);
+  });
+
+  it("withGeometries troca a geometria e refaz a caixa; sem mudança, o mesmo documento", () => {
+    const before = docWith(three);
+    const g = translateSubpaths(three, [2], { x: 0, y: 10 });
+    const after = withGeometries(before, new Map([["d1", g]]));
+    expect(after.drawings[0].geometry).toBe(g);
+    expect(after.drawings[0].localBBox.maxY).toBe(20);
+    expect(withGeometries(before, new Map([["d1", three]]))).toBe(before);
   });
 });

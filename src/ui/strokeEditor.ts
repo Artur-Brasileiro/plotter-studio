@@ -4,7 +4,19 @@ import { meanScale } from "../core/geometry/mat2d";
 import type { Geometry } from "../core/geometry/path";
 import { penOf } from "../core/machine";
 import type { Store } from "../core/store";
-import { applyStrokeEdits, sceneStrokes, StrokeIndex, type EditStroke } from "../core/strokeEdit";
+import {
+  applyStrokeEdits,
+  cutGeometry,
+  nearestOnSubpath,
+  sceneDeltaToLocal,
+  sceneStrokes,
+  StrokeIndex,
+  translateSubpaths,
+  withGeometries,
+  type EditStroke,
+} from "../core/strokeEdit";
+import { transformGeometry } from "../core/geometry/path";
+import type { Vec } from "../core/geometry/vec";
 import { expandToGroups } from "../core/document";
 import { append, clear, h, toast } from "./dom";
 import { onPaperChange, paperColor } from "./paper";
@@ -43,9 +55,11 @@ const nf = (v: number) => v.toLocaleString("pt-BR");
 const plural = (n: number, one: string, many: string) => `${nf(n)} ${n === 1 ? one : many}`;
 
 /**
- * Tela "Apagar ou pintar traços" (Editar traços): os desenhos escolhidos aparecem grandes, cada traço (cada descida da caneta) pode
- * ser marcado com um clique ou com um retângulo, e Delete tira os marcados. "Guardar e voltar" guarda o
- * desenho sem eles, numa mudança só, que o Ctrl+Z da mesa desfaz. Nada aqui chega à máquina.
+ * Tela "Editar traços": os desenhos escolhidos aparecem grandes e cada traço (cada descida da caneta) pode
+ * ser marcado com um clique ou com um retângulo. Com os marcados: Delete apaga, um botão de caneta passa
+ * para outra caneta (subcamada), a ferramenta Mover (ou as setas) muda de lugar. A ferramenta Cortar divide
+ * uma linha no ponto clicado. "Guardar e voltar" guarda tudo numa mudança só, que o Ctrl+Z da mesa desfaz.
+ * Nada aqui chega à máquina. O desfazer DESTA tela guarda uma foto do estado antes de cada ação.
  *
  * Com mais de um desenho (as camadas de uma imagem, uma por caneta), a pessoa escolhe AQUI em qual camada
  * quer mexer: só os traços dela podem ser marcados, e as outras ficam apagadinhas, só para localizar.
@@ -63,32 +77,43 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   const doc = store.doc;
   const edited = doc.drawings.filter((d) => ids.includes(d.id));
   const others = doc.drawings.filter((d) => !ids.includes(d.id));
-  const strokes: EditStroke[] = edited.flatMap((d) => sceneStrokes(d, profile.tolerance.chordMm));
+  const tol = profile.tolerance.chordMm;
+  /**
+   * A geometria de cada desenho NESTA tela: começa igual à do documento e muda com a tesoura e o mover.
+   * Só vai para o documento no "Guardar e voltar".
+   */
+  let geoms = new Map<DrawingId, Geometry>(edited.map((d) => [d.id, d.geometry]));
+  const working = (d: Drawing): Drawing => ({ ...d, geometry: geoms.get(d.id)! });
+  let strokes: EditStroke[] = edited.flatMap((d) => sceneStrokes(d, tol));
   if (strokes.length === 0) {
     toast("Não há traços para apagar neste desenho.", "warn");
     return;
   }
-  const n = strokes.length;
-  const index = new StrokeIndex(strokes.map((s) => s.points));
+  let n = strokes.length;
+  let index = new StrokeIndex(strokes.map((s) => s.points));
   /** 1 = apagado nesta tela */
-  const removed = new Uint8Array(n);
+  let removed = new Uint8Array(n);
   /** 0 = como o "Marcar os curtos" decidir; 1 = marcado à mão; 2 = desmarcado à mão */
-  const manual = new Uint8Array(n);
+  let manual = new Uint8Array(n);
   let shortMm = 0;
   /** A caneta de cada desenho editado, já resolvida (sem caneta = a padrão do perfil) */
   const ownPen = new Map(edited.map((d) => [d.id, penOf(profile, d.penId).id]));
   /** Caneta para a qual o traço foi passado nesta tela; undefined = continua na caneta do desenho */
-  const penTo: (string | undefined)[] = new Array(n).fill(undefined);
-  /** Cada Delete ou troca de caneta é uma entrada: os traços daquela vez (e a caneta que tinham antes) */
-  type UndoEntry = { kind: "remove"; list: number[] } | { kind: "pen"; list: number[]; before: (string | undefined)[] };
-  const undoStack: UndoEntry[] = [];
+  let penTo: (string | undefined)[] = new Array(n).fill(undefined);
+  /**
+   * Desfazer: cada ação (apagar, trocar a caneta, cortar, mover) guarda antes uma foto da tela inteira.
+   * A lista de traços sai da geometria, então a foto da geometria basta para refazê-la igual.
+   */
+  type Snapshot = { geoms: Map<DrawingId, Geometry>; removed: Uint8Array<ArrayBuffer>; manual: Uint8Array<ArrayBuffer>; penTo: (string | undefined)[] };
+  const undoStack: Snapshot[] = [];
+  const pushUndo = () => undoStack.push({ geoms: new Map(geoms), removed: removed.slice(), manual: manual.slice(), penTo: penTo.slice() });
   /** A camada em que a pessoa está mexendo; undefined = todas */
   let activeLayer: DrawingId | undefined = edited.length > 1 && edited.some((d) => d.id === focusId) ? focusId : undefined;
   const inLayer = (i: number) => activeLayer === undefined || strokes[i].drawingId === activeLayer;
   // "Marcar os curtos" só vale para a camada escolhida; as marcas feitas à mão valem onde foram feitas
   const isMarked = (i: number) => !removed[i] && (manual[i] === 1 || (manual[i] === 0 && inLayer(i) && strokes[i].lengthMm < shortMm));
   /** 1 = o mouse não pega este traço: já foi apagado, ou é de outra camada */
-  const blocked = new Uint8Array(n);
+  let blocked = new Uint8Array(n);
   const refreshBlocked = () => {
     for (let i = 0; i < n; i++) blocked[i] = removed[i] || !inLayer(i) ? 1 : 0;
   };
@@ -96,24 +121,73 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
 
   // de subcaminho do desenho → número do traço nesta tela (−1 = subcaminho vazio, que não é traço)
   const strokeOfSubpath = new Map<DrawingId, Int32Array>();
-  for (const d of edited) strokeOfSubpath.set(d.id, new Int32Array(d.geometry.subpaths.length).fill(-1));
-  strokes.forEach((s, i) => (strokeOfSubpath.get(s.drawingId)![s.subpath] = i));
+  const indexSubpaths = () => {
+    for (const d of edited) strokeOfSubpath.set(d.id, new Int32Array(geoms.get(d.id)!.subpaths.length).fill(-1));
+    strokes.forEach((s, i) => (strokeOfSubpath.get(s.drawingId)![s.subpath] = i));
+  };
+  indexSubpaths();
   const basePaths = new Map<DrawingId, Path2D>();
   /** Os traços de cada desenho que foram passados para outra caneta, um caminho por caneta */
   const movedPaths = new Map<DrawingId, Map<string, Path2D>>();
   const rebuildBase = (d: Drawing) => {
     const map = strokeOfSubpath.get(d.id)!;
-    basePaths.set(d.id, pathOf(d.geometry, (sp) => map[sp] < 0 || (!removed[map[sp]] && penTo[map[sp]] === undefined)));
+    const g = geoms.get(d.id)!;
+    basePaths.set(d.id, pathOf(g, (sp) => map[sp] < 0 || (!removed[map[sp]] && penTo[map[sp]] === undefined)));
     const pens = new Set<string>();
     for (const i of map) if (i >= 0 && !removed[i] && penTo[i] !== undefined) pens.add(penTo[i]!);
-    movedPaths.set(d.id, new Map([...pens].map((pen) => [pen, pathOf(d.geometry, (sp) => map[sp] >= 0 && !removed[map[sp]] && penTo[map[sp]] === pen)])));
+    movedPaths.set(d.id, new Map([...pens].map((pen) => [pen, pathOf(g, (sp) => map[sp] >= 0 && !removed[map[sp]] && penTo[map[sp]] === pen)])));
   };
   edited.forEach(rebuildBase);
+
+  /**
+   * A geometria mudou (corte, movimento, desfazer): refaz a lista de traços e tudo o que sai dela.
+   * `remap` diz em que subcaminhos novos cada subcaminho antigo virou, para as marcas, os apagados e as
+   * canetas irem junto (o corte de um traço marcado deixa os dois pedaços marcados). Sem `remap`, o estado
+   * por traço vem de `state` (o desfazer).
+   */
+  function rebuildStrokes(remap?: (id: DrawingId, sp: number) => number[], state?: Snapshot) {
+    const old = { strokes, removed, manual, penTo };
+    strokes = edited.flatMap((d) => sceneStrokes(working(d), tol));
+    n = strokes.length;
+    index = new StrokeIndex(strokes.map((s) => s.points));
+    removed = new Uint8Array(n);
+    manual = new Uint8Array(n);
+    penTo = new Array(n).fill(undefined);
+    blocked = new Uint8Array(n);
+    if (state) {
+      removed.set(state.removed);
+      manual.set(state.manual);
+      penTo = state.penTo.slice();
+    } else {
+      const key = (id: DrawingId, sp: number) => `${id}\u0000${sp}`;
+      const at = new Map<string, number>();
+      strokes.forEach((s, i) => at.set(key(s.drawingId, s.subpath), i));
+      old.strokes.forEach((s, i) => {
+        for (const sp of remap ? remap(s.drawingId, s.subpath) : [s.subpath]) {
+          const j = at.get(key(s.drawingId, sp));
+          if (j === undefined) continue;
+          removed[j] = old.removed[i];
+          manual[j] = old.manual[i];
+          penTo[j] = old.penTo[i];
+        }
+      });
+    }
+    indexSubpaths();
+    refreshBlocked();
+    edited.forEach(rebuildBase);
+    hover = -1;
+    cutAt = undefined;
+    updateHover();
+    renderPanel();
+    repaint();
+  }
+  /** A geometria desta tela é diferente da do documento (houve corte ou movimento)? */
+  const geometryEdited = () => edited.some((d) => geoms.get(d.id) !== d.geometry);
   const contextPaths = new Map<DrawingId, Path2D>();
   const penMm = Math.max(...edited.map((d) => penOf(profile, d.penId).widthMm));
 
   // ------------------------------------------------------------------ palco
-  const dialog = h("dialog", { class: "sheet strokes", "aria-label": "Apagar ou pintar traços" });
+  const dialog = h("dialog", { class: "sheet strokes", "aria-label": "Editar traços" });
   const canvas = h("canvas");
   const stage = h("div", { class: "trace-stage", tabIndex: 0, "aria-label": "Desenho: clique num traço para marcar" }, canvas);
   const baseLayer = document.createElement("canvas");
@@ -129,6 +203,13 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   let settle: ReturnType<typeof setTimeout> | undefined;
   let pointer: { x: number; y: number } | undefined; // última posição do mouse no palco (px)
   let rect: { x0: number; y0: number; x1: number; y1: number; unmark: boolean } | undefined; // em mm da cena
+  /** Ferramenta: marcar (clique e retângulo), cortar (tesoura) ou mover os marcados */
+  type Tool = "mark" | "cut" | "move";
+  let tool: Tool = "mark";
+  /** Tesoura: onde o clique cortaria o traço embaixo do mouse (mm da cena) */
+  let cutAt: { i: number; seg: number; t: number; point: Vec } | undefined;
+  /** Mover: quanto os marcados estão sendo arrastados agora (mm da cena) */
+  let dragDelta: Vec | undefined;
 
   const bounds = (() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -261,7 +342,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
       m.strokeStyle = MARK;
       for (const d of edited) {
         const map = strokeOfSubpath.get(d.id)!;
-        const p = pathOf(d.geometry, (sp) => map[sp] >= 0 && isMarked(map[sp]));
+        const p = pathOf(geoms.get(d.id)!, (sp) => map[sp] >= 0 && isMarked(map[sp])); // a geometria DESTA tela (com os cortes)
         m.globalAlpha = 0.3;
         strokeDrawing(m, d, p, w + 6 / bz);
         m.globalAlpha = 1;
@@ -283,7 +364,37 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     c.lineCap = "round";
     c.lineJoin = "round";
     const lineMm = Math.max(penMm, 1.25 / zoom);
-    if (hover >= 0 && !rect) {
+    const polyline = (pts: Float64Array) => {
+      c.beginPath();
+      c.moveTo(pts[0], pts[1]);
+      for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
+    };
+    if (dragDelta) {
+      // os marcados acompanham o mouse (o lugar antigo continua aparecendo, por baixo)
+      c.save();
+      c.translate(dragDelta.x, dragDelta.y);
+      c.strokeStyle = HOVER;
+      c.lineWidth = lineMm + 2 / zoom;
+      for (let i = 0; i < n; i++) {
+        if (!isMarked(i)) continue;
+        polyline(strokes[i].points);
+        c.stroke();
+      }
+      c.restore();
+    } else if (tool === "cut" && cutAt && !rect) {
+      // tesoura: o traço inteiro em azul e um alvo no ponto do corte
+      polyline(strokes[cutAt.i].points);
+      c.strokeStyle = HOVER;
+      c.lineWidth = lineMm + 2 / zoom;
+      c.stroke();
+      c.beginPath();
+      c.arc(cutAt.point.x, cutAt.point.y, 5 / zoom, 0, Math.PI * 2);
+      c.fillStyle = paper;
+      c.fill();
+      c.lineWidth = 2 / zoom;
+      c.strokeStyle = MARK;
+      c.stroke();
+    } else if (hover >= 0 && !rect) {
       // embaixo do mouse: azul = "um clique marca este"; já marcado, continua vermelho, só mais grosso
       const on = isMarked(hover);
       const pts = strokes[hover].points;
@@ -314,7 +425,35 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   const count = h("p", { class: "stroke-count", "aria-live": "polite" });
   const deleteBtn = h("button", { title: "Tira do desenho os traços marcados (tecla Delete)", onclick: () => removeMarked() }, "Apagar os marcados");
   const clearBtn = h("button", { class: "quiet", title: "Tira todas as marcas (tecla Esc)", onclick: () => clearMarks() }, "Desmarcar tudo");
-  const undoBtn = h("button", { title: "Desfaz a última vez que apagou ou trocou a caneta (Ctrl+Z)", onclick: () => undoRemoval() }, "↶ Desfazer");
+  const undoBtn = h("button", { title: "Desfaz a última coisa feita nesta tela: apagar, trocar a caneta, cortar ou mover (Ctrl+Z)", onclick: () => undoRemoval() }, "↶ Desfazer");
+  // ferramentas: o que o clique faz no desenho
+  const TOOL_HINT: Record<Tool, string> = {
+    mark: "Clique num traço para marcar (fica vermelho); clique de novo para desmarcar. Arraste no vazio para marcar vários.",
+    cut: "Clique num ponto de uma linha: ela é cortada ali e vira duas (a bolinha mostra onde). Depois, marque um dos pedaços para apagar ou pintar com outra caneta.",
+    move: "Arraste um traço para movê-lo, junto com os outros marcados. As setas do teclado movem os marcados 0,5 mm (com Shift, 5 mm).",
+  };
+  const toolHint = h("p", { class: "hint" }, TOOL_HINT.mark);
+  const toolButtons = (
+    [
+      ["mark", "Marcar", "Marcar e desmarcar traços (tecla 1)"],
+      ["cut", "✂ Cortar", "Cortar uma linha num ponto (tecla 2)"],
+      ["move", "✥ Mover", "Arrastar os traços marcados para outro lugar (tecla 3)"],
+    ] as const
+  ).map(([t, label, title]) => h("button", { class: `tool-btn${t === "mark" ? " active" : ""}`, title, "aria-pressed": String(t === "mark"), onclick: () => setTool(t) }, label));
+  function setTool(t: Tool) {
+    tool = t;
+    toolButtons.forEach((b, k) => {
+      const on = (["mark", "cut", "move"] as const)[k] === t;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+    toolHint.textContent = TOOL_HINT[t];
+    stage.classList.toggle("tool-cut", t === "cut");
+    stage.classList.toggle("tool-move", t === "move");
+    cutAt = undefined;
+    updateHover();
+    invalidate();
+  }
   // passar os marcados para outra caneta: um botão por caneta do estojo
   const penButtons = profile.pens.map((pen) =>
     h(
@@ -356,6 +495,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
 
   const counts = () => {
     let marked = 0, gone = 0, moved = 0;
+    const shaped = geometryEdited();
     for (let i = 0; i < n; i++) {
       if (removed[i]) gone++;
       else {
@@ -363,12 +503,12 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
         if (penTo[i] !== undefined) moved++;
       }
     }
-    return { marked, gone, moved };
+    return { marked, gone, moved, shaped, changed: gone > 0 || moved > 0 || shaped };
   };
   /** A caneta em que o traço está agora (a do desenho, ou a que recebeu nesta tela) */
   const penNow = (i: number) => penTo[i] ?? ownPen.get(strokes[i].drawingId)!;
   function renderPanel() {
-    const { marked, gone, moved } = counts();
+    const { marked, gone, moved, changed } = counts();
     count.textContent =
       `${plural(n - gone, "traço", "traços")} · ${plural(marked, "marcado", "marcados")} · ${plural(gone, "apagado", "apagados")}` +
       (moved > 0 ? ` · ${plural(moved, "em outra caneta", "em outra caneta")}` : "");
@@ -383,8 +523,9 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
       penButtons[k].querySelector(".n")!.textContent = perPen.get(pen.id) ? nf(perPen.get(pen.id)!) : "";
     });
     // os botões de sair dizem o que vai acontecer
-    doneBtn.textContent = marked > 0 ? "Apagar os marcados e voltar" : gone > 0 || moved > 0 ? "Guardar e voltar" : "Voltar para a mesa";
-    backBtn.hidden = marked === 0 && gone === 0 && moved === 0;
+    // (as marcas sozinhas não mudam nada: servem para apagar, pintar e mover; quem quer apagar usa o botão)
+    doneBtn.textContent = changed ? "Guardar e voltar" : "Voltar para a mesa";
+    backBtn.hidden = !changed;
     if (edited.length < 2) return;
     // uma ficha por camada, com a cor da caneta e quantos traços ainda tem
     const left = new Map<DrawingId, number>();
@@ -416,8 +557,8 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     const list: number[] = [];
     for (let i = 0; i < n; i++) if (isMarked(i)) list.push(i);
     if (list.length === 0) return;
+    pushUndo();
     for (const i of list) removed[i] = 1;
-    undoStack.push({ kind: "remove", list });
     geometryChanged(list);
   }
   /** Os marcados passam para a caneta `penId` (voltar para a caneta do próprio desenho desfaz a troca). */
@@ -425,23 +566,60 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     const list: number[] = [];
     for (let i = 0; i < n; i++) if (isMarked(i)) list.push(i);
     if (list.length === 0) return;
-    const before = list.map((i) => penTo[i]);
+    pushUndo();
     for (const i of list) {
       penTo[i] = ownPen.get(strokes[i].drawingId) === penId ? undefined : penId;
       manual[i] = 2; // a marca sai: a pessoa vê a cor nova na hora
     }
-    undoStack.push({ kind: "pen", list, before });
     geometryChanged(list);
   }
+  /** Volta a tela como estava antes da última ação (a foto guardada por `pushUndo`). */
   function undoRemoval() {
-    const entry = undoStack.pop();
-    if (!entry) return;
-    entry.list.forEach((i, k) => {
-      if (entry.kind === "remove") removed[i] = 0;
-      else penTo[i] = entry.before[k];
-      manual[i] = 1; // voltam como estavam antes: marcados
-    });
-    geometryChanged(entry.list);
+    const snap = undoStack.pop();
+    if (!snap) return;
+    const sameShape = edited.every((d) => snap.geoms.get(d.id) === geoms.get(d.id));
+    geoms = snap.geoms;
+    if (sameShape) {
+      removed = snap.removed;
+      manual = snap.manual;
+      penTo = snap.penTo;
+      edited.forEach(rebuildBase);
+      refreshBlocked();
+      updateHover();
+      renderPanel();
+      repaint();
+    } else rebuildStrokes(undefined, snap);
+  }
+  /** Tesoura: corta o traço `cutAt.i` no ponto escolhido. */
+  function cutHere(at: NonNullable<typeof cutAt>) {
+    const s = strokes[at.i];
+    const g = geoms.get(s.drawingId)!;
+    const next = cutGeometry(g, s.subpath, at.seg, at.t);
+    if (next === g) return toast("Aqui é a ponta do traço: não há o que cortar.", "warn");
+    pushUndo();
+    const pieces = next.subpaths.length - g.subpaths.length + 1;
+    geoms = new Map(geoms).set(s.drawingId, next);
+    rebuildStrokes((id, sp) => (id !== s.drawingId || sp < s.subpath ? [sp] : sp === s.subpath ? Array.from({ length: pieces }, (_, k) => sp + k) : [sp + pieces - 1]));
+  }
+  /** Move os traços marcados `d` mm na cena. */
+  function moveMarked(d: Vec) {
+    if (d.x === 0 && d.y === 0) return;
+    const byDrawing = new Map<DrawingId, number[]>();
+    for (let i = 0; i < n; i++) {
+      if (!isMarked(i)) continue;
+      const list = byDrawing.get(strokes[i].drawingId);
+      if (list) list.push(strokes[i].subpath);
+      else byDrawing.set(strokes[i].drawingId, [strokes[i].subpath]);
+    }
+    if (byDrawing.size === 0) return;
+    pushUndo();
+    const next = new Map(geoms);
+    for (const dr of edited) {
+      const list = byDrawing.get(dr.id);
+      if (list) next.set(dr.id, translateSubpaths(next.get(dr.id)!, list, sceneDeltaToLocal(dr.transform, d)));
+    }
+    geoms = next;
+    rebuildStrokes();
   }
   /** Traços saíram ou voltaram: refaz só os desenhos afetados e o que estava embaixo do mouse. */
   function geometryChanged(list: readonly number[]) {
@@ -461,7 +639,6 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   }
 
   function conclude() {
-    removeMarked(); // quem marcou e foi direto no botão de voltar queria apagar (o botão diz "Apagar os marcados e voltar")
     // o que acontece com cada traço: null = sai; id de caneta = passa para aquela caneta
     const map = new Map<DrawingId, Map<number, string | null>>();
     let gone = 0, moved = 0;
@@ -474,16 +651,18 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
       if (!m) map.set(s.drawingId, (m = new Map()));
       m.set(s.subpath, to);
     });
-    if (gone + moved === 0) return close();
+    const shaped = geometryEdited();
+    if (gone + moved === 0 && !shaped) return close();
     // a tela trabalhou em cima destes desenhos: se algum mudou por fora, os números dos traços não valem mais
     const stale = edited.some((d) => store.doc.drawings.find((x) => x.id === d.id)?.geometry !== d.geometry);
     if (stale) {
-      toast("O desenho mudou enquanto esta tela estava aberta. Nada foi apagado.", "warn", 8000);
+      toast("O desenho mudou enquanto esta tela estava aberta. Nada foi guardado.", "warn", 8000);
       return close();
     }
-    const label = moved === 0 ? "Apagar traços" : gone === 0 ? "Trocar a caneta de traços" : "Apagar e trocar a caneta de traços";
+    const label = shaped || (gone > 0 && moved > 0) ? "Editar traços" : moved === 0 ? "Apagar traços" : "Trocar a caneta de traços";
     const existed = new Set(store.doc.drawings.map((d) => d.id));
-    store.commit(label, (docNow) => applyStrokeEdits(docNow, map, store.state.profile, () => crypto.randomUUID()));
+    // primeiro a forma nova (cortes e movimentos), depois apagar e trocar de caneta: os números dos traços são os desta tela
+    store.commit(label, (docNow) => applyStrokeEdits(withGeometries(docNow, geoms), map, store.state.profile, () => crypto.randomUUID()));
     // a seleção fica com o conjunto inteiro, incluindo as camadas que acabaram de nascer
     const after = store.doc.drawings;
     const keep = ids.filter((id) => after.some((d) => d.id === id));
@@ -492,7 +671,9 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     const parts = [
       gone > 0 ? plural(gone, "traço apagado", "traços apagados") : "",
       moved > 0 ? `${plural(moved, "traço passou", "traços passaram")} para outra caneta` : "",
+      shaped ? "cortes e movimentos guardados" : "",
     ].filter(Boolean);
+    parts[0] = parts[0][0].toUpperCase() + parts[0].slice(1);
     toast(`${parts.join(", ")}. Se mudar de ideia, Ctrl+Z na mesa desfaz.`);
     close();
   }
@@ -511,13 +692,28 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   type Gesture =
     | { kind: "pan"; x: number; y: number; px: number; py: number }
     | { kind: "press"; x: number; y: number }
-    | { kind: "rect" };
+    | { kind: "rect" }
+    | { kind: "drag"; x: number; y: number };
+  /** Tesoura: o ponto exato do traço `i` mais perto do mouse (na curva de verdade, não na polilinha). */
+  const cutPointOf = (i: number, p: { x: number; y: number }): typeof cutAt => {
+    const s = strokes[i];
+    const d = edited.find((x) => x.id === s.drawingId)!;
+    const sp = transformGeometry({ subpaths: [geoms.get(d.id)!.subpaths[s.subpath]] }, d.transform).subpaths[0];
+    const r = nearestOnSubpath(sp, toScene(p));
+    return r ? { i, seg: r.seg, t: r.t, point: r.point } : undefined;
+  };
   let gesture: Gesture | undefined;
   let spaceDown = false;
 
   function updateHover() {
     const next = pointer && !gesture ? pick(pointer) : -1;
     stage.classList.toggle("over", next >= 0);
+    if (tool === "cut") {
+      // a bolinha da tesoura acompanha o mouse ao longo do traço
+      cutAt = next >= 0 && pointer ? cutPointOf(next, pointer) : undefined;
+      hover = next;
+      return invalidate();
+    }
     if (next === hover) return;
     hover = next;
     invalidate();
@@ -529,8 +725,20 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     if (e.button === 1 || e.button === 2 || (e.button === 0 && spaceDown)) {
       gesture = { kind: "pan", x: e.clientX, y: e.clientY, px: panX, py: panY };
       stage.classList.add("grabbing");
-    } else if (e.button === 0) gesture = { kind: "press", x: p.x, y: p.y };
-    else return;
+    } else if (e.button === 0) {
+      const i = tool === "move" ? pick(p) : -1;
+      if (i >= 0) {
+        // mover: pegar um traço leva junto todos os marcados (o pego entra nas marcas)
+        if (!isMarked(i)) {
+          manual[i] = 1;
+          marksChanged();
+        }
+        const a = toScene(p);
+        gesture = { kind: "drag", x: a.x, y: a.y };
+        dragDelta = { x: 0, y: 0 };
+        stage.classList.add("grabbing");
+      } else gesture = { kind: "press", x: p.x, y: p.y };
+    } else return;
     e.preventDefault();
     stage.setPointerCapture(e.pointerId);
   });
@@ -541,6 +749,11 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
       panX = gesture.px + e.clientX - gesture.x;
       panY = gesture.py + e.clientY - gesture.y;
       return viewChanged();
+    }
+    if (gesture.kind === "drag") {
+      const b = toScene(pointer);
+      dragDelta = { x: b.x - gesture.x, y: b.y - gesture.y };
+      return invalidate();
     }
     if (gesture.kind === "press") {
       if (Math.hypot(pointer.x - gesture.x, pointer.y - gesture.y) < DRAG_PX) return;
@@ -563,7 +776,17 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     stage.classList.remove("grabbing");
     if (!g) return;
     if (g.kind === "pan") viewChanged(true);
-    else if (!cancelled && g.kind === "press") {
+    else if (g.kind === "drag") {
+      const d = dragDelta;
+      dragDelta = undefined;
+      // (arrastar menos de meio pixel é tremida do clique, não movimento)
+      if (!cancelled && d && Math.hypot(d.x, d.y) * zoom >= 0.5) moveMarked(d);
+    } else if (!cancelled && g.kind === "press" && tool === "cut") {
+      // tesoura: corta onde a bolinha está
+      const i = pick(local(e));
+      const at = i >= 0 ? cutPointOf(i, local(e)) : undefined;
+      if (at) cutHere(at);
+    } else if (!cancelled && g.kind === "press") {
       // clique: marca ou desmarca o traço que está embaixo do mouse
       const i = pick(local(e));
       if (i >= 0) {
@@ -619,9 +842,9 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   let escArmed = false;
   /** Esc: primeiro tira as marcas; com traços apagados e ainda não guardados, avisa antes de sair. */
   function onEscape() {
-    const { marked, gone, moved } = counts();
+    const { marked, changed } = counts();
     if (marked > 0) return clearMarks();
-    if (gone + moved > 0 && !escArmed) {
+    if (changed && !escArmed) {
       escArmed = true;
       setTimeout(() => (escArmed = false), 5000);
       return toast("Há mudanças que ainda não foram guardadas. “Guardar e voltar” guarda; Esc de novo sai sem mudar nada.", "warn", 5000);
@@ -642,6 +865,15 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     } else if (ctrl && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
       e.preventDefault();
       undoRemoval();
+    } else if (!ctrl && !(e.target instanceof HTMLInputElement) && (e.key === "1" || e.key === "2" || e.key === "3")) {
+      e.preventDefault();
+      setTool((["mark", "cut", "move"] as const)[Number(e.key) - 1]);
+    } else if (!ctrl && e.key.startsWith("Arrow") && !(e.target instanceof HTMLInputElement) && counts().marked > 0) {
+      // setas: movem os marcados (na tela, para cima é Y menor na cena)
+      e.preventDefault();
+      const step = e.shiftKey ? 5 : 0.5;
+      const d = { ArrowLeft: { x: -step, y: 0 }, ArrowRight: { x: step, y: 0 }, ArrowUp: { x: 0, y: -step }, ArrowDown: { x: 0, y: step } }[e.key];
+      if (d) moveMarked(d);
     } else if (e.code === "Space" && !(e.target instanceof HTMLInputElement)) {
       e.preventDefault(); // senão o Espaço "clica" no botão que estiver com o foco
       spaceDown = true;
@@ -680,8 +912,9 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
   const side = h("div", { class: "trace-side panel" });
   append(side, [
     layerBox,
-    h("h3", null, "Marcar"),
-    h("p", { class: "hint" }, "Clique num traço para marcar (fica vermelho); clique de novo para desmarcar. Arraste para marcar vários."),
+    h("h3", null, "Ferramenta"),
+    h("div", { class: "row tool-row", role: "group", "aria-label": "Ferramenta" }, ...toolButtons),
+    toolHint,
     count,
     h("div", { class: "row" }, deleteBtn, undoBtn),
     h("div", { class: "row" }, clearBtn),
@@ -706,7 +939,7 @@ export function openStrokeEditor(store: Store, ids: readonly DrawingId[], focusI
     h(
       "header",
       { class: "settings-head" },
-      h("strong", null, `Apagar ou pintar traços de ${name}`),
+      h("strong", null, `Editar traços de ${name}`),
       h("button", { class: "close", title: "Voltar para a mesa sem mudar nada", "aria-label": "Voltar para a mesa sem mudar nada", onclick: close }, "✕"),
     ),
     h("div", { class: "trace-main" }, stage, side),

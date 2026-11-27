@@ -1,7 +1,8 @@
 import { createDrawing, removeDrawings, type Drawing, type DrawingId, type PlotDocument } from "./document";
 import { flattenSubPath } from "./geometry/flatten";
-import { IDENTITY, invert, multiply, nearlyEqualMat } from "./geometry/mat2d";
-import { controlBBox, transformGeometry } from "./geometry/path";
+import { IDENTITY, invert, multiply, nearlyEqualMat, type Mat2D } from "./geometry/mat2d";
+import { controlBBox, transformGeometry, type Geometry, type Segment, type SubPath } from "./geometry/path";
+import type { Vec } from "./geometry/vec";
 import { penOf, type MachineProfile } from "./machine";
 
 /**
@@ -339,4 +340,172 @@ function segmentTouchesRect(ax: number, ay: number, bx: number, by: number, x0: 
     return true;
   };
   return clip(-dx, ax - x0) && clip(dx, x1 - ax) && clip(-dy, ay - y0) && clip(dy, y1 - ay);
+}
+
+// ------------------------------------------------------------------ cortar e mover traços
+
+/** Um ponto de um subcaminho: trecho `seg`, parâmetro `t` (0..1) dentro dele. */
+export interface PathPoint {
+  readonly seg: number;
+  readonly t: number;
+  readonly point: Vec;
+  readonly dist: number;
+}
+
+const segStart = (sp: SubPath, i: number): Vec => (i === 0 ? sp.start : sp.segments[i - 1].to);
+
+function cubicAt(p0: Vec, c1: Vec, c2: Vec, p3: Vec, t: number): Vec {
+  const u = 1 - t;
+  const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return { x: a * p0.x + b * c1.x + c * c2.x + d * p3.x, y: a * p0.y + b * c1.y + c * c2.y + d * p3.y };
+}
+
+/** Ponto do trecho `i` no parâmetro `t`. */
+export function pointOnSegment(sp: SubPath, i: number, t: number): Vec {
+  const a = segStart(sp, i), s = sp.segments[i];
+  if (s.kind === "line") return { x: a.x + (s.to.x - a.x) * t, y: a.y + (s.to.y - a.y) * t };
+  return cubicAt(a, s.c1, s.c2, s.to, t);
+}
+
+/**
+ * O ponto do subcaminho mais perto de `p` (na unidade do subcaminho). Reta: projeção exata. Curva:
+ * amostra e depois refina por bisseção em volta da melhor amostra (erro bem abaixo de 0,001 mm).
+ */
+export function nearestOnSubpath(sp: SubPath, p: Vec): PathPoint | undefined {
+  let best: PathPoint | undefined;
+  sp.segments.forEach((s, i) => {
+    const a = segStart(sp, i);
+    let t: number;
+    if (s.kind === "line") {
+      const dx = s.to.x - a.x, dy = s.to.y - a.y, l2 = dx * dx + dy * dy;
+      t = l2 > 0 ? Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    } else {
+      const N = 48;
+      const d2 = (tt: number) => {
+        const q = cubicAt(a, s.c1, s.c2, s.to, tt);
+        return (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+      };
+      let bt = 0, bd = Infinity;
+      for (let k = 0; k <= N; k++) {
+        const d = d2(k / N);
+        if (d < bd) (bd = d), (bt = k / N);
+      }
+      let lo = Math.max(0, bt - 1 / N), hi = Math.min(1, bt + 1 / N);
+      for (let it = 0; it < 40; it++) {
+        const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+        if (d2(m1) < d2(m2)) hi = m2;
+        else lo = m1;
+      }
+      t = (lo + hi) / 2;
+    }
+    const q = pointOnSegment(sp, i, t);
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (!best || d < best.dist) best = { seg: i, t, point: q, dist: d };
+  });
+  return best;
+}
+
+/** Divide um trecho no parâmetro t (de Casteljau, para a curva): [primeira metade, segunda metade]. */
+function splitSegment(a: Vec, s: Segment, t: number): [Segment, Segment] {
+  if (s.kind === "line") {
+    const m = { x: a.x + (s.to.x - a.x) * t, y: a.y + (s.to.y - a.y) * t };
+    return [{ kind: "line", to: m }, { kind: "line", to: s.to }];
+  }
+  const L = (p: Vec, q: Vec) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
+  const p01 = L(a, s.c1), p12 = L(s.c1, s.c2), p23 = L(s.c2, s.to);
+  const p012 = L(p01, p12), p123 = L(p12, p23);
+  const m = L(p012, p123);
+  return [
+    { kind: "cubic", c1: p01, c2: p012, to: m },
+    { kind: "cubic", c1: p123, c2: p23, to: s.to },
+  ];
+}
+
+/** Parâmetro tão perto da ponta do trecho que cortar ali é cortar no vértice */
+const T_EPS = 1e-6;
+
+/**
+ * Corta o subcaminho no ponto (trecho `seg`, parâmetro `t`). Aberto: vira dois. Fechado (laço): vira UM
+ * aberto, que começa e termina no corte. Cortar exatamente na ponta de um aberto não muda nada (um).
+ * A forma não muda: a curva é dividida exatamente (de Casteljau).
+ */
+export function cutSubpath(sp: SubPath, seg: number, t: number): SubPath[] {
+  const n = sp.segments.length;
+  if (n === 0 || seg < 0 || seg >= n) return [sp];
+  // corte no vértice: (seg, 1) é o mesmo que (seg + 1, 0)
+  let i = seg, tt = Math.min(1, Math.max(0, t));
+  if (tt >= 1 - T_EPS) (i = seg + 1), (tt = 0);
+  let before: Segment[], after: Segment[], cut: Vec;
+  if (tt <= T_EPS) {
+    cut = i === 0 ? sp.start : sp.segments[i - 1].to;
+    before = sp.segments.slice(0, i);
+    after = sp.segments.slice(i);
+  } else {
+    const [s1, s2] = splitSegment(segStart(sp, i), sp.segments[i], tt);
+    cut = s1.to;
+    before = [...sp.segments.slice(0, i), s1];
+    after = [s2, ...sp.segments.slice(i + 1)];
+  }
+  if (sp.closed) {
+    // o laço abre no corte: do corte até o fim e, emendado, do começo até o corte
+    const segs = [...after, ...before];
+    return [{ start: cut, segments: segs, closed: false }];
+  }
+  if (before.length === 0 || after.length === 0) return [sp];
+  return [
+    { start: sp.start, segments: before, closed: false },
+    { start: cut, segments: after, closed: false },
+  ];
+}
+
+/** O desenho com o subcaminho `index` cortado (os pedaços entram no lugar dele, na ordem). */
+export function cutGeometry(g: Geometry, index: number, seg: number, t: number): Geometry {
+  const sp = g.subpaths[index];
+  if (!sp) return g;
+  const pieces = cutSubpath(sp, seg, t);
+  if (pieces.length === 1 && pieces[0] === sp) return g;
+  return { subpaths: [...g.subpaths.slice(0, index), ...pieces, ...g.subpaths.slice(index + 1)] };
+}
+
+/** Os subcaminhos `indices` deslocados de `d` (na unidade do desenho). Os outros ficam como estão. */
+export function translateSubpaths(g: Geometry, indices: Iterable<number>, d: Vec): Geometry {
+  const set = new Set(indices);
+  if (set.size === 0 || (d.x === 0 && d.y === 0)) return g;
+  const mv = (p: Vec) => ({ x: p.x + d.x, y: p.y + d.y });
+  return {
+    subpaths: g.subpaths.map((sp, i) =>
+      set.has(i)
+        ? {
+            start: mv(sp.start),
+            closed: sp.closed,
+            segments: sp.segments.map((s): Segment => (s.kind === "line" ? { kind: "line", to: mv(s.to) } : { kind: "cubic", c1: mv(s.c1), c2: mv(s.c2), to: mv(s.to) })),
+          }
+        : sp,
+    ),
+  };
+}
+
+/** Um deslocamento na cena (mm da mesa) escrito nas coordenadas do desenho (só a parte linear da matriz). */
+export function sceneDeltaToLocal(m: Mat2D, d: Vec): Vec {
+  const inv = invert(m);
+  return { x: inv[0] * d.x + inv[2] * d.y, y: inv[1] * d.x + inv[3] * d.y };
+}
+
+/**
+ * Troca a geometria dos desenhos indicados (a caixa é refeita). Desenho sem traço nenhum sai da mesa.
+ * Sem nada para mudar, devolve o MESMO documento.
+ */
+export function withGeometries(doc: PlotDocument, geoms: ReadonlyMap<DrawingId, Geometry>): PlotDocument {
+  let changed = false;
+  const drawings: Drawing[] = [];
+  for (const d of doc.drawings) {
+    const g = geoms.get(d.id);
+    if (!g || g === d.geometry) {
+      drawings.push(d);
+      continue;
+    }
+    changed = true;
+    if (g.subpaths.some((sp) => sp.segments.length > 0)) drawings.push({ ...d, geometry: g, localBBox: controlBBox(g) });
+  }
+  return changed ? { drawings } : doc;
 }

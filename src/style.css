@@ -539,7 +539,11 @@ kbd { display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px soli
 dialog.sheet.strokes { width: min(1720px, 98vw); height: min(1100px, 96vh); }
 .strokes .trace-stage { cursor: crosshair; outline: none; touch-action: none; }
 .strokes .trace-stage.over { cursor: pointer; }
+.strokes .trace-stage.tool-cut.over { cursor: crosshair; }
+.strokes .trace-stage.tool-move.over { cursor: move; }
 .strokes .trace-stage.pan { cursor: grab; }
+.strokes .tool-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.strokes .tool-row button { padding: 7px 6px; white-space: nowrap; }
 .strokes .trace-stage.grabbing { cursor: grabbing; }
 .stroke-count { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.35; }
 .strokes .trace-side .row button { flex: 1 1 auto; }

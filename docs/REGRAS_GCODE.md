@@ -307,6 +307,13 @@ Medido neste suporte:
 | Preta 0,4 (mesmo corpo da verde) | nenhum | — |
 | Fina 0,03 | ~1,0 mm em X+ | **−1,0 mm em X** |
 
+**Pelo diâmetro do corpo (27/11/2026).** A ponta fica no centro da caneta. Cada caneta pode ter o **Corpo (mm)**
+(diâmetro onde o suporte aperta) e o estojo diz como o suporte segura: encostada numa **parede** (a ponta anda
+metade da diferença de diâmetro), num **V de 90°** (0,71 da diferença) ou **centralizada** (não anda), e para que
+lado a ponta vai quando a caneta é mais grossa. O programa soma essa correção ao deslocamento medido
+(`tipOffset` em `src/core/machine.ts`); o deslocamento medido fica para o ajuste fino com as cruzes. Caneta sem
+Corpo conta como igual à de referência (sem correção).
+
 ### Ordem das camadas
 
 **cor/verde → fina → grossa**

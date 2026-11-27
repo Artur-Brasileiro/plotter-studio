@@ -1,7 +1,7 @@
 import type { PlotDocument } from "../document";
 import { polylineLength } from "../geometry/simplify";
 import { dist, type Vec } from "../geometry/vec";
-import { penOf, type MachineProfile, type Pen } from "../machine";
+import { penOf, tipOffset, type MachineProfile, type Pen } from "../machine";
 import type { JobSettings } from "../store";
 import { checkBounds, checkZone } from "./bounds";
 import { bridgeExposedMm, bridgeIsHidden, createInkMap, stampStroke, strokeCovered } from "./inkmap";
@@ -66,7 +66,8 @@ function planLayer(
   const end = profile.gcode.finalPosition;
   const penObj: Pen = layer?.pen ?? penOf(profile, undefined);
   const pen = penObj.widthMm;
-  const offset: Vec = { x: penObj.offsetX, y: penObj.offsetY };
+  // desvio medido + o que vem do diâmetro do corpo (a ponta fica no centro da caneta)
+  const offset: Vec = tipOffset(profile, penObj);
   const registration = layer !== undefined && usesRegistration(profile, layerCount);
 
   // só os traços dos desenhos desta caneta

@@ -361,7 +361,7 @@ dialog.settings:not([open]), dialog.sheet:not([open]) { display: none; }
 .templates { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .tpl-row { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr) auto; gap: 6px; width: 100%; }
 .tpl-row input { min-width: 0; }
-.pen-row { display: grid; grid-template-columns: 44px 1.6fr 0.8fr 0.7fr 0.7fr auto; gap: 6px; width: 100%; align-items: center; }
+.pen-row { display: grid; grid-template-columns: 44px 1.6fr 0.8fr 0.8fr 0.7fr 0.7fr auto; gap: 6px; width: 100%; align-items: center; }
 .pen-row input { font: inherit; color: var(--ink); padding: 6px 8px; border: 1px solid var(--rule-strong); border-radius: var(--radius); background: var(--field); min-width: 0; width: 100%; }
 .pen-row input[type="color"] { padding: 2px; height: 32px; }
 .pen-row input.invalid { border-color: var(--danger); background: var(--danger-wash); }

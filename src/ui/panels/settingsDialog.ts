@@ -89,6 +89,34 @@ const GROUPS: Group[] = [
     pens: true,
     fields: [
       {
+        path: "penHolder.refBodyMm",
+        label: "Corpo da caneta de referência (mm)",
+        help: "Diâmetro (grossura) da caneta com que a máquina foi acertada. Meça com paquímetro onde o suporte aperta. Caneta com o campo Corpo vazio conta como igual a esta.",
+        min: 1,
+        max: 40,
+      },
+      {
+        path: "penHolder.kind",
+        label: "Como o suporte segura a caneta",
+        help: "A ponta fica no centro da caneta: numa caneta mais grossa, o centro sai do lugar. O programa corrige sozinho pelo Corpo de cada caneta.",
+        options: [
+          ["wall", "Encostada numa parede (a ponta anda metade da diferença)"],
+          ["v90", "Num V de 90° (a ponta anda 0,71 da diferença)"],
+          ["center", "O suporte centraliza (a ponta não anda)"],
+        ],
+      },
+      {
+        path: "penHolder.side",
+        label: "Caneta mais grossa: a ponta vai para",
+        help: "O lado oposto ao da parede (ou do fundo do V) em que a caneta encosta. Confira com as cruzes de registro: se a cruz da caneta grossa sair do outro lado, troque aqui.",
+        options: [
+          ["x+", "a direita (X+)"],
+          ["x-", "a esquerda (X−)"],
+          ["y+", "o fundo (Y+)"],
+          ["y-", "a frente (Y−)"],
+        ],
+      },
+      {
         path: "registration.mode",
         label: "Cruzes de registro",
         help: "Uma cruz antes e outra depois de cada camada, para alinhar as canetas.",
@@ -283,7 +311,19 @@ export function createSettingsDialog(store: Store): { open: () => void } {
     const box = h("div", { class: "templates" });
     const render = () => {
       clear(box);
-      box.append(h("div", { class: "pen-row pen-head" }, h("span", null, "Cor"), h("span", null, "Nome"), h("span", null, "Traço (mm)"), h("span", null, "Ponta X"), h("span", null, "Ponta Y"), h("span", null, "")));
+      box.append(
+        h(
+          "div",
+          { class: "pen-row pen-head" },
+          h("span", null, "Cor"),
+          h("span", null, "Nome"),
+          h("span", null, "Traço (mm)"),
+          h("span", { title: "Diâmetro do corpo da caneta. Vazio = igual ao da caneta de referência" }, "Corpo (mm)"),
+          h("span", null, "Ponta X"),
+          h("span", null, "Ponta Y"),
+          h("span", null, ""),
+        ),
+      );
       draft.pens.forEach((p, i) => {
         const num = (k: "widthMm" | "offsetX" | "offsetY", label: string) => {
           const input = h("input", { type: "text", inputMode: "decimal", value: fmt(p[k]), "aria-label": `${p.name}: ${label}`, title: label });
@@ -295,6 +335,19 @@ export function createSettingsDialog(store: Store): { open: () => void } {
           });
           return input;
         };
+        // corpo: vazio = igual ao da caneta de referência (sem correção)
+        const body = h("input", { type: "text", inputMode: "decimal", value: p.bodyMm === undefined ? "" : fmt(p.bodyMm), placeholder: "igual", "aria-label": `${p.name}: diâmetro do corpo (mm)`, title: "Diâmetro do corpo (mm). Vazio = igual ao da caneta de referência" });
+        body.addEventListener("input", () => {
+          if (body.value.trim() === "") {
+            delete p.bodyMm;
+            body.classList.remove("invalid");
+          } else {
+            const v = parseNum(body.value);
+            body.classList.toggle("invalid", v === undefined);
+            if (v !== undefined) p.bodyMm = v;
+          }
+          refreshErrors();
+        });
         const color = h("input", { type: "color", value: p.color, "aria-label": `${p.name}: cor na tela` });
         color.addEventListener("input", () => (p.color = color.value));
         const name = h("input", { type: "text", value: p.name, "aria-label": "Nome da caneta" });
@@ -315,7 +368,8 @@ export function createSettingsDialog(store: Store): { open: () => void } {
             color,
             name,
             num("widthMm", "largura do traço"),
-            num("offsetX", "deslocamento da ponta em X"),
+            body,
+            num("offsetX", "deslocamento da ponta em X (ajuste fino, além do corpo)"),
             num("offsetY", "deslocamento da ponta em Y"),
             h(
               "span",

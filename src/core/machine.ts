@@ -23,7 +23,21 @@ export interface Pen {
    */
   offsetX: number;
   offsetY: number;
+  /**
+   * Diâmetro do CORPO da caneta (mm), onde o suporte aperta. Sem valor = igual ao da caneta de
+   * referência (`penHolder.refBodyMm`). A ponta fica no centro do corpo: caneta mais grossa ou mais fina
+   * que a de referência tem a ponta deslocada no suporte, e o programa corrige sozinho (`tipOffset`).
+   */
+  bodyMm?: number;
 }
+
+/** Para que lado a ponta anda no suporte quando a caneta é mais GROSSA que a de referência */
+export type HolderSide = "x+" | "x-" | "y+" | "y-";
+/**
+ * Como o suporte segura a caneta: encostada numa parede (a ponta anda metade da diferença de diâmetro),
+ * num V de 90° (anda 0,71 da diferença) ou centralizada por todos os lados (não anda).
+ */
+export type HolderKind = "wall" | "v90" | "center";
 
 export interface MachineProfile {
   /** 3 = curso em Y corrigido para 390 mm; 4 = gabaritos de papel na origem (ver `mergeProfile`) */
@@ -85,6 +99,13 @@ export interface MachineProfile {
   /** Caneta dos desenhos que não escolheram uma */
   defaultPen: string;
   /** Cruzes de registro: alinham as camadas quando o desenho usa mais de uma caneta */
+  /** Suporte da caneta: de onde sai a correção automática pelo diâmetro do corpo (`tipOffset`) */
+  penHolder: {
+    /** Diâmetro do corpo da caneta de referência (mm): com ele, a ponta está onde a máquina acha que está */
+    refBodyMm: number;
+    side: HolderSide;
+    kind: HolderKind;
+  };
   registration: {
     /** auto = só quando o trabalho tem mais de uma caneta */
     mode: "auto" | "always" | "never";
@@ -204,6 +225,7 @@ export const DEFAULT_PROFILE: MachineProfile = {
     { id: "preta", name: "Preta 0,4", widthMm: 0.4, color: "#10151f", offsetX: 0, offsetY: 0 },
   ],
   defaultPen: "preta",
+  penHolder: { refBodyMm: 10, side: "x+", kind: "wall" },
   registration: { mode: "auto", x1: 20, x2: 580, y: 12, armMm: 6 },
   shield: {
     enabled: true,
@@ -286,7 +308,19 @@ export function mergeProfile(saved: unknown): MachineProfile {
   const pauseLift = merged.pen.pauseLift === "endOfStroke" ? "endOfStroke" : "spindleStop";
   const isStr = (v: unknown): v is string => typeof v === "string";
   const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-  let pens = merged.pens.filter((p) => isObj(p) && isStr(p.id) && p.id !== "" && isStr(p.name) && isStr(p.color) && [p.widthMm, p.offsetX, p.offsetY].every(isNumber));
+  let pens = merged.pens
+    .filter((p) => isObj(p) && isStr(p.id) && p.id !== "" && isStr(p.name) && isStr(p.color) && [p.widthMm, p.offsetX, p.offsetY].every(isNumber))
+    .map((p) => {
+      // corpo vazio ou inválido = igual ao da caneta de referência
+      const { bodyMm, ...rest } = p;
+      return isNumber(bodyMm) && bodyMm > 0 ? { ...rest, bodyMm } : rest;
+    });
+  const holder = merged.penHolder;
+  const penHolder = {
+    refBodyMm: isNumber(holder.refBodyMm) ? holder.refBodyMm : DEFAULT_PROFILE.penHolder.refBodyMm,
+    side: (["x+", "x-", "y+", "y-"] as const).includes(holder.side) ? holder.side : DEFAULT_PROFILE.penHolder.side,
+    kind: (["wall", "v90", "center"] as const).includes(holder.kind) ? holder.kind : DEFAULT_PROFILE.penHolder.kind,
+  };
   if (pens.length === 0) pens = structuredClone(DEFAULT_PROFILE.pens);
   const defaultPen = pens.some((p) => p.id === merged.defaultPen) ? merged.defaultPen : pens[pens.length - 1].id;
   const regMode = merged.registration.mode === "always" || merged.registration.mode === "never" ? merged.registration.mode : "auto";
@@ -313,12 +347,31 @@ export function mergeProfile(saved: unknown): MachineProfile {
     servo: { ...merged.servo, onOverload },
     pens,
     defaultPen,
+    penHolder,
     registration: { ...merged.registration, mode: regMode },
     paperTemplates: placed,
   };
 }
 
 /** A caneta de um desenho: a escolhida, ou a padrão do perfil, ou a última da lista. */
+/** Quanto a ponta anda por mm de diâmetro a mais, em cada tipo de suporte */
+const HOLDER_SHIFT: Record<HolderKind, number> = { wall: 0.5, v90: Math.SQRT1_2, center: 0 };
+const SIDE_DIR: Record<HolderSide, { x: number; y: number }> = { "x+": { x: 1, y: 0 }, "x-": { x: -1, y: 0 }, "y+": { x: 0, y: 1 }, "y-": { x: 0, y: -1 } };
+
+/**
+ * Onde a PONTA da caneta fica em relação a onde a máquina acha que está (mm da máquina): o desvio medido
+ * (`offsetX/Y`, ajuste fino pelas cruzes de registro) mais o que vem do diâmetro do corpo. A ponta está no
+ * centro do corpo, então uma caneta `d` mm mais grossa que a de referência tem a ponta deslocada
+ * d × (0,5 na parede; 0,71 no V de 90°; 0 no suporte que centraliza) para o lado do suporte.
+ */
+export function tipOffset(profile: MachineProfile, pen: Pen): { x: number; y: number } {
+  const h = profile.penHolder;
+  const extra = pen.bodyMm !== undefined && h ? (pen.bodyMm - h.refBodyMm) * HOLDER_SHIFT[h.kind] : 0;
+  const dir = SIDE_DIR[h?.side ?? "x+"];
+  const r = (v: number) => Math.round(v * 1e6) / 1e6;
+  return { x: r(pen.offsetX + extra * dir.x), y: r(pen.offsetY + extra * dir.y) };
+}
+
 export function penOf(profile: MachineProfile, penId: string | undefined): Pen {
   const pens = profile.pens;
   return pens.find((p) => p.id === penId) ?? pens.find((p) => p.id === profile.defaultPen) ?? pens[pens.length - 1];
@@ -372,10 +425,12 @@ export function validateProfile(p: MachineProfile): string[] {
     range(pen.widthMm, 0.01, 10, `Largura da caneta ${pen.name}`);
     range(pen.offsetX, -20, 20, `Deslocamento X da caneta ${pen.name}`);
     range(pen.offsetY, -20, 20, `Deslocamento Y da caneta ${pen.name}`);
+    if (pen.bodyMm !== undefined) range(pen.bodyMm, 1, 40, `Corpo da caneta ${pen.name} (mm)`);
   }
   if (p.pens.length === 0) e.push("O perfil precisa de pelo menos uma caneta.");
   const reg = p.registration;
   range(reg.armMm, 1, 50, "Braço da cruz de registro (mm)");
+  range(p.penHolder.refBodyMm, 1, 40, "Corpo da caneta de referência (mm)");
   for (const x of [reg.x1, reg.x2]) {
     if (x - reg.armMm / 2 < 0 || x + reg.armMm / 2 > p.workArea.width || reg.y - reg.armMm / 2 < 0 || reg.y + reg.armMm / 2 > p.workArea.height) {
       e.push("As cruzes de registro têm que caber no curso da máquina.");

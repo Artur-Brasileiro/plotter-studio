@@ -299,3 +299,17 @@ describe("descida longa em trabalho mais lento que F500 (regra 5: ~2 min)", () =
     expect(a.problems.filter((p) => p.level === "warn" && /caneta embaixo/.test(p.message))).toHaveLength(1);
   });
 });
+
+describe("correção pelo corpo da caneta", () => {
+  it("caneta 2 mm mais grossa, encostada numa parede com a ponta indo para X+: a camada sai 1 mm para X−", () => {
+    const prof: MachineProfile = {
+      ...P,
+      penHolder: { refBodyMm: 10, side: "x+", kind: "wall" },
+      pens: P.pens.map((p) => (p.id === "preta" ? { ...p, bodyMm: 12 } : p)),
+    };
+    const plan = planJob(doc(drawing("a", [LINE_A], "preta")), prof, JOB);
+    expect(plan.layer?.offset).toEqual({ x: 1, y: 0 });
+    expect(pts(plan, 0)).toEqual([[99, 100], [199, 100]]);
+    expect(checkAgainstPlan(plan, auditGcode(text(plan, prof), prof, auditOptionsOf(plan))).ok).toBe(true);
+  });
+});

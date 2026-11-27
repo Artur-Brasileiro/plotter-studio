@@ -308,10 +308,10 @@ script; **nada rodou na máquina ainda**.
   |---|---|---|---|---|
   | Antes | 6.116 | 4 h 03 | 72 min | 23 min |
   | Só o caminho pela tinta | 3.397 | 3 h 36 | 40 min | 1,4 min |
-  | **Os dois (padrão)** | **2.110** | **3 h 28** | **25 min** | **0,5 min** |
+  | **Os dois (padrão)** | **2.107** | **3 h 27** | **25 min** | **0,4 min** |
   | Os dois, emenda de 0,5 mm | 1.598 | 3 h 23 | 20 min | 0,2 min |
 
-  No tipo Foto da mesma imagem: 2.479 → 1.692 subidas (o tempo sobe ~2 min: andar por cima da tinta às vezes
+  No tipo Foto da mesma imagem: 2.479 → 1.635 subidas (o tempo sobe ~1 min: andar por cima da tinta às vezes
   demora mais que subir; o servo agradece). O arquivo inteiro passa na auditoria. Os dois valores ficam em
   Configurações → Proteção do servo ("Andar por cima da tinta até", "Emenda que pode aparecer").
 - **Tesoura** na tela de traços (agora "Editar traços"): clique num ponto de uma linha e ela vira duas, exato

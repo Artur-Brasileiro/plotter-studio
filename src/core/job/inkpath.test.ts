@@ -136,6 +136,32 @@ describe("planJob: a caneta anda embaixo pela tinta em vez de subir", () => {
   });
 });
 
+describe("planJob: casos de entrada pelo caminho", () => {
+  it("entra num laço pelo MEIO: o traço sai do laço e a caneta continua dando a volta nele", () => {
+    // o traço vem antes (é o mais perto da origem) e termina no MEIO do lado de baixo do quadrado; o caminho
+    // segue o lado até o canto (100, 100), que é o 4º vértice do laço: o laço começa por ali
+    const sq: [number, number][] = [[100, 140], [140, 140], [140, 100], [100, 100], [100, 140]];
+    const tail: [number, number][] = [[90, 90], [110, 100]];
+    const sqClosed = drawing("d", [sq, tail]);
+    const d = { drawings: [{ ...sqClosed, geometry: { subpaths: sqClosed.geometry.subpaths.map((sp, i) => (i === 0 ? { ...sp, closed: true } : sp)) } }] };
+    const plan = planJob(d, P, JOB);
+    expect(plan.descents).toHaveLength(1);
+    for (const s of plan.strokes) for (const p of s.points) expect(distToInk(p, [sq, tail])).toBeLessThan(1e-6);
+    expect(audited(plan).ok).toBe(true);
+  });
+
+  it("vários caminhos seguidos (um pente): volta por cada dente e anda pela espinha até o próximo", () => {
+    // espinha horizontal e três dentes de 5 mm que saem do meio dela, a cada 10 mm
+    const spine: [number, number][] = [[100, 100], [140, 100]];
+    const teeth: [number, number][][] = [[[110, 100], [110, 105]], [[120, 100], [120, 105]], [[130, 100], [130, 105]]];
+    const plan = planJob(doc(spine, ...teeth), P, JOB);
+    expect(plan.descents).toHaveLength(1);
+    expect(plan.stats.retraceMm).toBeGreaterThan(0);
+    for (const s of plan.strokes) for (const p of s.points) expect(distToInk(p, [spine, ...teeth])).toBeLessThan(1e-6);
+    expect(audited(plan).ok).toBe(true);
+  });
+});
+
 describe("planJob: emenda que pode aparecer (frestas entre linhas que quase se encostam)", () => {
   const gapOf = (g: number): [number, number][][] => [[[100, 100], [150, 100]], [[150 + g, 100], [200, 100]]];
 

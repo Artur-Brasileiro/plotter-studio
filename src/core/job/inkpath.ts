@@ -44,6 +44,11 @@ export interface InkGraph {
 }
 
 const CELL = 1; // mm, grade para achar vizinhos
+/**
+ * Teto de nós visitados numa busca. Num miolo de hachura quase terminado, uma busca que não acha nada
+ * varreria todo o caminho de 25 mm em volta; com o teto ela desiste antes e a caneta sobe, como antes.
+ */
+const MAX_EXPANDED = 40_000;
 
 class PointGrid {
   private readonly cells = new Map<number, number[]>();
@@ -93,6 +98,8 @@ export function buildInkGraph(strokes: readonly Stroke[], opts: InkGraphOptions)
   // 1) os trechos de cada traço
   for (let i = 0; i < S; i++) {
     for (let k = base[i]; k + 1 < base[i + 1]; k++) edge(k, k + 1, Math.hypot(xs[k + 1] - xs[k], ys[k + 1] - ys[k]));
+    // laço: o último vértice é o primeiro (mesmo ponto); sem esta aresta, o caminho daria a volta inteira
+    if (strokes[i].closed && base[i + 1] - base[i] > 2) edge(base[i + 1] - 1, base[i], 0);
   }
   const reach = Math.max(opts.gapMm, opts.hidden ? opts.hiddenHopMm : 0);
   if (reach > 0 && n > 0) {
@@ -126,6 +133,8 @@ export function buildInkGraph(strokes: readonly Stroke[], opts: InkGraphOptions)
         }
       }
     }
+    /** Pontos de junção em cada trecho (vértice inicial do trecho → nós e parâmetros) */
+    const splits = new Map<number, { node: number; t: number }[]>();
     for (let i = 0; i < S; i++) {
       const a = base[i], b = base[i + 1] - 1;
       if (b < a) continue;
@@ -149,11 +158,24 @@ export function buildInkGraph(strokes: readonly Stroke[], opts: InkGraphOptions)
         ys.push(py);
         strokeOf.push(-1);
         vertexOf.push(-1);
-        const len = Math.hypot(xs[best + 1] - xs[best], ys[best + 1] - ys[best]);
-        edge(j, best, len * bestT);
-        edge(j, best + 1, len * (1 - bestT));
+        let list = splits.get(best);
+        if (!list) splits.set(best, (list = []));
+        list.push({ node: j, t: bestT });
         edge(j, v, bestD);
       }
+    }
+    // os pontos de junção de um mesmo trecho ficam em fila, na ordem em que aparecem nele: de um para o
+    // vizinho se anda direto pelo trecho (e não pelas pontas dele, o que poderia passar do limite)
+    for (const [k, list] of splits) {
+      list.sort((p, q) => p.t - q.t);
+      const len = Math.hypot(xs[k + 1] - xs[k], ys[k + 1] - ys[k]);
+      let prevNode = k, prevT = 0;
+      for (const { node, t } of list) {
+        edge(prevNode, node, len * (t - prevT));
+        prevNode = node;
+        prevT = t;
+      }
+      edge(prevNode, k + 1, len * (1 - prevT));
     }
   }
   // lista de adjacência nos dois sentidos
@@ -265,10 +287,11 @@ export class InkSearch {
     this.distTo[from] = 0;
     this.touched.push(from);
     this.push(from, 0);
+    let expanded = 0;
     while (this.heap.length) {
       const [v, d] = this.pop();
       if (d > this.distTo[v]) continue;
-      if (d > maxMm) break;
+      if (d > maxMm || ++expanded > MAX_EXPANDED) break;
       const s = g.strokeOf[v];
       if (s >= 0 && !used[s] && v !== from) {
         const k = g.vertexOf[v], n = g.lengths[s];

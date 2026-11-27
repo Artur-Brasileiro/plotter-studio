@@ -123,7 +123,7 @@ A caneta só sobe quando o salto ficaria **visível**. A ligação entre o fim d
 | Pelo caminho da tinta (27/11/2026) | a caneta volta **embaixo, exatamente por cima de linhas da mesma camada** (as que já foram feitas ou as que ainda vão ser), até o começo do próximo traço, com caminho de até **25 mm** (`join.retraceMm`). Passa de uma linha para outra só onde elas se encostam (até a largura da caneta, ou ligação escondida pela tinta até 1,5 mm), inclusive no meio de uma linha (junção em T) |
 | Emenda que pode aparecer (27/11/2026) | a ligação pode ter um pedacinho fora da tinta de até **0,3 mm** (`join.visibleMm`, nunca mais que a largura da caneta): fecha frestas entre linhas que quase se encostam |
 
-Os dois últimos casos vieram da plotagem do Eren (27/11/2026): com só os quatro primeiros, o desenho de ~7 mil traços tinha **6.116 subidas**, 1.164 delas descendo em cima da linha que a caneta tinha acabado de fazer. Com eles, **2.110 subidas** (−65%), 4 h 03 → 3 h 28, e o descanso do servo cai de 23 min para meio minuto.
+Os dois últimos casos vieram da plotagem do Eren (27/11/2026): com só os quatro primeiros, o desenho de ~7 mil traços tinha **6.116 subidas**, 1.164 delas descendo em cima da linha que a caneta tinha acabado de fazer. Com eles, **2.107 subidas** (−66%), 4 h 03 → 3 h 27, e o descanso do servo cai de 23 min para meio minuto.
 
 ### Regra 2 — Ordenar pensando em emendar
 
